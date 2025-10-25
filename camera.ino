@@ -1,5 +1,10 @@
 void camera_init() {
   Serial.println("Camera init");
+
+  if (!psramFound()) {
+    Serial.println("No PSRAM found!");
+  }
+
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -36,8 +41,27 @@ void camera_init() {
   sensor_t * s = esp_camera_sensor_get();
   s->set_whitebal(s, 1);       // 0 = disable , 1 = enable
   s->set_awb_gain(s, 1);       // 0 = disable , 1 = enable
-  s->set_wb_mode(s, 0);        // 0 to 4 - if awb_gain enabled (0 - Auto, 1 - Sunny, 2 - Cloudy, 3 - Office, 4 - Home)
+  s->set_wb_mode(s, 4);        // 0 to 4 - if awb_gain enabled (0 - Auto, 1 - Sunny, 2 - Cloudy, 3 - Office, 4 - Home)
   s->set_exposure_ctrl(s, 1);  // 0 = disable , 1 = enable
   s->set_gain_ctrl(s, 1);      // 0 = disable , 1 = enable
   s->set_lenc(s, 1);           // 0 = disable , 1 = enable
+}
+
+// Take a picture and return the framebuffer
+camera_fb_t* camera_snap_image() {
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Error taking image!");
+    return nullptr;
+  }
+
+  Serial.print("Successfully taken image: ");
+  Serial.print(fb->len);
+  Serial.println(" bytes.");
+  return fb; // Return the framebuffer
+}
+
+// Return the framebuffer to the driver for reuse
+void camera_fb_return(camera_fb_t *fb) {
+  esp_camera_fb_return(fb);
 }
