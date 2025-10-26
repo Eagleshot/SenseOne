@@ -148,6 +148,34 @@ void uploadImage(camera_fb_t *fb) {
   client.stop();
 }
 
+void get_network_time(void) {
+  Serial.println("Requesting current network time");
+  int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
+  float timezone = 0;
+  for (int i = 5; i; i--) {
+    if (modem.getNetworkTime(&year, &month, &day, &hour, &min, &sec, &timezone)) {
+      Serial.print("Current Network Time: ");
+      Serial.print(day);
+      Serial.print("/");
+      Serial.print(month);
+      Serial.print("/");
+      Serial.print(year);
+      Serial.print(" ");
+      Serial.print(hour);
+      Serial.print(":");
+      Serial.print(min);
+      Serial.print(":");
+      Serial.print(sec);
+      Serial.print(" - UTC Timezone: ");
+      Serial.println(timezone);
+      return;
+    } else {
+      Serial.println("Couldn't get network time, retrying in 5s.");
+      delay(5000);
+    }
+  }
+}
+
 void turn_off_modem() {
   digitalWrite(PWR_ON_PIN, LOW);
 }

@@ -20,7 +20,7 @@
 
 // Timestamp uploaded images -> different time sources?
 // Upload from SD card
-// Check GPRS
+// Check GPRS - at+cops=?
 // Change modem speed - Serial1.println("AT+IPR=230400"); // TODO Change modem speed
 // EEPROM for settings etc. - #include <EEPROM.h>
 // Deep sleep/modem power down/power measurement
@@ -30,6 +30,7 @@
 // Domain instead of ip
 // Save sensor data
 // Remote firmware update
+// Location and time - GPS und GSM
 
 // Config
 #include "config.h"
@@ -68,6 +69,7 @@ void setup() {
   set_network_mode();
   print_connection_info();
   wait_for_network();
+  get_network_time();
   modem_gprs_connect(gprsApn, gprsUser, gprsPass);
 
   if (modem_is_gprs_connected()) {
@@ -77,7 +79,10 @@ void setup() {
     Serial.println("GPRS not connected - saving to sd card...");
     sd_write_image("/image.jpg", fb);
     sd_end();
+  } else {
+    Serial.println("Cannot upload or save image!");
   }
+
   turn_off_modem();
   camera_fb_return(fb);
 
