@@ -11,7 +11,7 @@
 // Tools -> USB CDC on Boot: "Enabled"
 // Tools -> PSRAM: "OPI PSRAM"
 
-// /home/eagleshot_drone/uploads/image_1761423114435.jpg
+// /home/eagleshot_drone/uploads/20251026_1309Z.jpg
 /*Verison*/
 //ESP32 Arduino 2.3.3
 //TinyGSM 0.12.0
@@ -69,15 +69,15 @@ void setup() {
   set_network_mode();
   print_connection_info();
   wait_for_network();
-  get_network_time();
+  String network_time = get_network_time();
   modem_gprs_connect(gprsApn, gprsUser, gprsPass);
 
   if (modem_is_gprs_connected()) {
     Serial.println("GPRS connected - uploading image...");
-    uploadImage(fb);
+    uploadImage(fb, (network_time + ".jpg").c_str());
   } else if (sd_card_connected) {
     Serial.println("GPRS not connected - saving to sd card...");
-    sd_write_image("/image.jpg", fb);
+    sd_write_image(("/" + network_time + ".jpg").c_str(), fb);
     sd_end();
   } else {
     Serial.println("Cannot upload or save image!");
