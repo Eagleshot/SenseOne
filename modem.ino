@@ -151,22 +151,26 @@ void uploadImage(camera_fb_t *fb, const char* filename) {
   client.stop();
 }
 
-String get_network_time(void) {
+struct tm get_network_time(struct tm timeinfo) {
   Serial.println("Requesting current network time");
   int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
   float timezone = 0;
   for (int i = 0; i < 5; i++) {
     if (modem.getNetworkTime(&year, &month, &day, &hour, &min, &sec, &timezone)) {
-      Serial.print("Network Time: ");
-      String timeStr = String(year, DEC) + String(month < 10 ? "0" : "") + String(month, DEC) + String(day < 10 ? "0" : "") + String(day, DEC) + "_" + String(hour < 10 ? "0" : "") + String(hour, DEC) + String(min < 10 ? "0" : "") + String(min, DEC) + "Z";
-      Serial.println(timeStr);
-      return timeStr;
+      Serial.print("Network time obtained:");
+      timeinfo.tm_year = year - 1900;
+      timeinfo.tm_mon = month - 1;
+      timeinfo.tm_mday = day;
+      timeinfo.tm_hour = hour;
+      timeinfo.tm_min = min;
+      timeinfo.tm_sec = sec;
+      return timeinfo;
     } else {
       Serial.println("Couldn't get network time, retrying in 5s.");
       delay(5000);
     }
   }
-  return String("");
+  return timeinfo;
 }
 
 void turn_off_modem() {
