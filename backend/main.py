@@ -20,6 +20,13 @@ app = FastAPI()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+
+# Make a health endpoint for testing connectivity
+@app.get("/health", response_class=PlainTextResponse)
+async def health_check() -> PlainTextResponse:
+    """Simple endpoint to verify the server is running."""
+    return PlainTextResponse("OK")
+
 @app.post("/upload", response_class=PlainTextResponse)
 async def upload_image(request: Request, x_filename: Optional[str] = Header(default=None)) -> PlainTextResponse:
     """Receive raw image bytes and persist them under the provided (sanitized) filename."""
