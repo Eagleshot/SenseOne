@@ -55,6 +55,25 @@ services:
     networks:
       - senseone
 
+  cloudflared-config:
+    image: cloudflare/cloudflared:latest
+    profiles:
+      - tunnel-config
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+    command:
+      - tunnel
+      - --config
+      - /etc/cloudflared/config.yml
+      - run
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ./cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro
+    networks:
+      - senseone
+
 networks:
   senseone:
     driver: bridge

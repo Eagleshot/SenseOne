@@ -116,6 +116,25 @@ In the Cloudflare Zero Trust dashboard, point your public hostnames at the Docke
 - frontend hostname -> `http://frontend:8080`
 - backend hostname -> `http://backend:3000` (optional)
 
+### 4) Use a repo-managed Cloudflare config instead of dashboard ingress
+
+The repo now includes `cloudflared/config.yml` with:
+
+- `api.eagleshot.org` -> `http://backend:3000`
+- `dashboard.eagleshot.org` -> `http://frontend:8080`
+
+To use that config:
+
+1. Put your tunnel credentials JSON at `cloudflared/credentials.json`
+2. Edit `tunnel:` in `cloudflared/config.yml` to your real tunnel UUID
+3. Start the config-driven profile:
+
+```sh
+docker compose --profile tunnel-config up --build -d
+```
+
+Use either `tunnel` or `tunnel-config`, not both at the same time.
+
 ## What technologies are used for this project?
 
 This project is built with:
