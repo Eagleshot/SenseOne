@@ -105,40 +105,16 @@ Update the root `.env` file and set the values you need, especially:
 docker compose up --build
 ```
 
-### 3) Start Cloudflare Tunnel with Docker-managed ingress
-
-This mode keeps the origin routing inside the repo and Docker stack instead of in the Cloudflare dashboard.
-Set these values in the root `.env` first:
-
-- `CLOUDFLARE_TUNNEL_ID`
-- `CLOUDFLARE_API_HOSTNAME`
-- `CLOUDFLARE_DASHBOARD_HOSTNAME`
-
-Put your tunnel credentials file at `cloudflared/credentials.json`, then start:
+### 3) Start Cloudflare Tunnel
 
 ```sh
 docker compose --profile tunnel up --build
 ```
 
-This Docker-managed tunnel routes:
-
-- `CLOUDFLARE_API_HOSTNAME` -> `http://backend:3000`
-- `CLOUDFLARE_DASHBOARD_HOSTNAME` -> `http://frontend:8080`
-
-### 4) Optional: use the old dashboard-managed token mode
-
-If you still want dashboard-managed ingress, keep `CLOUDFLARE_TUNNEL_TOKEN` in `.env` and run:
-
-```sh
-docker compose --profile tunnel-token up --build -d
-```
-
-In that mode, the Cloudflare dashboard must point hostnames at Docker service names, not `localhost`:
+Set `CLOUDFLARE_TUNNEL_TOKEN` in the root `.env`, then configure the Cloudflare dashboard public hostnames to point at Docker service names, not `localhost`:
 
 - backend hostname -> `http://backend:3000`
 - frontend hostname -> `http://frontend:8080`
-
-Use either `tunnel` or `tunnel-token`, not both at the same time.
 
 ## What technologies are used for this project?
 

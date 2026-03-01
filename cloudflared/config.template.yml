@@ -1,9 +1,0 @@
-tunnel: ${CLOUDFLARE_TUNNEL_ID}
-credentials-file: /etc/cloudflared/credentials.json
-
-ingress:
-  - hostname: ${CLOUDFLARE_API_HOSTNAME}
-    service: http://backend:3000
-  - hostname: ${CLOUDFLARE_DASHBOARD_HOSTNAME}
-    service: http://frontend:8080
-  - service: http_status:404
