@@ -1,9 +1,9 @@
-tunnel: REPLACE_WITH_YOUR_TUNNEL_UUID
+tunnel: ${CLOUDFLARE_TUNNEL_ID}
 credentials-file: /etc/cloudflared/credentials.json
 
 ingress:
-  - hostname: api.eagleshot.org
+  - hostname: ${CLOUDFLARE_API_HOSTNAME}
     service: http://backend:3000
-  - hostname: dashboard.eagleshot.org
+  - hostname: ${CLOUDFLARE_DASHBOARD_HOSTNAME}
     service: http://frontend:8080
   - service: http_status:404

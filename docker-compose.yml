@@ -39,9 +39,27 @@ services:
       - senseone
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    build:
+      context: ./cloudflared
     profiles:
       - tunnel
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+    environment:
+      CLOUDFLARE_TUNNEL_ID: ${CLOUDFLARE_TUNNEL_ID:-}
+      CLOUDFLARE_API_HOSTNAME: ${CLOUDFLARE_API_HOSTNAME:-api.eagleshot.org}
+      CLOUDFLARE_DASHBOARD_HOSTNAME: ${CLOUDFLARE_DASHBOARD_HOSTNAME:-dashboard.eagleshot.org}
+    volumes:
+      - ./cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro
+    networks:
+      - senseone
+
+  cloudflared-token:
+    image: cloudflare/cloudflared:latest
+    profiles:
+      - tunnel-token
     depends_on:
       - frontend
       - backend
@@ -52,25 +70,6 @@ services:
       - run
       - --token
       - ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    networks:
-      - senseone
-
-  cloudflared-config:
-    image: cloudflare/cloudflared:latest
-    profiles:
-      - tunnel-config
-    depends_on:
-      - frontend
-      - backend
-    restart: unless-stopped
-    command:
-      - tunnel
-      - --config
-      - /etc/cloudflared/config.yml
-      - run
-    volumes:
-      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
-      - ./cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro
     networks:
       - senseone
 

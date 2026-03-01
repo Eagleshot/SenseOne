@@ -105,35 +105,40 @@ Update the root `.env` file and set the values you need, especially:
 docker compose up --build
 ```
 
-### 3) Start Cloudflare Tunnel as well
+### 3) Start Cloudflare Tunnel with Docker-managed ingress
+
+This mode keeps the origin routing inside the repo and Docker stack instead of in the Cloudflare dashboard.
+Set these values in the root `.env` first:
+
+- `CLOUDFLARE_TUNNEL_ID`
+- `CLOUDFLARE_API_HOSTNAME`
+- `CLOUDFLARE_DASHBOARD_HOSTNAME`
+
+Put your tunnel credentials file at `cloudflared/credentials.json`, then start:
 
 ```sh
 docker compose --profile tunnel up --build
 ```
 
-In the Cloudflare Zero Trust dashboard, point your public hostnames at the Docker service URLs:
+This Docker-managed tunnel routes:
 
-- frontend hostname -> `http://frontend:8080`
-- backend hostname -> `http://backend:3000` (optional)
+- `CLOUDFLARE_API_HOSTNAME` -> `http://backend:3000`
+- `CLOUDFLARE_DASHBOARD_HOSTNAME` -> `http://frontend:8080`
 
-### 4) Use a repo-managed Cloudflare config instead of dashboard ingress
+### 4) Optional: use the old dashboard-managed token mode
 
-The repo now includes `cloudflared/config.yml` with:
-
-- `api.eagleshot.org` -> `http://backend:3000`
-- `dashboard.eagleshot.org` -> `http://frontend:8080`
-
-To use that config:
-
-1. Put your tunnel credentials JSON at `cloudflared/credentials.json`
-2. Edit `tunnel:` in `cloudflared/config.yml` to your real tunnel UUID
-3. Start the config-driven profile:
+If you still want dashboard-managed ingress, keep `CLOUDFLARE_TUNNEL_TOKEN` in `.env` and run:
 
 ```sh
-docker compose --profile tunnel-config up --build -d
+docker compose --profile tunnel-token up --build -d
 ```
 
-Use either `tunnel` or `tunnel-config`, not both at the same time.
+In that mode, the Cloudflare dashboard must point hostnames at Docker service names, not `localhost`:
+
+- backend hostname -> `http://backend:3000`
+- frontend hostname -> `http://frontend:8080`
+
+Use either `tunnel` or `tunnel-token`, not both at the same time.
 
 ## What technologies are used for this project?
 
