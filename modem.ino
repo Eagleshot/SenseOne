@@ -1,12 +1,10 @@
 // Modem
-const char server[] = "34.65.195.210";
-const int port = 3000;
-const char resource[] = "/upload";
-
-
 #define TINY_GSM_MODEM_SIM7600
 #include <HardwareSerial.h>
 #include <TinyGsmClient.h>
+
+#define MODEM_TX 18
+#define MODEM_RX 17
 
 #define TINY_GSM_USE_GPRS false
 #define CHUNK_SIZE        1500
@@ -15,19 +13,15 @@ TinyGsm modem(Serial1);
 TinyGsmClient client(modem, 0);
 
 void turn_on_modem() {
-  digitalWrite(PWR_ON_PIN, HIGH); // Turn on power to the modem
-
-  digitalWrite(PCIE_PWR_PIN, 1); // Reset the modem
-  delay(500);
-  digitalWrite(PCIE_PWR_PIN, 0);
-  delay(3000);
 }
 
 // Initialize the modem and print its information
 void init_modem() {
   Serial.println("Initializing modem...");
-  Serial1.begin(115200, SERIAL_8N1, PCIE_RX_PIN, PCIE_TX_PIN); // Modem serial
-  modem.init();
+  Serial1.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX, false); // Modem serial
+  // modem.init();
+
+  delay(10000);
 
   String modemInfo = modem.getModemInfo();
   Serial.print("Modem - ");
@@ -72,10 +66,10 @@ Serial.print("Waiting for network...");
   }
 }
 
-void modem_gprs_connect(const char* apn, const char* user, const char* pass) {
+void modem_gprs_connect() {
   int max_retries = 5;
   for (int attempt = 0; attempt < max_retries; attempt++) {
-    if (modem.gprsConnect(apn, user, pass)) {
+    if (modem.gprsConnect(gprsApn, gprsUser, gprsPass)) {
       return;
     }
     Serial.println("GPRS connection failed, retrying...");
@@ -87,16 +81,52 @@ int modem_is_gprs_connected(void) {
   return modem.isGprsConnected();
 }
 
+bool server_health_check() {
+  bool health_ok = false;
+
+  if (client.connect(server_ip, server_port)) {
+    client.print("GET /health HTTP/1.1\r\n");
+    client.print("Host: ");
+    client.print(server_ip);
+    client.print("\r\n");
+    client.print("Connection: close\r\n\r\n");
+
+    uint32_t start = millis();
+    while (!client.available() && client.connected() && (millis() - start < 3000)) {
+      delay(10);
+    }
+
+    if (client.available()) {
+      String status_line = client.readStringUntil('\n');
+      status_line.trim();
+      health_ok = status_line.indexOf("200") >= 0;
+      Serial.println("Health check response: " + status_line);
+    } else {
+      Serial.println("Health check timed out");
+    }
+  } else {
+    Serial.println("Health check connection failed");
+  }
+
+  client.stop();
+  return health_ok;
+}
+
 
 void uploadImage(camera_fb_t *fb, const char* filename) {
-  if (!client.connect(server, port)) {
+  if (!fb || !fb->buf || fb->len == 0) {
+    Serial.println("No valid framebuffer, skipping upload.");
+    return;
+  }
+
+  if (!client.connect(server_ip, server_port)) {
     Serial.println("Connection to server failed!");
     return;
   }
 
   unsigned long currentTotalTime = millis();
   client.print(String("POST ") + resource + " HTTP/1.1\r\n");
-  client.print(String("Host: ") + server + "\r\n");
+  client.print(String("Host: ") + server_ip + "\r\n");
   client.print("Content-Length: ");
   client.print(fb->len);
   client.print("\r\n");
@@ -111,17 +141,27 @@ void uploadImage(camera_fb_t *fb, const char* filename) {
   size_t blen = sizeof(tmp);
   size_t i = 0;
   size_t len = fb->len;
-  int sent_size = 0;
+  size_t sent_size = 0;
 
   for (i = 0; i < len / blen; ++i) {
     memcpy(tmp, fb->buf + (i * blen), blen);
     sent_size = client.write(tmp, CHUNK_SIZE);
+    if (sent_size != CHUNK_SIZE) {
+      Serial.println("Upload interrupted while sending image body.");
+      client.stop();
+      return;
+    }
   }
 
   if (len % blen) {
     size_t rest = len % blen;
     memcpy(tmp, fb->buf + (len - len % blen), rest);
     sent_size = client.write(tmp, rest);
+    if (sent_size != rest) {
+      Serial.println("Upload interrupted while sending final image chunk.");
+      client.stop();
+      return;
+    }
   }
   Serial.print("Time taken to upload image: ");
   Serial.print(millis() - currentTotalTime);
@@ -138,14 +178,22 @@ void uploadImage(camera_fb_t *fb, const char* filename) {
   char logo[640] = {
       '\0',
   };
-  int read_chars = 0;
+  size_t read_chars = 0;
+  bool response_truncated = false;
   while (client.connected() && millis() - start < 10000L) {
     while (client.available()) {
-      logo[read_chars] = client.read();
-      logo[read_chars + 1] = '\0';
-      read_chars++;
+      int c = client.read();
+      if (read_chars < sizeof(logo) - 1) {
+        logo[read_chars++] = (char)c;
+      } else {
+        response_truncated = true;
+      }
       start = millis();
     }
+  }
+  logo[read_chars] = '\0';
+  if (response_truncated) {
+    Serial.println("Server response was truncated in log output.");
   }
   Serial.println(logo);
   client.stop();
@@ -157,13 +205,14 @@ struct tm get_network_time(struct tm timeinfo) {
   float timezone = 0;
   for (int i = 0; i < 5; i++) {
     if (modem.getNetworkTime(&year, &month, &day, &hour, &min, &sec, &timezone)) {
-      Serial.print("Network time obtained:");
+      Serial.println("Network time obtained.");
       timeinfo.tm_year = year - 1900;
       timeinfo.tm_mon = month - 1;
       timeinfo.tm_mday = day;
       timeinfo.tm_hour = hour;
       timeinfo.tm_min = min;
       timeinfo.tm_sec = sec;
+      timeinfo.tm_isdst = 0;
       return timeinfo;
     } else {
       Serial.println("Couldn't get network time, retrying in 5s.");

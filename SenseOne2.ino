@@ -6,45 +6,14 @@
 */
 /////////////////////////////////////////////////////////////////
 
-// Settings:
-// ESP32S3 Dev Module
-// Tools -> USB CDC on Boot: "Enabled"
-// Tools -> PSRAM: "OPI PSRAM"
-
-// /home/eagleshot_drone/uploads/20251031_1529Z.jpg
-/*Verison*/
-//ESP32 Arduino 2.3.3
-//TinyGSM 0.12.0
-
-// TODOs:
-
-// Timestamp uploaded images -> different time sources?
-// Upload from SD card
-// Check GPRS - at+cops=?
-// Change modem speed - Serial1.println("AT+IPR=230400"); // TODO Change modem speed
-// EEPROM for settings etc. - #include <EEPROM.h>
-// Deep sleep/modem power down/power measurement
-// FastAPI instead of nodejs
-// Server to docker?
-// Time sync internet/gps
-// Domain instead of ip
-// Save sensor data
-// Remote firmware update
-// Location and time - GPS und GSM
-
 // Config
 #include "config.h"
-#include "time.h"
 
 // Camera
 #include "esp_camera.h"
 
 #define uS_TO_S_FACTOR 1000000ULL
 #define TIME_TO_SLEEP  20
-
-const char gprsApn[] = "gprs.swisscom.ch";
-const char gprsUser[] = "";
-const char gprsPass[] = "";
 
 // Time stuff
 RTC_DATA_ATTR time_t stored_time; // Store time across deep sleep cycles
@@ -55,7 +24,7 @@ const char* weekdayStr(struct tm *t) {
 }
 
 // Get time as a filename-friendly string
-String network_time(struct tm timeinfo) {
+String time_string(struct tm timeinfo) {
   char buffer[20];
   sprintf(buffer, "%04d%02d%02d_%02d%02dZ",
           timeinfo.tm_year + 1900,
@@ -67,22 +36,34 @@ String network_time(struct tm timeinfo) {
 }
 
 void printTime(struct tm *tm_info) {
-  Serial.println("Time: " + String(ctime(&stored_time)));
+  if (tm_info == nullptr) {
+    Serial.println("Time: (null)");
+    return;
+  }
+
+  char buffer[32];
+  if (strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm_info) > 0) {
+    Serial.println("Time: " + String(buffer));
+  } else {
+    Serial.println("Time: (invalid)");
+  }
 }
 
 void setup() {
+
+  pinMode(33, OUTPUT); // TODO
+  digitalWrite(33, HIGH);
 
   // Initialize debug serial
   Serial.begin(115200);
   Serial.setDebugOutput(true);
 
+
   // Initialize modem  
-  pinMode(PWR_ON_PIN, OUTPUT);
-  pinMode(PCIE_PWR_PIN, OUTPUT);
-  turn_on_modem();
+  turn_on_modem(); // TODO
 
   // Time
-  struct tm timeinfo;  
+  struct tm timeinfo = {};
   struct tm * tm_info = localtime(&stored_time);
   printTime(tm_info);
 
@@ -90,31 +71,49 @@ void setup() {
   camera_init();
   camera_fb_t *fb = camera_snap_image();
 
+  
+  // Initialize LED
+  setupLED();
+
   // Initialize SD card and test
-  bool sd_card_connected = sd_begin();
+  // setupSDCard();
+  // printSDCardInfo();
+  // bool sd_card_connected = sd_begin();
 
   // Initialize modem
   init_modem();
-  set_network_mode();
+  modem_gprs_connect();
+  // set_network_mode();
   print_connection_info();
-  wait_for_network();
+  // wait_for_network();
   timeinfo = get_network_time(timeinfo);
   printTime(&timeinfo);
-  modem_gprs_connect(gprsApn, gprsUser, gprsPass);
+
+  bool server_connected = server_health_check();
+  Serial.println(server_connected ? "Server connected" : "Server not connected");
 
   if (modem_is_gprs_connected()) {
-    Serial.println("GPRS connected - uploading image...");
-    uploadImage(fb, (network_time(timeinfo) + ".jpg").c_str());
-  } else if (sd_card_connected) {
-    Serial.println("GPRS not connected - saving to sd card...");
-    sd_write_image(("/" + network_time(timeinfo) + ".jpg").c_str(), fb);
-    sd_end();
+    if (fb) {
+      Serial.println("GPRS connected - uploading image...");
+      uploadImage(fb, (time_string(timeinfo) + ".jpg").c_str());
+    } else {
+      Serial.println("GPRS connected, but no image captured; skipping upload.");
+    }
   } else {
     Serial.println("Cannot upload or save image!");
   }
+  
+  /*else if (sd_card_connected) {
+    Serial.println("GPRS not connected - saving to sd card...");
+    sd_write_image(("/" + time_string(timeinfo) + ".jpg").c_str(), fb);
+    sd_end();
+  } */
+
 
   turn_off_modem();
-  camera_fb_return(fb);
+  if (fb) {
+    camera_fb_return(fb);
+  }
 
   // Save the current time
   stored_time = mktime(&timeinfo);

@@ -1,52 +1,63 @@
-#include "FS.h"
-#include "SD.h"
-#include "config.h"
+/////////////////////////////////////////////
+// SD card
+/////////////////////////////////////////////
+// https://randomnerdtutorials.com/esp32-microsd-card-arduino/#datalogging
 
-// Initialize and test SD card. Returns true if successful.
-bool sd_begin(void) {
-    SPI.begin(SD_SCLK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-    if (!SD.begin(SD_CS_PIN, SPI)) {
-        Serial.println("Card mount failed.");
-        return false;
+#include <SD_MMC.h>
+#include <SPI.h>
+#include <FS.h>
+
+const int SDMMC_CLK = 5;
+const int SDMMC_CMD = 4;
+const int SDMMC_DATA = 6;
+const int SD_CD_PIN = 46;
+
+
+void setupSDCard() {
+    pinMode(SD_CD_PIN, INPUT_PULLUP);
+    delay(3000);
+    SD_MMC.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_DATA);
+
+    if (!SD_MMC.begin("/sdcard", true)) {
+        Serial.println("Card Mount Failed");
+        while(1) {};
     }
-    uint8_t cardType = SD.cardType();
-    if (cardType == CARD_NONE) {
-        Serial.println("No SD card attached.");
-        return false;
-    }
-
-    Serial.print("SD card - type: ");
-    if (cardType == CARD_MMC)
-        Serial.print("MMC");
-    else if (cardType == CARD_SD)
-        Serial.print("SDSC");
-    else if (cardType == CARD_SDHC)
-        Serial.print("SDHC");
-    else
-        Serial.print("UNKNOWN");
-
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    Serial.print(", size: ");
-    Serial.print(cardSize);
-    Serial.println("MB");
-    return true;
 }
 
-// Write an image to the SD card. Returns true if successful.
-bool sd_write_image(const char* path, camera_fb_t *fb) {
-    Serial.printf("Writing file: %s\n", path);
-    File file = SD.open(path, FILE_WRITE);
+void printSDCardInfo() {
+
+  uint8_t cardType = SD_MMC.cardType();
+
+  if (cardType == CARD_NONE) {
+    Serial.println("No SD_MMC card attached");
+  } else {
+    Serial.print("SD_MMC Card Type: ");
+    if (cardType == CARD_MMC) {
+        Serial.println("MMC");
+    } else if (cardType == CARD_SD) {
+        Serial.println("SDSC");
+    } else if (cardType == CARD_SDHC) {
+        Serial.println("SDHC");
+    } else {
+        Serial.println("UNKNOWN");
+    }
+
+    // Card size
+    uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
+    Serial.printf("SD_MMC Card Size: %lluMB\n", cardSize);
+    }
+}
+
+void writeFileToSD(const char *filename, const char *data) {
+    File file = SD_MMC.open(filename, FILE_WRITE);
     if (!file) {
         Serial.println("Failed to open file for writing");
-        return false;
+        return;
     }
-    size_t written = file.write(fb->buf, fb->len);
+    if (file.print(data)) {
+        Serial.println("File written");
+    } else {
+        Serial.println("Write failed");
+    }
     file.close();
-    Serial.printf("Wrote %u bytes to %s\n", written, path);
-    return written == fb->len;
-}
-
-// Deinitialize SD card interface and release resources
-void sd_end(void) {
-    SD.end();
 }

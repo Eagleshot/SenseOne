@@ -1,0 +1,60 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      APP_ENV: ${APP_ENV:-development}
+      APP_CORS_ORIGINS: ${APP_CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-}
+      APP_AUTH_PASSWORD: ${APP_AUTH_PASSWORD:-}
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
+      APP_TRUST_PROXY_HEADERS: ${APP_TRUST_PROXY_HEADERS:-false}
+      APP_TRUSTED_PROXY_IPS: ${APP_TRUSTED_PROXY_IPS:-}
+      APP_RATE_LIMIT_MAX_REQUESTS: ${APP_RATE_LIMIT_MAX_REQUESTS:-60}
+      APP_RATE_LIMIT_WINDOW_SECONDS: ${APP_RATE_LIMIT_WINDOW_SECONDS:-60}
+      APP_AUTH_TOKEN_TTL_SECONDS: ${APP_AUTH_TOKEN_TTL_SECONDS:-43200}
+      APP_AUTH_MAX_LOGIN_ATTEMPTS: ${APP_AUTH_MAX_LOGIN_ATTEMPTS:-5}
+      APP_AUTH_LOCKOUT_SECONDS: ${APP_AUTH_LOCKOUT_SECONDS:-300}
+      APP_AUTH_RATE_LIMIT_WINDOW_SECONDS: ${APP_AUTH_RATE_LIMIT_WINDOW_SECONDS:-900}
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+    networks:
+      - senseone
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    depends_on:
+      - backend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    networks:
+      - senseone
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles:
+      - tunnel
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
+      - --token
+      - ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    networks:
+      - senseone
+
+networks:
+  senseone:
+    driver: bridge
