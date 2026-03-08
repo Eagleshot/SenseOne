@@ -1,4 +1,4 @@
-import React, { ReactNode, createContext, useContext, useEffect, useState } from "react";
+import React, { ReactNode, createContext, useCallback, useContext, useEffect, useState } from "react";
 
 import { SensorData, TimezoneOption, Webcam } from "@/data/types";
 import { ColorThemeKey, applyColorTheme, isColorThemeKey } from "@/lib/appThemes";
@@ -61,6 +61,7 @@ interface AppContextType {
   imageTimeline: { timestamp: Date; url: string }[];
   currentImageIndex: number;
   setCurrentImageIndex: (index: number) => void;
+  refreshImageTimeline: () => Promise<void>;
 
   // Timelapse
   isPlaying: boolean;
@@ -296,44 +297,57 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     };
   }, [apiBaseUrl]);
 
-  // Load data when webcam changes (public).
+  const fetchImageTimelineData = useCallback(async (options: { signal?: AbortSignal } = {}) => {
+    if (!activeWebcam.id) return;
+    const historyUrl = `${apiBaseUrl}/history?hours=24&webcam_id=${encodeURIComponent(activeWebcam.id)}`;
+    const timelineUrl = `${apiBaseUrl}/timeline?count=48&webcam_id=${encodeURIComponent(activeWebcam.id)}`;
+    const { signal } = options;
+
+    try {
+      const [historyData, timelineData] = await Promise.all([
+        fetchJson<SensorDataResponse[]>(historyUrl, { signal, throwOnHttpError: false }),
+        fetchJson<TimelineItemResponse[]>(timelineUrl, { signal, throwOnHttpError: false }),
+      ]);
+
+      if (historyData) {
+        setHistoricalData(historyData.map(parseSensorDataResponse));
+      } else {
+        setHistoricalData([]);
+      }
+
+      if (timelineData) {
+        const parsedTimeline = timelineData.map(parseTimelineItemResponse);
+        setImageTimeline(parsedTimeline);
+        setCurrentImageIndex(Math.max(parsedTimeline.length - 1, 0));
+        setIsPlaying(false);
+      } else {
+        setImageTimeline([]);
+        setCurrentImageIndex(0);
+        setIsPlaying(false);
+      }
+    } catch (err) {
+      if (isAbortError(err)) return;
+      setHistoricalData([]);
+      setImageTimeline([]);
+      setCurrentImageIndex(0);
+      setIsPlaying(false);
+    }
+  }, [apiBaseUrl, activeWebcam.id]);
+
   useEffect(() => {
     if (!activeWebcam.id) return;
 
-    let isMounted = true;
     const controller = new AbortController();
-
-    const fetchData = async () => {
-      try {
-        const historyUrl = `${apiBaseUrl}/history?hours=24&webcam_id=${encodeURIComponent(activeWebcam.id)}`;
-        const timelineUrl = `${apiBaseUrl}/timeline?count=48&webcam_id=${encodeURIComponent(activeWebcam.id)}`;
-        const [historyData, timelineData] = await Promise.all([
-          fetchJson<SensorDataResponse[]>(historyUrl, { signal: controller.signal, throwOnHttpError: false }),
-          fetchJson<TimelineItemResponse[]>(timelineUrl, { signal: controller.signal, throwOnHttpError: false }),
-        ]);
-
-        if (historyData && isMounted) {
-          setHistoricalData(historyData.map(parseSensorDataResponse));
-        }
-
-        if (timelineData && isMounted) {
-          const parsedTimeline = timelineData.map(parseTimelineItemResponse);
-          setImageTimeline(parsedTimeline);
-          setCurrentImageIndex(Math.max(parsedTimeline.length - 1, 0));
-          setIsPlaying(false);
-        }
-      } catch (err) {
-        if (isAbortError(err)) return;
-      }
-    };
-
-    void fetchData();
+    void fetchImageTimelineData({ signal: controller.signal });
 
     return () => {
-      isMounted = false;
       controller.abort();
     };
-  }, [activeWebcam.id, apiBaseUrl]);
+  }, [activeWebcam.id, apiBaseUrl, fetchImageTimelineData]);
+
+  const refreshImageTimeline = async () => {
+    await fetchImageTimelineData();
+  };
 
   // Update document title/meta with active webcam name.
   useEffect(() => {
@@ -447,6 +461,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         imageTimeline,
         currentImageIndex,
         setCurrentImageIndex,
+        refreshImageTimeline,
         isPlaying,
         setIsPlaying,
         cameraStartTime,

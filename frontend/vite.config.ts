@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => ({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
-      "/example_images": {
+      "/images": {
         target: "http://localhost:3000",
         changeOrigin: true,
       },

@@ -34,6 +34,7 @@ export const HeroImage: React.FC = () => {
     isPlaying,
     setIsPlaying,
     timezone,
+    refreshImageTimeline,
   } = useApp();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isCompareOpen, setIsCompareOpen] = useState(false);
@@ -42,6 +43,7 @@ export const HeroImage: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [isImageUnavailable, setIsImageUnavailable] = useState(false);
+  const [displayImageUrl, setDisplayImageUrl] = useState('');
   const compareRef = useRef<HTMLDivElement | null>(null);
   const scrubRef = useRef<HTMLDivElement | null>(null);
 
@@ -52,7 +54,7 @@ export const HeroImage: React.FC = () => {
   const currentImageUrl = currentImage?.url || activeWebcam.currentImage;
   const compareImage = imageTimeline[compareIndex];
   const compareImageUrl = compareImage?.url || activeWebcam.currentImage;
-  const hasDisplayImage = Boolean(currentImageUrl) && !isImageUnavailable;
+  const hasDisplayImage = Boolean(displayImageUrl) && !isImageUnavailable;
 
   useEffect(() => {
     if (!hasTimeline) {
@@ -65,7 +67,30 @@ export const HeroImage: React.FC = () => {
   }, [compareIndex, hasTimeline, imageTimeline.length]);
 
   useEffect(() => {
-    setIsImageUnavailable(!currentImageUrl);
+    if (!currentImageUrl) {
+      setDisplayImageUrl('');
+      setIsImageUnavailable(true);
+      return;
+    }
+
+    let cancelled = false;
+    const preload = new Image();
+    preload.onload = () => {
+      if (cancelled) return;
+      setDisplayImageUrl(currentImageUrl);
+      setIsImageUnavailable(false);
+    };
+    preload.onerror = () => {
+      if (cancelled) return;
+      if (!displayImageUrl) {
+        setIsImageUnavailable(true);
+      }
+    };
+    preload.src = currentImageUrl;
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentImageUrl]);
 
   const updateCompareValue = (clientX: number) => {
@@ -127,9 +152,11 @@ export const HeroImage: React.FC = () => {
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setCurrentImageIndex(latestIndex);
-    setIsRefreshing(false);
+    try {
+      await refreshImageTimeline();
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const handleJumpToLatest = () => {
@@ -165,20 +192,19 @@ export const HeroImage: React.FC = () => {
       </div>
 
       {/* Hero Image */}
-      <motion.div
-        key={currentImage?.url}
-        initial={{ opacity: 0.8 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
-        className="panel-shell"
-      >
+        <motion.div
+          initial={{ opacity: 0.8 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.3 }}
+          className="panel-shell"
+        >
         <div className="aspect-video relative group">
-          {hasDisplayImage ? (
-            <img
-              src={currentImageUrl}
-              alt={`${activeWebcam.name} webcam view`}
-              className="w-full h-full object-cover"
-              onError={() => setIsImageUnavailable(true)}
+            {hasDisplayImage ? (
+              <img
+                src={displayImageUrl}
+                alt={`${activeWebcam.name} webcam view`}
+                className="w-full h-full object-cover"
+                onError={() => setIsImageUnavailable(true)}
             />
           ) : (
             <div className="absolute inset-0 overflow-hidden bg-[radial-gradient(circle_at_20%_20%,hsl(var(--primary)/0.22),transparent_45%),radial-gradient(circle_at_80%_0%,hsl(var(--accent)/0.18),transparent_45%),hsl(var(--background))]">
@@ -214,7 +240,7 @@ export const HeroImage: React.FC = () => {
             )}
             <DialogContent className="max-w-[96vw] w-[96vw] max-h-[94vh] h-[94vh] p-0 overflow-hidden bg-black/90 border border-border/40 flex items-center justify-center">
               {hasDisplayImage ? (
-                <img src={currentImageUrl} alt={`${activeWebcam.name} webcam view`} className="max-w-full max-h-full object-contain bg-black" />
+                <img src={displayImageUrl} alt={`${activeWebcam.name} webcam view`} className="max-w-full max-h-full object-contain bg-black" />
               ) : (
                 <div className="mx-4 max-w-md text-center">
                   <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-white/10">
@@ -302,7 +328,7 @@ export const HeroImage: React.FC = () => {
             variant="ghost"
             size="sm"
             onClick={handleRefresh}
-            disabled={!hasTimeline || isRefreshing}
+            disabled={isRefreshing || !activeWebcam.id}
             className={actionButtonClass}
           >
             <RefreshCw className={cn("w-4 h-4", isRefreshing && "animate-spin")} />

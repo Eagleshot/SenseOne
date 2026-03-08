@@ -34,3 +34,4 @@ __pycache__/
 backend/uploads/
 frontend/dist/
 *.tsbuildinfo
+backend/data/

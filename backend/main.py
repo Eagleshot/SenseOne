@@ -1,25 +1,26 @@
 from __future__ import annotations
 
+import sqlite3
 import logging
 import os
 import re
 import secrets
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 try:
-    from .mock_data import TIMEZONES, generate_historical_data, generate_image_timestamps, get_webcams
+    from .mock_data import TIMEZONES, generate_historical_data, get_webcams
 except ImportError:
-    from mock_data import TIMEZONES, generate_historical_data, generate_image_timestamps, get_webcams
+    from mock_data import TIMEZONES, generate_historical_data, get_webcams
 
 
 def parse_positive_int_env(name: str, default: int) -> int:
@@ -33,13 +34,6 @@ def parse_positive_int_env(name: str, default: int) -> int:
     if parsed <= 0:
         raise RuntimeError(f"{name} must be greater than 0.")
     return parsed
-
-
-def parse_bool_env(name: str, default: bool) -> bool:
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return default
-    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def parse_cors_origins() -> list[str]:
@@ -66,6 +60,354 @@ def _sanitize_filename(raw_name: str) -> str:
     return cleaned or "default.jpg"
 
 
+def _sanitize_camera_id(raw_name: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]", "-", raw_name.strip())
+    cleaned = cleaned.strip("._-")
+    return cleaned or "camera"
+
+
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_IMAGE_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+}
+EMBEDDED_FILENAME_TIMESTAMP_PATTERN = re.compile(r"(\d{8})_(\d{4})Z")
+
+
+def _normalize_content_type(raw_content_type: str | None) -> str | None:
+    if not raw_content_type:
+        return None
+    return raw_content_type.split(";", 1)[0].strip().lower()
+
+
+def _media_type_from_path(path: Path) -> str | None:
+    extension_to_media_type = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    media_type = extension_to_media_type.get(path.suffix.lower())
+    if media_type:
+        return media_type
+    try:
+        header = path.read_bytes()[:16]
+    except OSError:
+        return None
+    if header.startswith(b"\xFF\xD8\xFF"):
+        return "image/jpeg"
+    if header.startswith(b"\x89PNG\r\n\x1A\n"):
+        return "image/png"
+    if len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _parse_embedded_timestamp(filename: str) -> datetime | None:
+    match = EMBEDDED_FILENAME_TIMESTAMP_PATTERN.search(filename)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(f"{match.group(1)}{match.group(2)}", "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _parse_iso_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _iso_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _is_supported_image_upload(filename: str, content_type: str | None) -> bool:
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_IMAGE_EXTENSIONS:
+        extension_supported = False
+    else:
+        extension_supported = True
+
+    normalized_content_type = _normalize_content_type(content_type)
+    if normalized_content_type and not normalized_content_type.startswith("image/"):
+        return False
+    if not normalized_content_type:
+        return extension_supported or extension == ""
+    if normalized_content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+        return False
+    return extension_supported or extension == ""
+
+
+def _normalize_camera_id(raw_camera_id: str | None) -> str:
+    return _sanitize_camera_id(raw_camera_id or DEFAULT_CAMERA_ID)
+
+
+def _camera_dir(camera_id: str) -> Path:
+    return DATA_DIR / camera_id
+
+
+def _camera_db_path(camera_id: str) -> Path:
+    return _camera_dir(camera_id) / CAMERA_DB_FILENAME
+
+
+def _camera_config_path(camera_id: str) -> Path:
+    return _camera_dir(camera_id) / CAMERA_CONFIG_FILENAME
+
+
+def _camera_config_yaml(camera_id: str) -> str:
+    return _camera_config_yaml_for_values(camera_id, CONFIG)
+
+
+def _camera_config_yaml_for_values(camera_id: str, values: AppConfig) -> str:
+    return "\n".join(
+        [
+            f"camera_id: {camera_id}",
+            f"camera_start_time: \"{values.camera_start_time}\"",
+            f"camera_stop_time: \"{values.camera_stop_time}\"",
+            f"use_sunrise_sunset: {'true' if values.use_sunrise_sunset else 'false'}",
+            f"capture_interval_minutes: {values.capture_interval_minutes}",
+            "",
+        ]
+    )
+
+
+def _read_camera_config(camera_id: str) -> AppConfig:
+    config_path = _camera_config_path(camera_id)
+    if not config_path.exists():
+        _ensure_camera_dir(camera_id)
+        return AppConfig()
+
+    try:
+        text = config_path.read_text(encoding="utf-8")
+        parsed: dict[str, object] = {}
+        for line in text.splitlines():
+            raw_line = line.strip()
+            if not raw_line or raw_line.startswith("#"):
+                continue
+            if ":" not in raw_line:
+                continue
+            key, raw_value = (part.strip() for part in raw_line.split(":", 1))
+            value = raw_value.strip().strip("\"'")
+            if key == "camera_id":
+                continue
+            if key in {"camera_start_time", "camera_stop_time"}:
+                parsed[key] = value
+            elif key == "use_sunrise_sunset":
+                parsed[key] = value.lower() in {"1", "true", "yes", "on"}
+            elif key == "capture_interval_minutes":
+                parsed[key] = int(value)
+        return AppConfig(**parsed)
+    except (OSError, ValueError, TypeError) as exc:
+        logging.warning("Failed to read camera config for %s: %s", camera_id, exc)
+        return AppConfig()
+
+
+def _write_camera_config(camera_id: str, values: AppConfig) -> None:
+    _ensure_camera_dir(camera_id)
+    _camera_config_path(camera_id).write_text(
+        _camera_config_yaml_for_values(camera_id, values),
+        encoding="utf-8",
+    )
+
+
+def _ensure_camera_dir(camera_id: str) -> None:
+    camera_root = _camera_dir(camera_id)
+    images_dir = camera_root / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    config_file = _camera_config_path(camera_id)
+    if not config_file.exists():
+        config_file.write_text(_camera_config_yaml(camera_id), encoding="utf-8")
+
+    db_path = _camera_db_path(camera_id)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS camera_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                content_type TEXT,
+                size_bytes INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.commit()
+
+
+async def _store_uploaded_image(
+    camera_id: str,
+    filename: str,
+    request: Request,
+    content_type: str | None,
+) -> tuple[str, str]:
+    if not _is_supported_image_upload(filename, content_type):
+        supported = ", ".join(sorted(ALLOWED_IMAGE_EXTENSIONS))
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported image type. Allowed extensions: {supported}",
+        )
+
+    _ensure_camera_dir(camera_id)
+    camera_root = _camera_dir(camera_id)
+    images_dir = camera_root / "images"
+    timestamp_ms = int(time.time() * 1000)
+    stored_filename = f"{timestamp_ms}-{filename}"
+    file_path = images_dir / stored_filename
+    size_bytes = 0
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            content_length_value = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid Content-Length header.",
+            ) from exc
+        if content_length_value > APP_MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Upload too large. Maximum is {APP_MAX_UPLOAD_BYTES} bytes.",
+            )
+
+    with file_path.open("wb") as target:
+        try:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                size_bytes += len(chunk)
+                if size_bytes > APP_MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"Upload too large. Maximum is {APP_MAX_UPLOAD_BYTES} bytes.",
+                    )
+                target.write(chunk)
+        except HTTPException:
+            if file_path.exists():
+                file_path.unlink(missing_ok=True)
+            raise
+
+    db_path = _camera_db_path(camera_id)
+    captured_at = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO camera_images (filename, content_type, size_bytes, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (stored_filename, content_type or "", size_bytes, captured_at),
+        )
+        connection.commit()
+
+    return stored_filename, f"/images/{camera_id}/images/{stored_filename}"
+
+
+def _timeline_from_camera_db(camera_id: str, count: int) -> list[dict[str, str]] | None:
+    db_path = _camera_db_path(camera_id)
+    if not db_path.exists():
+        return None
+
+    try:
+        with sqlite3.connect(db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """
+                SELECT filename, created_at
+                FROM camera_images
+                """,
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logging.warning("Failed to read camera timeline for %s: %s", camera_id, exc)
+        return None
+
+    if not rows:
+        return None
+
+    timeline_items: list[tuple[datetime, bool, dict[str, str]]] = []
+    images_dir = _camera_dir(camera_id) / "images"
+    for row in rows:
+        filename = row["filename"]
+        image_path = images_dir / filename
+        if not image_path.is_file():
+            continue
+        embedded_timestamp = _parse_embedded_timestamp(filename)
+        timestamp = embedded_timestamp or _parse_iso_timestamp(row["created_at"]) or datetime.fromtimestamp(
+            image_path.stat().st_mtime, timezone.utc
+        )
+        timeline_items.append(
+            (
+                timestamp,
+                embedded_timestamp is not None,
+                {
+                    "timestamp": _iso_utc(timestamp),
+                    "url": f"/images/{camera_id}/images/{filename}",
+                },
+            )
+        )
+    if not timeline_items:
+        return None
+    if any(item[1] for item in timeline_items):
+        timeline_items = [item for item in timeline_items if item[1]]
+    timeline_items.sort(key=lambda item: item[0])
+    if len(timeline_items) > count:
+        timeline_items = timeline_items[-count:]
+    return [item[2] for item in timeline_items]
+
+
+def _timeline_from_image_dir(camera_id: str, count: int) -> list[dict[str, str]]:
+    images_dir = _camera_dir(camera_id) / "images"
+    if not images_dir.exists():
+        return []
+
+    files = [path for path in images_dir.iterdir() if path.is_file()]
+    if not files:
+        return []
+
+    timeline_items: list[tuple[datetime, bool, dict[str, str]]] = []
+    for path in files:
+        embedded_timestamp = _parse_embedded_timestamp(path.name)
+        timestamp = embedded_timestamp or datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+        timeline_items.append(
+            (
+                timestamp,
+                embedded_timestamp is not None,
+                {
+                    "timestamp": _iso_utc(timestamp),
+                    "url": f"/images/{camera_id}/images/{path.name}",
+                },
+            )
+        )
+    if any(item[1] for item in timeline_items):
+        timeline_items = [item for item in timeline_items if item[1]]
+    timeline_items.sort(key=lambda item: item[0])
+    if len(timeline_items) > count:
+        timeline_items = timeline_items[-count:]
+    return [item[2] for item in timeline_items]
+
+
+def _latest_camera_image_url(camera_id: str) -> str | None:
+    timeline = _timeline_from_image_dir(camera_id, count=1)
+    if not timeline:
+        return None
+    return timeline[-1]["url"]
+
+
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 IS_PRODUCTION = APP_ENV in {"production", "prod"}
 
@@ -81,22 +423,18 @@ AUTH_TOKEN_TTL_SECONDS = parse_positive_int_env("APP_AUTH_TOKEN_TTL_SECONDS", 43
 AUTH_COOKIE_NAME = "eagleshot_session"
 AUTH_COOKIE_SECURE = IS_PRODUCTION
 AUTH_COOKIE_SAMESITE = "strict"
-AUTH_MAX_LOGIN_ATTEMPTS = parse_positive_int_env("APP_AUTH_MAX_LOGIN_ATTEMPTS", 5)
-AUTH_LOCKOUT_SECONDS = parse_positive_int_env("APP_AUTH_LOCKOUT_SECONDS", 300)
-AUTH_RATE_LIMIT_WINDOW_SECONDS = parse_positive_int_env("APP_AUTH_RATE_LIMIT_WINDOW_SECONDS", 900)
 
 APP_CORS_ORIGINS = parse_cors_origins()
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-TRUST_PROXY_HEADERS = parse_bool_env("APP_TRUST_PROXY_HEADERS", False)
-TRUSTED_PROXY_IPS = {
-    ip.strip() for ip in (os.getenv("APP_TRUSTED_PROXY_IPS") or "").split(",") if ip.strip()
-}
-RATE_LIMIT_MAX_REQUESTS = parse_positive_int_env("APP_RATE_LIMIT_MAX_REQUESTS", 60)
-RATE_LIMIT_WINDOW_SECONDS = parse_positive_int_env("APP_RATE_LIMIT_WINDOW_SECONDS", 60)
+APP_MAX_UPLOAD_BYTES = parse_positive_int_env("APP_MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
 
 BASE_DIR = Path(__file__).resolve().parent
-EXAMPLE_IMAGES_DIR = BASE_DIR / "example_images"
-UPLOAD_DIR = BASE_DIR / "uploads"
+DATA_DIR = Path(os.getenv("APP_DATA_DIR") or (BASE_DIR / "data")).resolve()
+DEFAULT_CAMERA_ID = (os.getenv("APP_DEFAULT_CAMERA_ID") or "default").strip() or "default"
+CAMERA_DB_FILENAME = "camera.db"
+CAMERA_CONFIG_FILENAME = "config.yaml"
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 if not AUTH_ENABLED:
@@ -104,15 +442,47 @@ if not AUTH_ENABLED:
 
 app = FastAPI(title="Eagleshot API", version="0.1.0")
 
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/example_images", StaticFiles(directory=EXAMPLE_IMAGES_DIR), name="example_images")
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+    response.headers["X-Download-Options"] = "noopen"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=(), usb=()"
+
+    if IS_PRODUCTION:
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+
+    return response
+
+
+@app.get("/images/{camera_id}/images/{filename}")
+def get_camera_image(
+    camera_id: str,
+    filename: str,
+) -> FileResponse:
+    normalized_camera_id = _normalize_camera_id(camera_id)
+    if camera_id != normalized_camera_id:
+        raise HTTPException(status_code=400, detail="Invalid camera id.")
+    if filename != _sanitize_filename(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    image_path = DATA_DIR / normalized_camera_id / "images" / filename
+    if not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found.")
+    return FileResponse(image_path, media_type=_media_type_from_path(image_path))
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=APP_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT"],
-    allow_headers=["Authorization", "Content-Type", "X-Filename"],
+    allow_headers=["Authorization", "Content-Type", "X-Filename", "X-Camera-Id"],
 )
 
 
@@ -147,8 +517,6 @@ class MeResponse(BaseModel):
 
 CONFIG = AppConfig()
 AUTH_SESSIONS: dict[str, tuple[str, float]] = {}
-FAILED_LOGIN_ATTEMPTS: dict[str, tuple[int, float, float]] = {}
-RATE_LIMIT_STATE: dict[str, tuple[int, float]] = {}
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -173,105 +541,6 @@ def prune_expired_sessions() -> None:
     expired_tokens = [token for token, (_, expires_at) in AUTH_SESSIONS.items() if expires_at <= now]
     for token in expired_tokens:
         AUTH_SESSIONS.pop(token, None)
-
-
-def get_client_ip(request: Request) -> str:
-    direct_client_ip = request.client.host if request.client and request.client.host else ""
-    if TRUST_PROXY_HEADERS and direct_client_ip and direct_client_ip in TRUSTED_PROXY_IPS:
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            forwarded_client_ip = forwarded_for.split(",")[0].strip()
-            if forwarded_client_ip:
-                return forwarded_client_ip
-    if direct_client_ip:
-        return direct_client_ip
-    return "unknown"
-
-
-def get_login_attempt_key(request: Request) -> str:
-    return get_client_ip(request)
-
-
-def enforce_login_rate_limit(key: str) -> None:
-    state = FAILED_LOGIN_ATTEMPTS.get(key)
-    if state is None:
-        return
-
-    attempts, window_started_at, blocked_until = state
-    now = time.time()
-
-    if blocked_until > now:
-        retry_after = max(1, int(blocked_until - now))
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Too many failed login attempts. Try again in {retry_after} seconds.",
-        )
-
-    if now - window_started_at > AUTH_RATE_LIMIT_WINDOW_SECONDS:
-        FAILED_LOGIN_ATTEMPTS.pop(key, None)
-        return
-
-    FAILED_LOGIN_ATTEMPTS[key] = (attempts, window_started_at, blocked_until)
-
-
-def register_failed_login(key: str) -> None:
-    now = time.time()
-    attempts, window_started_at, blocked_until = FAILED_LOGIN_ATTEMPTS.get(key, (0, now, 0))
-
-    if now - window_started_at > AUTH_RATE_LIMIT_WINDOW_SECONDS:
-        attempts = 0
-        window_started_at = now
-        blocked_until = 0
-
-    attempts += 1
-    if attempts >= AUTH_MAX_LOGIN_ATTEMPTS:
-        FAILED_LOGIN_ATTEMPTS[key] = (0, now, now + AUTH_LOCKOUT_SECONDS)
-        return
-
-    FAILED_LOGIN_ATTEMPTS[key] = (attempts, window_started_at, blocked_until)
-
-
-def register_successful_login(key: str) -> None:
-    FAILED_LOGIN_ATTEMPTS.pop(key, None)
-
-
-def enforce_rate_limit(request: Request, bucket: str = "global") -> None:
-    now = time.time()
-    stale_keys = [
-        key
-        for key, (_, window_started_at) in RATE_LIMIT_STATE.items()
-        if now - window_started_at > RATE_LIMIT_WINDOW_SECONDS
-    ]
-    for key in stale_keys:
-        RATE_LIMIT_STATE.pop(key, None)
-
-    client_ip = get_client_ip(request)
-    rate_key = f"{bucket}:{client_ip}"
-    request_count, window_started_at = RATE_LIMIT_STATE.get(rate_key, (0, now))
-
-    if now - window_started_at > RATE_LIMIT_WINDOW_SECONDS:
-        request_count = 0
-        window_started_at = now
-
-    request_count += 1
-    RATE_LIMIT_STATE[rate_key] = (request_count, window_started_at)
-
-    if request_count <= RATE_LIMIT_MAX_REQUESTS:
-        return
-
-    retry_after = max(1, int(RATE_LIMIT_WINDOW_SECONDS - (now - window_started_at)))
-    raise HTTPException(
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail=f"Too many requests. Try again in {retry_after} seconds.",
-    )
-
-
-@app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
-    if request.url.path in ("/", "/health", "/favicon.ico"):
-        return await call_next(request)
-    enforce_rate_limit(request, bucket="global")
-    return await call_next(request)
 
 
 def resolve_session_token(
@@ -339,33 +608,57 @@ def favicon() -> Response:
 @app.post("/upload", response_class=PlainTextResponse)
 async def upload_image(
     request: Request,
+    x_camera_id: Optional[str] = Header(default=None, alias="X-Camera-Id"),
+    webcam_id: Optional[str] = Query(default=None),
     x_filename: Optional[str] = Header(default=None),
+    _: str = Depends(get_current_username),
 ) -> PlainTextResponse:
+    if not x_camera_id and not webcam_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="camera id is required via X-Camera-Id header or webcam_id query parameter",
+        )
+    camera_id = _normalize_camera_id(x_camera_id or webcam_id)
     filename = _sanitize_filename(x_filename or "default.jpg")
-    file_path = UPLOAD_DIR / filename
+    stored_filename, _ = await _store_uploaded_image(
+        camera_id=camera_id,
+        filename=filename,
+        request=request,
+        content_type=request.headers.get("content-type"),
+    )
+    logging.info("File saved for camera %s as %s", camera_id, stored_filename)
+    return PlainTextResponse(f"File uploaded as {stored_filename}")
 
-    with file_path.open("wb") as target:
-        async for chunk in request.stream():
-            target.write(chunk)
 
-    logging.info("File saved as %s", filename)
-    return PlainTextResponse(f"File uploaded as {filename}")
+@app.post("/upload/{camera_id}", response_class=PlainTextResponse)
+async def upload_image_for_camera(
+    request: Request,
+    camera_id: str,
+    x_filename: Optional[str] = Header(default=None),
+    _: str = Depends(get_current_username),
+) -> PlainTextResponse:
+    target_camera_id = _normalize_camera_id(camera_id)
+    filename = _sanitize_filename(x_filename or "default.jpg")
+    stored_filename, _ = await _store_uploaded_image(
+        camera_id=target_camera_id,
+        filename=filename,
+        request=request,
+        content_type=request.headers.get("content-type"),
+    )
+    logging.info("File saved for camera %s as %s", target_camera_id, stored_filename)
+    return PlainTextResponse(f"File uploaded as {stored_filename}")
 
 
 @app.post("/auth/login", response_model=AuthResponse)
-def login(payload: LoginRequest, request: Request, response: Response) -> AuthResponse:
+def login(payload: LoginRequest, response: Response) -> AuthResponse:
     ensure_auth_configured()
 
     username = payload.username.strip()
-    attempt_key = get_login_attempt_key(request)
-    enforce_login_rate_limit(attempt_key)
 
     is_valid = secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(payload.password, AUTH_PASSWORD)
     if not is_valid:
-        register_failed_login(attempt_key)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password.")
 
-    register_successful_login(attempt_key)
     token, expires_in = create_session(username)
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
@@ -410,9 +703,36 @@ def update_config(payload: AppConfig, _: str = Depends(get_current_username)) ->
     return CONFIG
 
 
+@app.get("/cameras/{camera_id}/config", response_model=AppConfig)
+def get_camera_config(
+    camera_id: str,
+    _: str = Depends(get_current_username),
+) -> AppConfig:
+    return _read_camera_config(_normalize_camera_id(camera_id))
+
+
+@app.put("/cameras/{camera_id}/config", response_model=AppConfig)
+def update_camera_config(
+    camera_id: str,
+    payload: AppConfig,
+    _: str = Depends(get_current_username),
+) -> AppConfig:
+    normalized = _normalize_camera_id(camera_id)
+    _write_camera_config(normalized, payload)
+    return payload
+
+
 @app.get("/webcams")
 def list_webcams(request: Request) -> list[dict]:
-    return get_webcams(str(request.base_url))
+    webcams = get_webcams(str(request.base_url))
+    for webcam in webcams:
+        camera_id = _normalize_camera_id(str(webcam.get("id") or ""))
+        latest_image_url = _latest_camera_image_url(camera_id)
+        if not latest_image_url:
+            continue
+        webcam["thumbnail"] = latest_image_url
+        webcam["currentImage"] = latest_image_url
+    return webcams
 
 
 @app.get("/history")
@@ -420,18 +740,20 @@ def get_history(
     hours: int = Query(24, ge=1, le=168),
     webcam_id: str | None = Query(default=None),
 ) -> list[dict]:
-    _ = webcam_id
-    return generate_historical_data(hours)
+    camera_id = _normalize_camera_id(webcam_id)
+    return generate_historical_data(hours, webcam_id=camera_id)
 
 
 @app.get("/timeline")
 def get_timeline(
-    request: Request,
     count: int = Query(48, ge=1, le=240),
     webcam_id: str | None = Query(default=None),
 ) -> list[dict]:
-    _ = webcam_id
-    return generate_image_timestamps(str(request.base_url), count)
+    camera_id = _normalize_camera_id(webcam_id)
+    timeline = _timeline_from_camera_db(camera_id, count)
+    if timeline is not None:
+        return timeline
+    return _timeline_from_image_dir(camera_id, count)
 
 
 @app.get("/timezones")
@@ -441,23 +763,19 @@ def get_timezones() -> list[dict]:
 
 @app.get("/weather/current")
 async def get_current_weather(
-    request: Request,
     lat: float = Query(...),
     lon: float = Query(...),
     units: str = Query("metric"),
 ) -> dict:
-    enforce_rate_limit(request, bucket="weather")
     return await fetch_openweather("weather", lat, lon, units)
 
 
 @app.get("/weather/forecast")
 async def get_weather_forecast(
-    request: Request,
     lat: float = Query(...),
     lon: float = Query(...),
     units: str = Query("metric"),
 ) -> dict:
-    enforce_rate_limit(request, bucket="weather")
     return await fetch_openweather("forecast", lat, lon, units)
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -9,30 +10,30 @@ EXAMPLE_IMAGE_FILES = ["image0.png", "image1.png", "image2.png"]
 
 WEBCAM_SEED = [
     {
-        "id": "matterhorn-01",
-        "name": "Matterhorn Peak",
-        "location": "Zermatt, Switzerland",
-        "coordinates": {"lat": 45.9763, "lng": 7.6586, "altitude": 3883},
+        "id": "silvretta-glacier",
+        "name": "Silvretta Glacier",
+        "location": "Silvretta, Switzerland",
+        "coordinates": {"lat": 46.8520, "lng": 10.1240, "altitude": 3360},
         "imageFile": "image0.png",
         "isOnline": True,
         "lastUpdateMinutesAgo": 10,
         "nextUpdateMinutesIn": 20,
     },
     {
-        "id": "eiger-north",
-        "name": "Eiger Nordwand",
-        "location": "Grindelwald, Switzerland",
-        "coordinates": {"lat": 46.5775, "lng": 8.0053, "altitude": 3967},
+        "id": "gries-glacier",
+        "name": "Gries Glacier",
+        "location": "Gries, Switzerland",
+        "coordinates": {"lat": 46.9000, "lng": 10.1500, "altitude": 2800},
         "imageFile": "image1.png",
         "isOnline": True,
         "lastUpdateMinutesAgo": 5,
         "nextUpdateMinutesIn": 25,
     },
     {
-        "id": "mont-blanc",
-        "name": "Mont Blanc Summit",
-        "location": "Chamonix, France",
-        "coordinates": {"lat": 45.8326, "lng": 6.8652, "altitude": 4808},
+        "id": "rhone-glacier",
+        "name": "Rhone Glacier",
+        "location": "Rhone, Switzerland",
+        "coordinates": {"lat": 46.5170, "lng": 8.2846, "altitude": 2650},
         "imageFile": "image2.png",
         "isOnline": True,
         "lastUpdateMinutesAgo": 15,
@@ -125,9 +126,9 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _image_url(file_name: str, base_url: str) -> str:
+def _image_url(camera_id: str, file_name: str, base_url: str) -> str:
     _ = base_url
-    return f"/example_images/{file_name}"
+    return f"/images/{camera_id}/images/{file_name}"
 
 
 def get_webcams(base_url: str) -> list[dict[str, Any]]:
@@ -136,7 +137,7 @@ def get_webcams(base_url: str) -> list[dict[str, Any]]:
     for item in WEBCAM_SEED:
         last_update = now - timedelta(minutes=item["lastUpdateMinutesAgo"])
         next_update = now + timedelta(minutes=item["nextUpdateMinutesIn"])
-        image_url = _image_url(item["imageFile"], base_url)
+        image_url = _image_url(item["id"], item["imageFile"], base_url)
         webcams.append(
             {
                 "id": item["id"],
@@ -153,33 +154,49 @@ def get_webcams(base_url: str) -> list[dict[str, Any]]:
     return webcams
 
 
-def generate_historical_data(hours: int = 24) -> list[dict[str, Any]]:
+def generate_historical_data(hours: int = 24, webcam_id: str | None = None) -> list[dict[str, Any]]:
+    camera_id = webcam_id or "default"
+    seed = int(hashlib.sha256(camera_id.encode("utf-8")).hexdigest()[:16], 16)
+    rng = random.Random(seed)
+    temp_offset = ((seed % 1000) - 500) / 50
+    humidity_offset = ((seed // 7) % 20) - 10
+    pressure_offset = ((seed // 13) % 10) - 5
+    wind_direction_offset = (seed // 17) % 360
+    visibility_offset = ((seed // 19) % 7) - 3
+    battery_base = 40 + (seed // 23 % 41)
     data: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
     for i in range(hours, -1, -1):
         timestamp = now - timedelta(hours=i)
         hour_of_day = timestamp.hour
-        base_temp = 8 + 6 * math.sin((hour_of_day - 6) * math.pi / 12)
-        temp_variation = (random.random() - 0.5) * 2
+        base_temp = 8 + 6 * math.sin((hour_of_day - 6) * math.pi / 12) + temp_offset / 5
+        temp_variation = (rng.random() - 0.5) * 2
         data.append(
             {
                 "timestamp": _iso(timestamp),
                 "temperature": round((base_temp + temp_variation) * 10) / 10,
-                "humidity": round(55 + 20 * math.sin(hour_of_day * math.pi / 12) + (random.random() - 0.5) * 10),
-                "pressure": round(1013 + (random.random() - 0.5) * 20),
-                "battery": max(20, round(100 - i * 0.8 + random.random() * 5)),
-                "windSpeed": round((5 + random.random() * 15) * 10) / 10,
-                "windDirection": round(random.random() * 360),
-                "visibility": round((8 + random.random() * 12) * 10) / 10,
-                "uvIndex": round(random.random() * 8) if 6 <= hour_of_day <= 18 else 0,
-                "dewPoint": round((base_temp - 5 + (random.random() - 0.5) * 3) * 10) / 10,
-                "feelsLike": round((base_temp - 2 + (random.random() - 0.5) * 2) * 10) / 10,
+                "humidity": round(
+                    55 + 20 * math.sin(hour_of_day * math.pi / 12) + humidity_offset + (rng.random() - 0.5) * 10
+                ),
+                "pressure": round(1013 + pressure_offset + (rng.random() - 0.5) * 20),
+                "battery": max(20, round(battery_base - i * 0.8 + rng.random() * 5)),
+                "windSpeed": round((5 + rng.random() * 15) * 10) / 10,
+                "windDirection": round((rng.random() * 360 + wind_direction_offset) % 360),
+                "visibility": round((8 + rng.random() * 12 + visibility_offset) * 10) / 10,
+                "uvIndex": round(rng.random() * 8) if 6 <= hour_of_day <= 18 else 0,
+                "dewPoint": round((base_temp - 5 + (rng.random() - 0.5) * 3) * 10) / 10,
+                "feelsLike": round((base_temp - 2 + (rng.random() - 0.5) * 2) * 10) / 10,
             }
         )
     return data
 
 
-def generate_image_timestamps(base_url: str, count: int = 48) -> list[dict[str, Any]]:
+def generate_image_timestamps(
+    base_url: str,
+    count: int = 48,
+    webcam_id: str | None = None,
+) -> list[dict[str, Any]]:
+    camera_id = webcam_id or "default"
     images: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
     for i in range(count, -1, -1):
@@ -187,7 +204,7 @@ def generate_image_timestamps(base_url: str, count: int = 48) -> list[dict[str, 
         images.append(
             {
                 "timestamp": _iso(timestamp),
-                "url": _image_url(EXAMPLE_IMAGE_FILES[i % len(EXAMPLE_IMAGE_FILES)], base_url),
+                "url": _image_url(camera_id, EXAMPLE_IMAGE_FILES[i % len(EXAMPLE_IMAGE_FILES)], base_url),
             }
         )
     return images

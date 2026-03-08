@@ -93,6 +93,7 @@ export const WeatherDetail: React.FC = () => {
 
     const fetchWeather = async () => {
       setIsLoading(true);
+      setIsForecastLoading(true);
       setError(null);
       try {
         const lat = activeWebcam.coordinates.lat;
@@ -184,7 +185,7 @@ export const WeatherDetail: React.FC = () => {
           });
 
           const sorted = Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b));
-          const nextForecast = sorted.slice(0, 6).map(([key, bucket], index) => {
+          const nextForecast = sorted.map(([key, bucket], index) => {
             const icon = Array.from(bucket.iconCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
             return {
               dateKey: key,
@@ -200,11 +201,15 @@ export const WeatherDetail: React.FC = () => {
 
           setForecast(nextForecast);
         } else {
-          setForecast([]);
+          if (isMounted) {
+            setForecast([]);
+          }
         }
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         if (isMounted) {
+          setWeather(null);
+          setForecast([]);
           setError("Unable to load live weather data.");
         }
       } finally {
@@ -424,33 +429,31 @@ export const WeatherDetail: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid w-full grid-cols-6 gap-3">
-          {(isForecastLoading ? Array.from({ length: 6 }) : forecast).map((day: ForecastDay | undefined, index: number) => (
-            <div
-              key={isForecastLoading ? index : day?.dateKey}
-              className={cn(
-                "rounded-2xl px-3 py-4 flex flex-col items-center gap-2 text-center",
-                weatherTheme.card
-              )}
-            >
-              <span className={cn("text-xs", weatherTheme.mutedText)}>
-                {isForecastLoading ? "..." : day?.label}
-              </span>
-              {isForecastLoading ? (
-                <div className={cn("h-10 w-10 rounded-full", weatherTheme.placeholder)} />
-              ) : day?.iconUrl ? (
-                <img src={day.iconUrl} alt={day?.label} className="h-10 w-10" />
-              ) : (
-                <div className={cn("h-10 w-10 rounded-full", weatherTheme.placeholder)} />
-              )}
-              <div className={cn("text-lg font-semibold", weatherTheme.foregroundText)}>
-                {isForecastLoading ? "--" : `${day?.tempMax}\u00B0`}
+        <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-3">
+          {isForecastLoading && forecast.length === 0 ? (
+            <div className={cn("col-span-full text-center text-xs", weatherTheme.mutedText)}>Loading forecast...</div>
+          ) : forecast.length === 0 ? (
+            <div className={cn("col-span-full text-center text-xs", weatherTheme.mutedText)}>No forecast available.</div>
+          ) : (
+            forecast.map((day: ForecastDay) => (
+              <div
+                key={day.dateKey}
+                className={cn(
+                  "rounded-2xl px-3 py-4 flex flex-col items-center gap-2 text-center",
+                  weatherTheme.card
+                )}
+              >
+                <span className={cn("text-xs", weatherTheme.mutedText)}>{day.label}</span>
+                {day.iconUrl ? (
+                  <img src={day.iconUrl} alt={day.label} className="h-10 w-10" />
+                ) : (
+                  <div className={cn("h-10 w-10 rounded-full", weatherTheme.placeholder)} />
+                )}
+                <div className={cn("text-lg font-semibold", weatherTheme.foregroundText)}>{`${day.tempMax}\u00B0`}</div>
+                <div className={cn("text-xs", weatherTheme.mutedText)}>{`${day.tempMin}\u00B0`}</div>
               </div>
-              <div className={cn("text-xs", weatherTheme.mutedText)}>
-                {isForecastLoading ? "--" : `${day?.tempMin}\u00B0`}
-              </div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
 
         <div className={cn("text-xs text-right", weatherTheme.mutedText)}>
