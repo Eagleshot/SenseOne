@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import sqlite3
 import urllib.error
 import urllib.request
@@ -9,9 +10,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
-    from .mock_data import WEBCAM_SEED
+    from .mock_data import WEBCAM_SEED, generate_historical_data
 except ImportError:
-    from mock_data import WEBCAM_SEED
+    from mock_data import WEBCAM_SEED, generate_historical_data
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,6 +28,7 @@ SAMPLE_IMAGE_URLS = {
 SAMPLE_PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAoMBgOaI1xkAAAAASUVORK5CYII="
 )
+SENSOR_HISTORY_HOURS = 168
 
 
 def _sanitize_camera_id(raw_name: str) -> str:
@@ -43,12 +45,52 @@ def _camera_dir(data_dir: Path, camera_id: str) -> Path:
     return data_dir / _sanitize_camera_id(camera_id)
 
 
+def _yaml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _yaml_optional_string(value: str | None) -> str:
+    if value is None:
+        return "null"
+    return _yaml_string(value)
+
+
+def _iso_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _camera_seed(camera_id: str) -> dict[str, object]:
+    normalized = _sanitize_camera_id(camera_id)
+    for item in WEBCAM_SEED:
+        if _sanitize_camera_id(str(item.get("id") or "")) == normalized:
+            return item
+    return {}
+
+
 def _camera_config_yaml(camera_id: str) -> str:
+    seed = _camera_seed(camera_id)
+    coordinates = seed.get("coordinates") or {}
+    now = datetime.now(timezone.utc)
+    last_online = None
+    next_online = None
+    if seed:
+        last_online = now - timedelta(minutes=int(seed.get("lastUpdateMinutesAgo") or 0))
+        next_online = now + timedelta(minutes=int(seed.get("nextUpdateMinutesIn") or 0))
     return "\n".join(
         [
-            f"camera_id: {camera_id}",
-            "camera_start_time: \"06:00\"",
-            "camera_stop_time: \"20:00\"",
+            f"title: {_yaml_string(str(seed.get('name') or ''))}",
+            f"description: {_yaml_string(str(seed.get('description') or ''))}",
+            f"lat: {coordinates.get('lat', 0.0)}",
+            f"lon: {coordinates.get('lng', 0.0)}",
+            f"alt: {coordinates.get('altitude', 0.0)}",
+            f"location: {_yaml_string(str(seed.get('location') or ''))}",
+            f"country: {_yaml_string(str(seed.get('country') or ''))}",
+            f"country_emoji: {_yaml_string(str(seed.get('countryEmoji') or ''))}",
+            f"is_online: {'true' if seed.get('isOnline') is True else 'false' if seed.get('isOnline') is False else 'null'}",
+            f"last_online: {_yaml_optional_string(_iso_utc(last_online) if last_online else None)}",
+            f"next_online: {_yaml_optional_string(_iso_utc(next_online) if next_online else None)}",
+            f"camera_start_time: {_yaml_string('06:00')}",
+            f"camera_stop_time: {_yaml_string('20:00')}",
             "use_sunrise_sunset: false",
             "capture_interval_minutes: 30",
             "",
@@ -66,6 +108,24 @@ def _ensure_camera_schema(db_path: Path) -> None:
                 content_type TEXT,
                 size_bytes INTEGER NOT NULL,
                 created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sensor_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                temperature REAL NOT NULL,
+                humidity INTEGER NOT NULL,
+                pressure INTEGER NOT NULL,
+                battery INTEGER NOT NULL,
+                wind_speed REAL NOT NULL,
+                wind_direction INTEGER NOT NULL,
+                visibility REAL NOT NULL,
+                uv_index INTEGER NOT NULL,
+                dew_point REAL NOT NULL,
+                feels_like REAL NOT NULL
             )
             """
         )
@@ -122,6 +182,51 @@ def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) ->
     if overwrite:
         with sqlite3.connect(db_path) as connection:
             connection.execute("DELETE FROM camera_images")
+            connection.execute("DELETE FROM sensor_history")
+            connection.commit()
+
+    sensor_rows = [
+        (
+            row["timestamp"],
+            row["temperature"],
+            row["humidity"],
+            row["pressure"],
+            row["battery"],
+            row["windSpeed"],
+            row["windDirection"],
+            row["visibility"],
+            row["uvIndex"],
+            row["dewPoint"],
+            row["feelsLike"],
+        )
+        for row in generate_historical_data(SENSOR_HISTORY_HOURS, webcam_id=camera_id)
+    ]
+    with sqlite3.connect(db_path) as connection:
+        if overwrite:
+            connection.execute("DELETE FROM sensor_history")
+        elif connection.execute("SELECT 1 FROM sensor_history LIMIT 1").fetchone():
+            sensor_rows = []
+
+        if sensor_rows:
+            connection.executemany(
+                """
+                INSERT INTO sensor_history (
+                    timestamp,
+                    temperature,
+                    humidity,
+                    pressure,
+                    battery,
+                    wind_speed,
+                    wind_direction,
+                    visibility,
+                    uv_index,
+                    dew_point,
+                    feels_like
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                sensor_rows,
+            )
             connection.commit()
 
     if count <= 0:

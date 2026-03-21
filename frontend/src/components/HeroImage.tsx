@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
 import { StatusSummary } from '@/components/StatusSummary';
 import { QuickInfoCards } from '@/components/QuickInfoCards';
 
-import { useApp } from '@/contexts/AppContext';
+import { useApp } from '@/contexts/useApp';
 import { formatDateTimeLabel } from '@/lib/datetime';
 import { cn } from '@/lib/utils';
 import { formatLocationWithFlag } from '@/lib/location';
@@ -91,7 +91,7 @@ export const HeroImage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [currentImageUrl]);
+  }, [currentImageUrl, displayImageUrl]);
 
   const updateCompareValue = (clientX: number) => {
     const rect = compareRef.current?.getBoundingClientRect();
@@ -185,7 +185,7 @@ export const HeroImage: React.FC = () => {
           </div>
           <p className="text-muted-foreground flex items-center gap-1.5">
             <MapPin className="w-3 h-3" />
-            {formatLocationWithFlag(activeWebcam.location)}
+            {formatLocationWithFlag(activeWebcam.location, activeWebcam.country, activeWebcam.countryEmoji)}
           </p>
         </div>
         <StatusSummary />
@@ -219,6 +219,16 @@ export const HeroImage: React.FC = () => {
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                     Try refreshing later or switch to another camera.
                   </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRefresh}
+                    disabled={isRefreshing || !activeWebcam.id}
+                    className={cn("mt-4", actionButtonClass)}
+                  >
+                    <RefreshCw className={cn("w-4 h-4", isRefreshing && "animate-spin")} />
+                    Refresh
+                  </Button>
                 </div>
               </div>
             </div>
@@ -272,68 +282,72 @@ export const HeroImage: React.FC = () => {
           )}
 
           {/* Controls Bar */}
-          <div className="absolute inset-x-4 bottom-4 rounded-2xl border border-border/50 bg-background/50 px-3 py-1 backdrop-blur-sm opacity-0 translate-y-2 transition-all duration-200 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-y-0 group-focus-within:pointer-events-auto">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setIsPlaying(!isPlaying)}
-                disabled={!hasTimeline}
-                aria-label={isPlaying ? "Pause" : "Play"}
-                className={cn(
-                  controlIconButtonClass,
-                  isPlaying && 'text-primary-foreground'
-                )}
-              >
-                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-              </Button>
-
-              <div
-                ref={scrubRef}
-                onPointerDown={handleScrubPointerDown}
-                onPointerMove={handleScrubPointerMove}
-                onPointerUp={handleScrubPointerEnd}
-                onPointerCancel={handleScrubPointerEnd}
-                className="flex-1 min-w-[200px] cursor-ew-resize"
-              >
-                <Slider
-                  value={[currentImageIndex]}
-                  onValueChange={handleSliderChange}
-                  max={latestIndex}
-                  min={0}
-                  step={1}
+          {hasDisplayImage && (
+            <div className="absolute inset-x-4 bottom-4 rounded-2xl border border-border/50 bg-background/50 px-3 py-1 backdrop-blur-sm opacity-0 translate-y-2 transition-all duration-200 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-y-0 group-focus-within:pointer-events-auto">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsPlaying(!isPlaying)}
                   disabled={!hasTimeline}
-                />
-              </div>
+                  aria-label={isPlaying ? "Pause" : "Play"}
+                  className={cn(
+                    controlIconButtonClass,
+                    isPlaying && 'text-primary-foreground'
+                  )}
+                >
+                  {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                </Button>
 
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleJumpToLatest}
-                disabled={!hasTimeline || isLatest}
-                aria-label="Jump to latest"
-                className={controlIconButtonClass}
-              >
-                <SkipForward className="w-4 h-4" />
-              </Button>
+                <div
+                  ref={scrubRef}
+                  onPointerDown={handleScrubPointerDown}
+                  onPointerMove={handleScrubPointerMove}
+                  onPointerUp={handleScrubPointerEnd}
+                  onPointerCancel={handleScrubPointerEnd}
+                  className="flex-1 min-w-[200px] cursor-ew-resize"
+                >
+                  <Slider
+                    value={[currentImageIndex]}
+                    onValueChange={handleSliderChange}
+                    max={latestIndex}
+                    min={0}
+                    step={1}
+                    disabled={!hasTimeline}
+                  />
+                </div>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleJumpToLatest}
+                  disabled={!hasTimeline || isLatest}
+                  aria-label="Jump to latest"
+                  className={controlIconButtonClass}
+                >
+                  <SkipForward className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </motion.div>
 
       <div className="flex flex-wrap items-center gap-3">
         <QuickInfoCards />
         <div className="flex items-center gap-3 ml-auto">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={isRefreshing || !activeWebcam.id}
-            className={actionButtonClass}
-          >
-            <RefreshCw className={cn("w-4 h-4", isRefreshing && "animate-spin")} />
-            Refresh
-          </Button>
+          {hasDisplayImage && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isRefreshing || !activeWebcam.id}
+              className={actionButtonClass}
+            >
+              <RefreshCw className={cn("w-4 h-4", isRefreshing && "animate-spin")} />
+              Refresh
+            </Button>
+          )}
 
           <Dialog
             open={isCompareOpen}

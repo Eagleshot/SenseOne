@@ -264,17 +264,29 @@ const getFlagEmojiFromCountryName = (name: string): string | null => {
   return flag || null;
 };
 
-export const formatLocationWithFlag = (location: string): string => {
+export const formatLocationWithFlag = (
+  location: string,
+  country?: string | null,
+  countryEmoji?: string | null
+): string => {
   if (!location) return location;
   if (FLAG_EMOJI_REGEX.test(location)) return location;
+
+  const normalizedCountry = country?.trim() ?? "";
+  const normalizedEmoji = countryEmoji?.trim() ?? "";
+
+  if (normalizedCountry) {
+    const suffix = normalizedEmoji || getFlagEmojiFromCountryName(normalizedCountry) || "";
+    return suffix ? `${location}, ${normalizedCountry} ${suffix}` : `${location}, ${normalizedCountry}`;
+  }
 
   const parts = location.split(',').map(part => part.trim()).filter(Boolean);
   if (parts.length < 2) return location;
 
-  const country = parts[parts.length - 1];
-  const flag = getFlagEmojiFromCountryName(country);
+  const fallbackCountry = parts[parts.length - 1];
+  const flag = getFlagEmojiFromCountryName(fallbackCountry);
   if (!flag) return location;
 
   const city = parts.slice(0, -1).join(', ');
-  return `${city}, ${country} ${flag}`;
+  return `${city}, ${fallbackCountry} ${flag}`;
 };

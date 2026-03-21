@@ -1,17 +1,20 @@
 export interface Webcam {
   id: string;
   name: string;
+  title?: string;
+  description?: string;
   location: string;
+  country?: string;
+  countryEmoji?: string;
   coordinates: {
     lat: number;
     lng: number;
     altitude: number;
   };
-  thumbnail: string;
-  currentImage: string;
-  isOnline: boolean;
-  lastUpdate: Date;
-  nextUpdate: Date;
+  currentImage?: string | null;
+  isOnline?: boolean;
+  lastUpdate?: Date | null;
+  nextUpdate?: Date | null;
 }
 
 export interface SensorData {

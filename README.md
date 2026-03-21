@@ -34,20 +34,27 @@ npm run dev
 
 The backend is a single FastAPI service that powers the frontend APIs and the ESP32 image upload endpoint.
 
-### 1) Create a backend `.env`
+### 1) Create the root `.env`
 
-Create `backend/.env` if you want weather data and authenticated settings management:
+Create a single `.env` in the project root for both frontend and backend settings:
 
 ```env
+# Frontend
+VITE_API_BASE_URL=/api
+
+# Backend
 OPENWEATHER_API_KEY=your_api_key_here
 APP_AUTH_USERNAME=your_admin_username
 APP_AUTH_PASSWORD=use_a_long_random_password_here
 APP_CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
 ```
 
+`VITE_API_BASE_URL` is read by the frontend from the root `.env`.
 `OPENWEATHER_API_KEY` is required for the weather endpoints.
-`APP_AUTH_USERNAME` and `APP_AUTH_PASSWORD` are required only if you want `/auth/*` and `/config`.
-`APP_CORS_ORIGINS` defaults to local Vite origins in development and must be set in production.
+`APP_AUTH_USERNAME` and `APP_AUTH_PASSWORD` are required only if you want `/auth/*` and protected camera config/upload endpoints.
+`APP_AUTH_PASSWORD` must be at least 12 characters when auth is enabled.
+`APP_CORS_ORIGINS` is required and should list the exact allowed frontend origins.
+Brute-force protection, login throttling, and account lockout are not built into the application code.
 
 ### 2) Install backend dependencies
 
@@ -64,17 +71,16 @@ python -m venv .venv
 # Navigate to the backend directory if not already there
 cd backend
 
-# Start the FastAPI server with auto-reload
-uvicorn main:app --reload --port 3000
+# Start the FastAPI server with auto-reload and load the root .env
+uvicorn main:app --reload --port 3000 --env-file ../.env
 ```
-If you created `backend/.env`, add `--env-file .env` to that command.
 
 For the backend documentation, go to `http://localhost:3000/docs` in your browser.
 
 ### 4) Point the frontend to the backend (optional)
 
 The frontend is configured to call the backend through `/api`, which works in local Vite dev and in Docker.
-If you need to override that, set `VITE_API_BASE_URL` in `frontend/.env`:
+If you need to override that, set `VITE_API_BASE_URL` in the root `.env`:
 
 ```env
 VITE_API_BASE_URL=/api

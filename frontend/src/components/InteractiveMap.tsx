@@ -6,7 +6,7 @@ import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap, ZoomControl } f
 
 import { Button } from '@/components/ui/button';
 
-import { useApp } from '@/contexts/AppContext';
+import { useApp } from '@/contexts/useApp';
 import { formatLocationWithFlag } from '@/lib/location';
 import { cn } from '@/lib/utils';
 
@@ -138,17 +138,24 @@ export const InteractiveMap: React.FC = () => {
                     fillOpacity: 0.9,
                     weight: 2,
                   }
-                : isOnline
-                ? {
-                    color: 'hsl(var(--success))',
-                    fillColor: 'hsl(var(--success))',
-                    fillOpacity: 0.85,
-                    weight: 2,
-                  }
+                : isOnline === true
+                  ? {
+                      color: 'hsl(var(--success))',
+                      fillColor: 'hsl(var(--success))',
+                      fillOpacity: 0.85,
+                      weight: 2,
+                    }
+                  : isOnline === false
+                    ? {
+                        color: 'hsl(var(--muted-foreground))',
+                        fillColor: 'hsl(var(--muted-foreground))',
+                        fillOpacity: 0.55,
+                        weight: 1,
+                      }
                 : {
-                    color: 'hsl(var(--muted-foreground))',
-                    fillColor: 'hsl(var(--muted-foreground))',
-                    fillOpacity: 0.55,
+                    color: 'hsl(var(--accent))',
+                    fillColor: 'hsl(var(--accent))',
+                    fillOpacity: 0.65,
                     weight: 1,
                   };
 
@@ -164,7 +171,9 @@ export const InteractiveMap: React.FC = () => {
                 >
                   <Tooltip direction="top" offset={[0, -6]} opacity={1}>
                     <div className="text-xs font-medium">{webcam.name}</div>
-                    <div className="text-[11px] text-muted-foreground">{formatLocationWithFlag(webcam.location)}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {formatLocationWithFlag(webcam.location, webcam.country, webcam.countryEmoji)}
+                    </div>
                   </Tooltip>
                 </CircleMarker>
               );
@@ -179,7 +188,9 @@ export const InteractiveMap: React.FC = () => {
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <MapPin className="w-3 h-3 text-muted-foreground flex-shrink-0" />
-                  <p className="font-medium text-foreground">{formatLocationWithFlag(activeWebcam.location)}</p>
+                  <p className="font-medium text-foreground">
+                    {formatLocationWithFlag(activeWebcam.location, activeWebcam.country, activeWebcam.countryEmoji)}
+                  </p>
                 </div>
                 <p className="text-sm text-muted-foreground leading-relaxed">
                   Lat: {activeWebcam.coordinates.lat.toFixed(4)} deg

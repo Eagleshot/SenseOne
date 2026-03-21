@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 
 import { motion } from "framer-motion";
 import { Calendar, LineChart, Plus } from "lucide-react";
-import { endOfDay, format, startOfDay } from "date-fns";
+import { format } from "date-fns";
 import type { DateRange } from "react-day-picker";
 
 import { Button } from "@/components/ui/button";
@@ -10,54 +10,24 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 
-import { useApp } from "@/contexts/AppContext";
+import { useApp } from "@/contexts/useApp";
+import { createDefaultHistoryDateRange, filterHistoricalData } from "@/lib/historyFilters";
 import { HistoricalCharts } from "./HistoricalCharts";
 import { RawDataTable } from "./RawDataTable";
 
 export const SensorHistoryPanel: React.FC = () => {
   const { historicalData } = useApp();
-  const [dateRange, setDateRange] = useState<DateRange | undefined>({
-    from: new Date(Date.now() - 24 * 60 * 60 * 1000),
-    to: new Date(),
-  });
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(createDefaultHistoryDateRange);
   const [timeFrom, setTimeFrom] = useState("00:00");
   const [timeTo, setTimeTo] = useState("23:59");
   const [addChartSignal, setAddChartSignal] = useState(0);
 
-  const parseTime = (value: string) => {
-    const [hours, minutes] = value.split(":").map(Number);
-    if (Number.isNaN(hours) || Number.isNaN(minutes)) return undefined;
-    return hours * 60 + minutes;
-  };
-
   const filteredData = useMemo(() => {
-    const from = dateRange?.from ? startOfDay(dateRange.from) : undefined;
-    const to = dateRange?.to ? endOfDay(dateRange.to) : undefined;
-    const fromMinutes = parseTime(timeFrom);
-    const toMinutes = parseTime(timeTo);
-
-    return historicalData.filter((row) => {
-      const timestamp = row.timestamp;
-      if (from && timestamp < from) return false;
-      if (to && timestamp > to) return false;
-
-      if (fromMinutes !== undefined || toMinutes !== undefined) {
-        const currentMinutes = timestamp.getHours() * 60 + timestamp.getMinutes();
-
-        if (fromMinutes !== undefined && toMinutes !== undefined) {
-          if (fromMinutes <= toMinutes) {
-            if (currentMinutes < fromMinutes || currentMinutes > toMinutes) return false;
-          } else if (currentMinutes < fromMinutes && currentMinutes > toMinutes) {
-            return false;
-          }
-        } else if (fromMinutes !== undefined && currentMinutes < fromMinutes) {
-          return false;
-        } else if (toMinutes !== undefined && currentMinutes > toMinutes) {
-          return false;
-        }
-      }
-
-      return true;
+    return filterHistoricalData({
+      data: historicalData,
+      dateRange,
+      timeFrom,
+      timeTo,
     });
   }, [historicalData, dateRange, timeFrom, timeTo]);
 

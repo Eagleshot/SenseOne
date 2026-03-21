@@ -22,7 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-import { useApp } from "@/contexts/AppContext";
+import { useApp } from "@/contexts/useApp";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { formatLocationWithFlag } from "@/lib/location";
 import { cn } from "@/lib/utils";
@@ -60,7 +60,10 @@ export const Sidebar: React.FC = () => {
     if (!searchQuery.trim()) return webcamList;
     const query = searchQuery.toLowerCase();
     return webcamList.filter(
-      (cam) => cam.name.toLowerCase().includes(query) || cam.location.toLowerCase().includes(query)
+      (cam) =>
+        cam.name.toLowerCase().includes(query) ||
+        cam.location.toLowerCase().includes(query) ||
+        (cam.country?.toLowerCase().includes(query) ?? false)
     );
   }, [searchQuery, webcamList]);
 
@@ -168,7 +171,9 @@ export const Sidebar: React.FC = () => {
                     <h3 className="truncate text-sm font-medium text-sidebar-foreground">{webcam.name}</h3>
                     <div className="mt-1 flex items-center gap-1">
                       <MapPin className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
-                      <p className="truncate text-xs text-muted-foreground">{formatLocationWithFlag(webcam.location)}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {formatLocationWithFlag(webcam.location, webcam.country, webcam.countryEmoji)}
+                      </p>
                     </div>
                   </div>
                 </div>

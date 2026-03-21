@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 import { cn } from "@/lib/utils";
 import { formatCsvTimestamp, formatDateTimeLabel } from "@/lib/datetime";
-import { useApp } from "@/contexts/AppContext";
+import { useApp } from "@/contexts/useApp";
 import type { SensorData } from "@/data/types";
 
 type SortField = "timestamp" | "temperature" | "humidity" | "battery" | "windSpeed" | "pressure";

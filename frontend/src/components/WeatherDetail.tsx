@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { Thermometer, Droplets, Wind, Gauge, Eye, Sunrise, Sunset, Navigation } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
-import { useApp } from "@/contexts/AppContext";
+import { useApp } from "@/contexts/useApp";
 import { cn } from "@/lib/utils";
 
 type WeatherState = {
@@ -96,10 +96,9 @@ export const WeatherDetail: React.FC = () => {
       setIsForecastLoading(true);
       setError(null);
       try {
-        const lat = activeWebcam.coordinates.lat;
-        const lon = activeWebcam.coordinates.lng;
-        const currentUrl = `${apiBaseUrl}/weather/current?lat=${lat}&lon=${lon}&units=metric`;
-        const forecastUrl = `${apiBaseUrl}/weather/forecast?lat=${lat}&lon=${lon}&units=metric`;
+        const stationPath = `${apiBaseUrl}/stations/${encodeURIComponent(activeWebcam.id)}`;
+        const currentUrl = `${stationPath}/weather/current`;
+        const forecastUrl = `${stationPath}/weather/forecast`;
 
         const [currentResponse, forecastResponse] = await Promise.all([
           fetch(currentUrl, { signal: controller.signal }),
@@ -226,7 +225,7 @@ export const WeatherDetail: React.FC = () => {
       controller.abort();
       clearInterval(interval);
     };
-  }, [activeWebcam.coordinates.lat, activeWebcam.coordinates.lng, activeWebcam.id, apiBaseUrl]);
+  }, [activeWebcam.id, apiBaseUrl]);
 
   const updatedLabel = useMemo(() => {
     if (!weather) return "Updated --.";

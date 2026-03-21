@@ -2,7 +2,7 @@ import React from 'react';
 
 import { Battery, Signal } from 'lucide-react';
 
-import { useApp } from '@/contexts/AppContext';
+import { useApp } from '@/contexts/useApp';
 import { cn } from '@/lib/utils';
 
 export const QuickInfoCards: React.FC = () => {
@@ -18,8 +18,10 @@ export const QuickInfoCards: React.FC = () => {
   const batteryLevel = latestReading?.battery ?? 78;
   const batteryStatus = getBatteryStatus(batteryLevel);
 
-  const signalStrength = activeWebcam.isOnline ? 'Strong' : 'No signal';
-  const signalStatus = activeWebcam.isOnline ? 'success' : 'error';
+  const signalStrength =
+    typeof activeWebcam.isOnline !== 'boolean' ? 'Loading' : activeWebcam.isOnline ? 'Strong' : 'No signal';
+  const signalStatus =
+    typeof activeWebcam.isOnline !== 'boolean' ? 'neutral' : activeWebcam.isOnline ? 'success' : 'error';
 
   const batteryClass = cn(
     'font-semibold',
@@ -30,7 +32,7 @@ export const QuickInfoCards: React.FC = () => {
 
   const signalClass = cn(
     'font-semibold',
-    signalStatus === 'success' ? 'text-success' : 'text-destructive'
+    signalStatus === 'success' ? 'text-success' : signalStatus === 'error' ? 'text-destructive' : 'text-muted-foreground'
   );
 
   return (
@@ -48,7 +50,16 @@ export const QuickInfoCards: React.FC = () => {
         <span className={batteryClass}>{batteryLevel}%</span>
       </div>
       <div className="flex items-center gap-2 text-sm text-foreground">
-        <Signal className={cn('w-4 h-4', signalStatus === 'success' ? 'text-success' : 'text-destructive')} />
+        <Signal
+          className={cn(
+            'w-4 h-4',
+            signalStatus === 'success'
+              ? 'text-success'
+              : signalStatus === 'error'
+                ? 'text-destructive'
+                : 'text-muted-foreground'
+          )}
+        />
         <span className="text-muted-foreground">Signal</span>
         <span className={signalClass}>{signalStrength}</span>
       </div>

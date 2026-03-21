@@ -12,7 +12,9 @@ WEBCAM_SEED = [
     {
         "id": "silvretta-glacier",
         "name": "Silvretta Glacier",
-        "location": "Silvretta, Switzerland",
+        "location": "Silvretta",
+        "country": "Switzerland",
+        "countryEmoji": "🇨🇭",
         "coordinates": {"lat": 46.8520, "lng": 10.1240, "altitude": 3360},
         "imageFile": "image0.png",
         "isOnline": True,
@@ -22,7 +24,9 @@ WEBCAM_SEED = [
     {
         "id": "gries-glacier",
         "name": "Gries Glacier",
-        "location": "Gries, Switzerland",
+        "location": "Gries",
+        "country": "Switzerland",
+        "countryEmoji": "🇨🇭",
         "coordinates": {"lat": 46.9000, "lng": 10.1500, "altitude": 2800},
         "imageFile": "image1.png",
         "isOnline": True,
@@ -32,7 +36,9 @@ WEBCAM_SEED = [
     {
         "id": "rhone-glacier",
         "name": "Rhone Glacier",
-        "location": "Rhone, Switzerland",
+        "location": "Rhone",
+        "country": "Switzerland",
+        "countryEmoji": "🇨🇭",
         "coordinates": {"lat": 46.5170, "lng": 8.2846, "altitude": 2650},
         "imageFile": "image2.png",
         "isOnline": True,
@@ -42,7 +48,9 @@ WEBCAM_SEED = [
     {
         "id": "jungfrau-top",
         "name": "Jungfrau Top",
-        "location": "Interlaken, Switzerland",
+        "location": "Interlaken",
+        "country": "Switzerland",
+        "countryEmoji": "🇨🇭",
         "coordinates": {"lat": 46.5369, "lng": 7.9618, "altitude": 4158},
         "imageFile": "image0.png",
         "isOnline": False,
@@ -52,7 +60,9 @@ WEBCAM_SEED = [
     {
         "id": "titlis-glacier",
         "name": "Titlis Glacier",
-        "location": "Engelberg, Switzerland",
+        "location": "Engelberg",
+        "country": "Switzerland",
+        "countryEmoji": "🇨🇭",
         "coordinates": {"lat": 46.7708, "lng": 8.4244, "altitude": 3238},
         "imageFile": "image1.png",
         "isOnline": True,
@@ -62,7 +72,9 @@ WEBCAM_SEED = [
     {
         "id": "reykjavik-harbor",
         "name": "Reykjavik Harbor",
-        "location": "Reykjavik, Iceland",
+        "location": "Reykjavik",
+        "country": "Iceland",
+        "countryEmoji": "🇮🇸",
         "coordinates": {"lat": 64.1466, "lng": -21.9426, "altitude": 15},
         "imageFile": "image2.png",
         "isOnline": True,
@@ -72,7 +84,9 @@ WEBCAM_SEED = [
     {
         "id": "yosemite-valley",
         "name": "Yosemite Valley",
-        "location": "Yosemite, United States",
+        "location": "Yosemite",
+        "country": "United States",
+        "countryEmoji": "🇺🇸",
         "coordinates": {"lat": 37.7426, "lng": -119.5740, "altitude": 1219},
         "imageFile": "image0.png",
         "isOnline": True,
@@ -82,7 +96,10 @@ WEBCAM_SEED = [
     {
         "id": "paris-seine",
         "name": "Seine River View",
-        "location": "Paris, France",
+        "description": "Monitoring the Seine through central Paris, this station captures changing river conditions, light, and weather around one of the city's most recognizable waterfront corridors.",
+        "location": "Paris",
+        "country": "France",
+        "countryEmoji": "🇫🇷",
         "coordinates": {"lat": 48.8584, "lng": 2.2945, "altitude": 35},
         "imageFile": "image1.png",
         "isOnline": True,
@@ -92,7 +109,9 @@ WEBCAM_SEED = [
     {
         "id": "tokyo-skyline",
         "name": "Tokyo Skyline",
-        "location": "Tokyo, Japan",
+        "location": "Tokyo",
+        "country": "Japan",
+        "countryEmoji": "🇯🇵",
         "coordinates": {"lat": 35.6762, "lng": 139.6503, "altitude": 40},
         "imageFile": "image2.png",
         "isOnline": True,
@@ -102,7 +121,9 @@ WEBCAM_SEED = [
     {
         "id": "bangkok-river",
         "name": "Chao Phraya River",
-        "location": "Bangkok, Thailand",
+        "location": "Bangkok",
+        "country": "Thailand",
+        "countryEmoji": "🇹🇭",
         "coordinates": {"lat": 13.7563, "lng": 100.5018, "altitude": 5},
         "imageFile": "image0.png",
         "isOnline": True,
@@ -122,36 +143,8 @@ TIMEZONES = [
 ]
 
 
-def _iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _image_url(camera_id: str, file_name: str, base_url: str) -> str:
-    _ = base_url
-    return f"/images/{camera_id}/images/{file_name}"
-
-
-def get_webcams(base_url: str) -> list[dict[str, Any]]:
-    now = datetime.now(timezone.utc)
-    webcams: list[dict[str, Any]] = []
-    for item in WEBCAM_SEED:
-        last_update = now - timedelta(minutes=item["lastUpdateMinutesAgo"])
-        next_update = now + timedelta(minutes=item["nextUpdateMinutesIn"])
-        image_url = _image_url(item["id"], item["imageFile"], base_url)
-        webcams.append(
-            {
-                "id": item["id"],
-                "name": item["name"],
-                "location": item["location"],
-                "coordinates": item["coordinates"],
-                "thumbnail": image_url,
-                "currentImage": image_url,
-                "isOnline": item["isOnline"],
-                "lastUpdate": _iso(last_update),
-                "nextUpdate": _iso(next_update),
-            }
-        )
-    return webcams
+def _iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def generate_historical_data(hours: int = 24, webcam_id: str | None = None) -> list[dict[str, Any]]:
@@ -189,22 +182,3 @@ def generate_historical_data(hours: int = 24, webcam_id: str | None = None) -> l
             }
         )
     return data
-
-
-def generate_image_timestamps(
-    base_url: str,
-    count: int = 48,
-    webcam_id: str | None = None,
-) -> list[dict[str, Any]]:
-    camera_id = webcam_id or "default"
-    images: list[dict[str, Any]] = []
-    now = datetime.now(timezone.utc)
-    for i in range(count, -1, -1):
-        timestamp = now - timedelta(minutes=i * 30)
-        images.append(
-            {
-                "timestamp": _iso(timestamp),
-                "url": _image_url(camera_id, EXAMPLE_IMAGE_FILES[i % len(EXAMPLE_IMAGE_FILES)], base_url),
-            }
-        )
-    return images

@@ -11,7 +11,7 @@ python .\seed_mock_data.py
 This creates per-camera folders in `backend/data/<camera_id>/` with:
 
 - `images/` mock assets
-- `config.yaml`
+- `config.yaml` including schedule and metadata (`title`, `lat`, `lon`, `alt`, `location`, `country`, `country_emoji`)
 - `camera.db` containing timeline rows
 
 Use `--camera-id`, `--count`, and `--overwrite` to control generated sample data:
@@ -26,7 +26,7 @@ This backend is a single FastAPI server that:
 - serves the frontend API routes used by the Vite app
 - saves uploaded files into `backend/data/<camera>/images/`, where each camera has its own folder
 - creates a `config.yaml` and `camera.db` per camera directory on first write
-- can optionally expose weather and auth features through `backend/.env`
+- can optionally expose weather and auth features through the shared project root `.env`
 
 ## 1) Prerequisites
 
@@ -34,9 +34,11 @@ This backend is a single FastAPI server that:
 - `pip`
 - One sample `.jpg` file for local testing
 
-Optional for the frontend-auth and weather features:
+Optional for the shared frontend/backend `.env`:
 
-- `backend/.env` with `APP_AUTH_USERNAME`, `APP_AUTH_PASSWORD`, and `OPENWEATHER_API_KEY`
+- `VITE_API_BASE_URL` for the frontend
+- `APP_AUTH_USERNAME`, `APP_AUTH_PASSWORD`, and `OPENWEATHER_API_KEY` for the backend
+- brute-force protection, login throttling, and account lockout are not built into the backend application code
 
 ## 2) Open the backend folder
 
@@ -62,7 +64,7 @@ python -m pip install -r .\requirements.txt
 From `backend/`:
 
 ```powershell
-python .\main.py
+uvicorn main:app --reload --port 3000 --env-file ..\.env
 ```
 
 Expected behavior:
@@ -115,9 +117,16 @@ Optional:
 
 - set `APP_DATA_DIR` to override the data root.
 - set `APP_DEFAULT_CAMERA_ID` to change the fallback camera id when none is provided.
-- per-camera config endpoints:
-- `GET /cameras/{camera_id}/config`
-- `PUT /cameras/{camera_id}/config`
+- station summary/detail endpoints:
+- `GET /stations`
+- `GET /stations/{station_id}`
+- `GET /stations/{station_id}/history`
+- `GET /stations/{station_id}/timeline`
+- `GET /stations/{station_id}/weather/current`
+- `GET /stations/{station_id}/weather/forecast`
+- per-station config endpoints:
+- `GET /stations/{station_id}/config`
+- `PUT /stations/{station_id}/config`
 
 ## 8) Troubleshooting
 

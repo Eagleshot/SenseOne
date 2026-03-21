@@ -9,18 +9,17 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 
-import { useApp } from '@/contexts/AppContext';
-import { ColorThemeKey, ColorThemePresetKey, colorThemePresets } from '@/lib/appThemes';
+import { useApp } from '@/contexts/useApp';
+import { ColorThemePresetKey, colorThemePresets } from '@/lib/appThemes';
+import {
+  CAPTURE_INTERVAL_OPTIONS,
+  CUSTOM_CAPTURE_INTERVAL_VALUE,
+  getCaptureIntervalSelection,
+  getCustomCaptureIntervalInput,
+  normalizeCaptureInterval,
+  validateCaptureInterval,
+} from '@/lib/captureInterval';
 import { cn } from '@/lib/utils';
-
-const INTERVAL_OPTIONS = [
-  { value: '5', label: '5 min' },
-  { value: '10', label: '10 min' },
-  { value: '15', label: '15 min' },
-  { value: '30', label: '30 min' },
-  { value: '60', label: '60 min' },
-] as const;
-const INTERVAL_PRESET_VALUES = new Set(INTERVAL_OPTIONS.map((option) => option.value));
 
 export const WebsiteSettingsPanel: React.FC = () => {
   const {
@@ -36,42 +35,37 @@ export const WebsiteSettingsPanel: React.FC = () => {
     setUseSunriseSunset,
     captureInterval,
     setCaptureInterval,
+    isStationConfigLoading,
+    isStationConfigSaving,
+    stationConfigError,
   } = useApp();
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const logoPreviewUrl = brandLogoUrl || '/logo.png';
-  const isPresetInterval = INTERVAL_PRESET_VALUES.has(captureInterval);
-  const [intervalSelection, setIntervalSelection] = useState(() =>
-    isPresetInterval ? captureInterval : 'custom'
+  const scheduleControlsDisabled = isStationConfigLoading;
+  const [intervalSelection, setIntervalSelection] = useState(() => getCaptureIntervalSelection(captureInterval));
+  const [customIntervalInput, setCustomIntervalInput] = useState(() => getCustomCaptureIntervalInput(captureInterval));
+  const [intervalError, setIntervalError] = useState<string | null>(() =>
+    getCaptureIntervalSelection(captureInterval) === CUSTOM_CAPTURE_INTERVAL_VALUE
+      ? validateCaptureInterval(captureInterval)
+      : null
   );
-  const [customIntervalInput, setCustomIntervalInput] = useState(() => (isPresetInterval ? '' : captureInterval));
-  const [intervalError, setIntervalError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (intervalSelection === 'custom') {
-      if (!isPresetInterval) {
-        setCustomIntervalInput(captureInterval);
-      }
-      const numeric = Number(captureInterval);
-      if (!Number.isInteger(numeric) || numeric < 1 || numeric > 1440) {
-        setIntervalError('Interval must be an integer between 1 and 1440 minutes.');
-      } else {
-        setIntervalError(null);
-      }
-      return;
-    }
-    setCustomIntervalInput('');
-    setIntervalError(null);
-    const nextSelection = isPresetInterval ? captureInterval : 'custom';
-    if (nextSelection !== intervalSelection) {
-      setIntervalSelection(nextSelection);
-    }
-  }, [captureInterval, isPresetInterval, intervalSelection]);
+    const nextSelection = getCaptureIntervalSelection(captureInterval);
+    const nextCustomInput = getCustomCaptureIntervalInput(captureInterval);
+
+    setIntervalSelection(nextSelection);
+    setCustomIntervalInput(nextCustomInput);
+    setIntervalError(
+      nextSelection === CUSTOM_CAPTURE_INTERVAL_VALUE ? validateCaptureInterval(captureInterval) : null
+    );
+  }, [captureInterval]);
 
   const handleIntervalSelect = (value: string) => {
-    if (value === 'custom') {
-      setIntervalSelection('custom');
+    if (value === CUSTOM_CAPTURE_INTERVAL_VALUE) {
+      setIntervalSelection(CUSTOM_CAPTURE_INTERVAL_VALUE);
       setCustomIntervalInput(captureInterval);
       setIntervalError(null);
       return;
@@ -83,17 +77,15 @@ export const WebsiteSettingsPanel: React.FC = () => {
 
   const handleCustomIntervalChange = (value: string) => {
     setCustomIntervalInput(value);
-    if (!value.trim()) {
-      setIntervalError('Enter a custom interval in minutes.');
+    const error = validateCaptureInterval(value);
+    setIntervalError(error);
+
+    const normalizedValue = normalizeCaptureInterval(value);
+    if (!normalizedValue) {
       return;
     }
-    const numeric = Number(value);
-    if (!Number.isInteger(numeric) || numeric < 1 || numeric > 1440) {
-      setIntervalError('Interval must be an integer between 1 and 1440 minutes.');
-      return;
-    }
-    setIntervalError(null);
-    setCaptureInterval(String(numeric));
+
+    setCaptureInterval(normalizedValue);
   };
 
   const handleLogoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -148,6 +140,18 @@ export const WebsiteSettingsPanel: React.FC = () => {
             </AccordionTrigger>
             <AccordionContent className="px-4 pb-4 pt-0">
               <div className="space-y-4 rounded-xl border border-border bg-[hsl(var(--sidebar-background))]/40 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <p className="text-muted-foreground">These settings are saved to the selected station.</p>
+                  <p className={cn('font-medium', stationConfigError ? 'text-destructive' : 'text-muted-foreground')}>
+                    {stationConfigError
+                      ? stationConfigError
+                      : isStationConfigLoading
+                        ? 'Loading station settings...'
+                        : isStationConfigSaving
+                          ? 'Saving changes...'
+                          : 'All changes saved.'}
+                  </p>
+                </div>
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="text-sm font-medium text-foreground">Use sunrise/sunset</p>
@@ -155,7 +159,11 @@ export const WebsiteSettingsPanel: React.FC = () => {
                       Automatically align start and stop with daylight hours.
                     </p>
                   </div>
-                  <Switch checked={useSunriseSunset} onCheckedChange={setUseSunriseSunset} />
+                  <Switch
+                    checked={useSunriseSunset}
+                    onCheckedChange={setUseSunriseSunset}
+                    disabled={scheduleControlsDisabled}
+                  />
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-3">
@@ -165,7 +173,7 @@ export const WebsiteSettingsPanel: React.FC = () => {
                       type="time"
                       value={cameraStartTime}
                       onChange={(event) => setCameraStartTime(event.target.value)}
-                      disabled={useSunriseSunset}
+                      disabled={scheduleControlsDisabled || useSunriseSunset}
                       className="h-10"
                     />
                   </div>
@@ -175,28 +183,28 @@ export const WebsiteSettingsPanel: React.FC = () => {
                       type="time"
                       value={cameraStopTime}
                       onChange={(event) => setCameraStopTime(event.target.value)}
-                      disabled={useSunriseSunset}
+                      disabled={scheduleControlsDisabled || useSunriseSunset}
                       className="h-10"
                     />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-xs text-muted-foreground">Capture interval</label>
-                    <Select value={intervalSelection} onValueChange={handleIntervalSelect}>
+                    <Select value={intervalSelection} onValueChange={handleIntervalSelect} disabled={scheduleControlsDisabled}>
                       <SelectTrigger className="bg-background/70 border-border">
                         <SelectValue placeholder="Select interval" />
                       </SelectTrigger>
                       <SelectContent>
-                        {INTERVAL_OPTIONS.map((option) => (
+                        {CAPTURE_INTERVAL_OPTIONS.map((option) => (
                           <SelectItem key={option.value} value={option.value}>
                             {option.label}
                           </SelectItem>
                         ))}
-                        <SelectItem value="custom">Custom</SelectItem>
+                        <SelectItem value={CUSTOM_CAPTURE_INTERVAL_VALUE}>Custom</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
-                {intervalSelection === 'custom' && (
+                {intervalSelection === CUSTOM_CAPTURE_INTERVAL_VALUE && (
                   <div className="space-y-1.5">
                     <label className="text-xs text-muted-foreground">Custom interval (minutes)</label>
                     <Input
@@ -207,6 +215,7 @@ export const WebsiteSettingsPanel: React.FC = () => {
                       step={1}
                       value={customIntervalInput}
                       onChange={(event) => handleCustomIntervalChange(event.target.value)}
+                      disabled={scheduleControlsDisabled}
                       className="h-10"
                     />
                   </div>
