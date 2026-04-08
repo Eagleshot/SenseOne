@@ -1,3 +1,5 @@
+import { UNAVAILABLE_LABEL } from '@/lib/placeholders';
+
 const FLAG_EMOJI_REGEX = /(?:\uD83C[\uDDE6-\uDDFF]){2}/;
 const DIACRITIC_REGEX = /[\u0300-\u036f]/g;
 
@@ -269,23 +271,24 @@ export const formatLocationWithFlag = (
   country?: string | null,
   countryEmoji?: string | null
 ): string => {
-  if (!location) return location;
-  if (FLAG_EMOJI_REGEX.test(location)) return location;
+  const normalizedLocation = location.trim();
+  if (!normalizedLocation) return UNAVAILABLE_LABEL;
+  if (FLAG_EMOJI_REGEX.test(normalizedLocation)) return normalizedLocation;
 
   const normalizedCountry = country?.trim() ?? "";
   const normalizedEmoji = countryEmoji?.trim() ?? "";
 
   if (normalizedCountry) {
     const suffix = normalizedEmoji || getFlagEmojiFromCountryName(normalizedCountry) || "";
-    return suffix ? `${location}, ${normalizedCountry} ${suffix}` : `${location}, ${normalizedCountry}`;
+    return suffix ? `${normalizedLocation}, ${normalizedCountry} ${suffix}` : `${normalizedLocation}, ${normalizedCountry}`;
   }
 
-  const parts = location.split(',').map(part => part.trim()).filter(Boolean);
-  if (parts.length < 2) return location;
+  const parts = normalizedLocation.split(',').map(part => part.trim()).filter(Boolean);
+  if (parts.length < 2) return normalizedLocation;
 
   const fallbackCountry = parts[parts.length - 1];
   const flag = getFlagEmojiFromCountryName(fallbackCountry);
-  if (!flag) return location;
+  if (!flag) return normalizedLocation;
 
   const city = parts.slice(0, -1).join(', ');
   return `${city}, ${fallbackCountry} ${flag}`;

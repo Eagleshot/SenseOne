@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { motion } from 'framer-motion';
 import { ExternalLink, Map, MapPin, Maximize2, Minimize2 } from 'lucide-react';
@@ -24,9 +24,9 @@ export const InteractiveMap: React.FC = () => {
   const { activeWebcam, webcamList, setActiveWebcam, isDarkMode } = useApp();
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const toggleFullscreen = useCallback(() => {
+  const toggleFullscreen = () => {
     setIsFullscreen((prev) => !prev);
-  }, []);
+  };
 
   // Handle Escape key to exit fullscreen
   useEffect(() => {

@@ -61,10 +61,7 @@ export interface AppContextType {
   description: string;
   descriptionDraft: string;
   setDraftDescription: (description: string) => void;
-  isDescriptionEditing: boolean;
-  startDescriptionEdit: () => void;
-  cancelDescriptionEdit: () => void;
-  saveDescription: () => Promise<void>;
+  saveDescription: () => Promise<boolean>;
   isDescriptionSaving: boolean;
   descriptionError: string | null;
   isStationConfigLoading: boolean;

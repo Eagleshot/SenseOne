@@ -10,23 +10,37 @@ const readStoredValue = (key: string) => {
   }
 };
 
-export const getStoredString = (key: string, fallback: string) => readStoredValue(key) ?? fallback;
+/** Generic getter with optional parsing. */
+export const getStored = <T = string>(
+  key: string,
+  fallback: T,
+  parse?: (value: string) => T
+): T => {
+  const value = readStoredValue(key);
+  if (value === null) return fallback;
+  return parse ? parse(value) : (value as T);
+};
+
+export const getStoredString = (key: string, fallback: string) => getStored(key, fallback);
 
 export const getStoredOptionalString = (key: string) => readStoredValue(key);
 
-export const getStoredBoolean = (key: string, fallback: boolean) => {
-  const storedValue = readStoredValue(key);
-  return storedValue === null ? fallback : storedValue === "true";
-};
-
-export const setStoredString = (key: string, value: string) => {
+const writeStoredValue = (key: string, value: string | null) => {
   if (!canUseStorage()) return;
 
   try {
-    window.localStorage.setItem(key, value);
+    if (value === null) {
+      window.localStorage.removeItem(key);
+    } else {
+      window.localStorage.setItem(key, value);
+    }
   } catch {
-    // Ignore storage write failures and keep the in-memory state.
+    // Ignore storage failures
   }
+};
+
+export const setStoredString = (key: string, value: string) => {
+  writeStoredValue(key, value);
 };
 
 export const setStoredBoolean = (key: string, value: boolean) => {
@@ -34,20 +48,9 @@ export const setStoredBoolean = (key: string, value: boolean) => {
 };
 
 export const setStoredOptionalString = (key: string, value: string | null) => {
-  if (value === null) {
-    removeStoredValue(key);
-    return;
-  }
-
-  setStoredString(key, value);
+  writeStoredValue(key, value);
 };
 
 export const removeStoredValue = (key: string) => {
-  if (!canUseStorage()) return;
-
-  try {
-    window.localStorage.removeItem(key);
-  } catch {
-    // Ignore storage removal failures and keep rendering.
-  }
+  writeStoredValue(key, null);
 };

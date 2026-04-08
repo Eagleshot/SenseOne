@@ -1,11 +1,11 @@
 export interface Webcam {
   id: string;
   name: string;
-  title?: string;
   description?: string;
   location: string;
   country?: string;
   countryEmoji?: string;
+  battery?: number | null;
   coordinates: {
     lat: number;
     lng: number;

@@ -6,8 +6,6 @@ import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-EXAMPLE_IMAGE_FILES = ["image0.png", "image1.png", "image2.png"]
-
 WEBCAM_SEED = [
     {
         "id": "silvretta-glacier",

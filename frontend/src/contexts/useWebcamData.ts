@@ -4,7 +4,7 @@ import { SensorData, TimezoneOption, Webcam } from "@/data/types";
 
 import {
   DESCRIPTION_MAX_LENGTH,
-  createFallbackStationScheduleConfig,
+  FALLBACK_STATION_SCHEDULE_CONFIG,
   createStationScheduleUpdate,
   StationDetailResponse,
   StationConfigResponse,
@@ -14,13 +14,13 @@ import {
   TimelineItemResponse,
   SensorDataResponse,
   createStationConfigRequest,
-  createFallbackWebcam,
+  FALLBACK_WEBCAM,
+  UNAVAILABLE_WEBCAM,
   fetchJson,
   isAbortError,
   parseStationConfigResponse,
-  parseStationDetailResponse,
-  parseStationSummaryResponse,
-  parseSensorDataResponse,
+  parseStationResponse,
+  parseTimestampResponse,
   parseTimelineItemResponse,
   selectActiveWebcam,
 } from "./appContextUtils";
@@ -48,10 +48,7 @@ export type WebcamDataState = {
   description: string;
   descriptionDraft: string;
   setDraftDescription: (description: string) => void;
-  isDescriptionEditing: boolean;
-  startDescriptionEdit: () => void;
-  cancelDescriptionEdit: () => void;
-  saveDescription: () => Promise<void>;
+  saveDescription: () => Promise<boolean>;
   isDescriptionSaving: boolean;
   descriptionError: string | null;
   isStationConfigLoading: boolean;
@@ -61,15 +58,14 @@ export type WebcamDataState = {
 
 export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): WebcamDataState => {
   const [webcamList, setWebcamList] = useState<Webcam[]>([]);
-  const [activeWebcam, setActiveWebcamState] = useState<Webcam>(createFallbackWebcam);
+  const [activeWebcam, setActiveWebcamState] = useState<Webcam>(FALLBACK_WEBCAM);
   const [historicalData, setHistoricalData] = useState<SensorData[]>([]);
   const [imageTimeline, setImageTimeline] = useState<TimelineImage[]>([]);
   const [currentImageIndex, setCurrentImageIndexState] = useState(0);
   const [isPlaying, setIsPlayingState] = useState(false);
   const [timezones, setTimezones] = useState<TimezoneOption[]>([]);
-  const [stationSchedule, setStationSchedule] = useState<StationScheduleConfig>(createFallbackStationScheduleConfig);
+  const [stationSchedule, setStationSchedule] = useState<StationScheduleConfig>(FALLBACK_STATION_SCHEDULE_CONFIG);
   const [descriptionDraft, setDescriptionDraft] = useState("");
-  const [isDescriptionEditing, setIsDescriptionEditing] = useState(false);
   const [isDescriptionSaving, setIsDescriptionSaving] = useState(false);
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
   const [isStationConfigLoading, setIsStationConfigLoading] = useState(false);
@@ -77,7 +73,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   const [stationConfigError, setStationConfigError] = useState<string | null>(null);
   const activeStationIdRef = useRef(activeWebcam.id);
   const stationConfigRef = useRef<StationConfigResponse | null>(null);
-  const stationScheduleRef = useRef<StationScheduleConfig>(createFallbackStationScheduleConfig());
+  const stationScheduleRef = useRef<StationScheduleConfig>(FALLBACK_STATION_SCHEDULE_CONFIG);
   const stationConfigRequestIdRef = useRef(0);
   const stationConfigSaveIdRef = useRef(0);
 
@@ -91,7 +87,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   const applyStationConfig = useCallback((config: StationConfigResponse | null) => {
     stationConfigRef.current = config;
 
-    const nextSchedule = config ? parseStationConfigResponse(config) : createFallbackStationScheduleConfig();
+    const nextSchedule = config ? parseStationConfigResponse(config) : FALLBACK_STATION_SCHEDULE_CONFIG;
     stationScheduleRef.current = nextSchedule;
     setStationSchedule(nextSchedule);
     setDescriptionDraft(config?.description ?? "");
@@ -106,7 +102,6 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     stationConfigRequestIdRef.current += 1;
     stationConfigSaveIdRef.current += 1;
     applyStationConfig(null);
-    setIsDescriptionEditing(false);
     setIsDescriptionSaving(false);
     setDescriptionError(null);
     setIsStationConfigLoading(false);
@@ -223,24 +218,19 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     [isAuthenticated, persistStationConfig]
   );
 
-  const cancelDescriptionEdit = useCallback(() => {
-    setDescriptionDraft(stationConfigRef.current?.description ?? activeWebcam.description ?? "");
-    setDescriptionError(null);
-    setIsDescriptionEditing(false);
-  }, [activeWebcam.description]);
-
   const saveDescription = useCallback(async () => {
     const currentConfig = stationConfigRef.current;
     if (!currentConfig || !activeStationIdRef.current || !isAuthenticated) {
-      return;
+      return false;
     }
 
     if (descriptionDraft.length > DESCRIPTION_MAX_LENGTH) {
       setDescriptionError(`Description must be ${DESCRIPTION_MAX_LENGTH} characters or fewer.`);
-      return;
+      return false;
     }
     const nextDescription = descriptionDraft.slice(0, DESCRIPTION_MAX_LENGTH);
     const nextConfig = createStationConfigRequest(currentConfig, { description: nextDescription });
+    let didSave = false;
 
     setDescriptionError(null);
     setIsDescriptionSaving(true);
@@ -249,18 +239,21 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       previousConfig: currentConfig,
       onSuccess: () => {
         setDescriptionDraft(nextDescription);
-        setIsDescriptionEditing(false);
+        didSave = true;
       },
       onRollback: () => {
         setDescriptionDraft(nextDescription);
       },
       onError: () => {
         setDescriptionError("Unable to save the station description.");
+        didSave = false;
       },
       onFinally: () => {
         setIsDescriptionSaving(false);
       },
     });
+
+    return didSave;
   }, [descriptionDraft, isAuthenticated, persistStationConfig]);
 
   useEffect(() => {
@@ -285,15 +278,17 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
 
         if (controller.signal.aborted) return;
 
-        const parsedWebcams = webcamResponse ? webcamResponse.map(parseStationSummaryResponse) : [];
+        const parsedWebcams = webcamResponse ? webcamResponse.map(parseStationResponse) : [];
         setWebcamList(parsedWebcams);
-        setActiveWebcamState((currentValue) => selectActiveWebcam(parsedWebcams, currentValue.id));
+        setActiveWebcamState((currentValue) =>
+          parsedWebcams.length > 0 ? selectActiveWebcam(parsedWebcams, currentValue.id) : UNAVAILABLE_WEBCAM
+        );
         setTimezones(timezoneResponse ?? []);
       } catch (error) {
         if (isAbortError(error)) return;
 
         setWebcamList([]);
-        setActiveWebcamState(createFallbackWebcam());
+        setActiveWebcamState(UNAVAILABLE_WEBCAM);
         setTimezones([]);
       }
     };
@@ -315,7 +310,6 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     const requestId = stationConfigRequestIdRef.current + 1;
     stationConfigRequestIdRef.current = requestId;
     stationConfigSaveIdRef.current += 1;
-    setIsDescriptionEditing(false);
     setDescriptionError(null);
     setIsStationConfigLoading(true);
     setIsStationConfigSaving(false);
@@ -395,7 +389,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
         if (signal?.aborted) return;
 
         if (detailResponse) {
-          const parsedDetail = parseStationDetailResponse(detailResponse, apiBaseUrl);
+          const parsedDetail = parseStationResponse(detailResponse, apiBaseUrl);
           setActiveWebcamState((currentValue) =>
             currentValue.id === cameraId ? { ...currentValue, ...parsedDetail } : currentValue
           );
@@ -404,7 +398,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
         const nextTimeline = timelineResponse
           ? timelineResponse.map((item) => parseTimelineItemResponse(item, apiBaseUrl))
           : [];
-        setHistoricalData(historyResponse ? historyResponse.map(parseSensorDataResponse) : []);
+        setHistoricalData(historyResponse ? historyResponse.map(parseTimestampResponse) : []);
         setImageTimeline(nextTimeline);
         setCurrentImageIndexState(Math.max(nextTimeline.length - 1, 0));
         setIsPlayingState(false);
@@ -500,17 +494,6 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       setDescriptionDraft(description.slice(0, DESCRIPTION_MAX_LENGTH));
       setDescriptionError(null);
     },
-    isDescriptionEditing,
-    startDescriptionEdit: () => {
-      if (!stationConfigRef.current) {
-        setDescriptionError("Unable to load the selected station settings.");
-        return;
-      }
-      setDescriptionDraft(stationConfigRef.current?.description ?? activeWebcam.description ?? "");
-      setDescriptionError(null);
-      setIsDescriptionEditing(true);
-    },
-    cancelDescriptionEdit,
     saveDescription,
     isDescriptionSaving,
     descriptionError,

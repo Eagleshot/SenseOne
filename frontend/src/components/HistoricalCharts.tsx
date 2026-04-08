@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
@@ -26,7 +26,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { formatDateTimeLabel, formatTimeLabel } from "@/lib/datetime";
 import { useApp } from "@/contexts/useApp";
-import { cn } from "@/lib/utils";
 import type { SensorData } from "@/data/types";
 
 type MetricType =
@@ -53,15 +52,15 @@ type ChartConfig = {
 type ChartDraft = Omit<ChartConfig, "id">;
 
 const metricConfig: Record<MetricType, { label: string; unit: string; color: string }> = {
-  temperature: { label: "Temperature", unit: "C", color: "hsl(var(--chart-1))" },
+  temperature: { label: "Temperature", unit: "°C", color: "hsl(var(--chart-1))" },
   battery: { label: "Battery Level", unit: "%", color: "hsl(var(--chart-2))" },
   humidity: { label: "Humidity", unit: "%", color: "hsl(var(--chart-3))" },
   windSpeed: { label: "Wind Speed", unit: "km/h", color: "hsl(var(--chart-1))" },
   pressure: { label: "Pressure", unit: "hPa", color: "hsl(var(--chart-2))" },
   visibility: { label: "Visibility", unit: "km", color: "hsl(var(--chart-3))" },
   uvIndex: { label: "UV Index", unit: "", color: "hsl(var(--chart-1))" },
-  dewPoint: { label: "Dew Point", unit: "C", color: "hsl(var(--chart-2))" },
-  feelsLike: { label: "Feels Like", unit: "C", color: "hsl(var(--chart-3))" },
+  dewPoint: { label: "Dew Point", unit: "°C", color: "hsl(var(--chart-2))" },
+  feelsLike: { label: "Feels Like", unit: "°C", color: "hsl(var(--chart-3))" },
 };
 
 const chartIconConfig: Record<ChartIconKey, React.ComponentType<{ className?: string }>> = {
@@ -87,6 +86,8 @@ const chartIconOptions: Array<{ value: ChartIconKey; label: string }> = [
 ];
 
 const metricOptions = Object.keys(metricConfig) as MetricType[];
+const getAutoChartTitle = (metrics: MetricType[]) =>
+  metrics.map((metric) => metricConfig[metric].label).join(" + ") || "Custom Chart";
 const chartThemeColorOptions = [
   { value: "hsl(var(--chart-1))", label: "Theme Chart 1" },
   { value: "hsl(var(--chart-2))", label: "Theme Chart 2" },
@@ -97,12 +98,12 @@ type ChartColorSelection = ChartThemeColorValue | "custom";
 
 const createChartId = () => `chart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const createDefaultChart = (label = "Temperature"): ChartConfig => ({
+const createDefaultChart = (metrics: MetricType[] = ["temperature"]): ChartConfig => ({
   id: createChartId(),
-  title: label,
+  title: getAutoChartTitle(metrics),
   icon: "thermometer",
   color: metricConfig.temperature.color,
-  metrics: ["temperature"],
+  metrics,
 });
 
 const sanitizeFileName = (value: string) =>
@@ -126,14 +127,49 @@ const getColorSelection = (value: string): ChartColorSelection => {
   return chartThemeColorOptions[0].value;
 };
 
-const exportChartAsImage = async (container: HTMLDivElement, title: string) => {
+const inlineSvgStyles = (source: Element, target: Element) => {
+  const computedStyle = getComputedStyle(source);
+  Array.from(computedStyle).forEach((property) => {
+    if (target instanceof SVGElement) {
+      target.style.setProperty(property, computedStyle.getPropertyValue(property));
+    }
+  });
+
+  const sourceChildren = Array.from(source.children);
+  const targetChildren = Array.from(target.children);
+  sourceChildren.forEach((child, index) => {
+    const targetChild = targetChildren[index];
+    if (targetChild) {
+      inlineSvgStyles(child, targetChild);
+    }
+  });
+};
+
+const exportChartAsImage = async (
+  container: HTMLDivElement,
+  { title, subtitle }: { title: string; subtitle?: string }
+) => {
   const svg = container.querySelector("svg");
   if (!svg) return;
   const rect = svg.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
 
   const serializer = new XMLSerializer();
-  const svgMarkup = serializer.serializeToString(svg);
+  const svgClone = svg.cloneNode(true) as SVGSVGElement;
+  svgClone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  svgClone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+  svgClone.setAttribute("width", `${Math.ceil(rect.width)}`);
+  svgClone.setAttribute("height", `${Math.ceil(rect.height)}`);
+  if (!svgClone.getAttribute("viewBox")) {
+    svgClone.setAttribute("viewBox", `0 0 ${Math.ceil(rect.width)} ${Math.ceil(rect.height)}`);
+  }
+
+  const computedContainerStyle = getComputedStyle(container);
+  inlineSvgStyles(svg, svgClone);
+  svgClone.style.fontFamily = computedContainerStyle.fontFamily;
+  svgClone.style.color = computedContainerStyle.color;
+
+  const svgMarkup = serializer.serializeToString(svgClone);
   const svgBlob = new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" });
   const svgUrl = URL.createObjectURL(svgBlob);
 
@@ -142,9 +178,12 @@ const exportChartAsImage = async (container: HTMLDivElement, title: string) => {
       const image = new Image();
       image.onload = () => {
         const scale = 2;
+        const hasSubtitle = Boolean(subtitle?.trim());
+        const titleBlockHeight = 72;
+        const exportHeight = rect.height + titleBlockHeight;
         const canvas = document.createElement("canvas");
         canvas.width = Math.ceil(rect.width * scale);
-        canvas.height = Math.ceil(rect.height * scale);
+        canvas.height = Math.ceil(exportHeight * scale);
         const context = canvas.getContext("2d");
         if (!context) {
           reject(new Error("Unable to export chart image."));
@@ -153,9 +192,24 @@ const exportChartAsImage = async (container: HTMLDivElement, title: string) => {
 
         context.scale(scale, scale);
         const backgroundColor = getComputedStyle(container).backgroundColor || "#ffffff";
+        const foregroundColor = computedContainerStyle.color || "#111827";
         context.fillStyle = backgroundColor;
-        context.fillRect(0, 0, rect.width, rect.height);
-        context.drawImage(image, 0, 0, rect.width, rect.height);
+        context.fillRect(0, 0, rect.width, exportHeight);
+
+        context.fillStyle = foregroundColor;
+        context.font = `600 20px ${computedContainerStyle.fontFamily || "sans-serif"}`;
+        context.textBaseline = "top";
+        context.fillText(title, 16, 14);
+
+        if (hasSubtitle && subtitle) {
+          context.globalAlpha = 0.72;
+          context.fillStyle = foregroundColor;
+          context.font = `400 12px ${computedContainerStyle.fontFamily || "sans-serif"}`;
+          context.fillText(subtitle, 16, 40);
+          context.globalAlpha = 1;
+        }
+
+        context.drawImage(image, 0, titleBlockHeight, rect.width, rect.height);
 
         const link = document.createElement("a");
         link.href = canvas.toDataURL("image/png");
@@ -169,6 +223,41 @@ const exportChartAsImage = async (container: HTMLDivElement, title: string) => {
   } finally {
     URL.revokeObjectURL(svgUrl);
   }
+};
+
+const formatMetricValue = (metric: MetricType, value: number) => {
+  const unit = metricConfig[metric].unit;
+  return unit ? `${value} ${unit}` : `${value}`;
+};
+
+const ChartTooltip = ({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ dataKey: string; value: number; color: string; payload: { fullTime: string } }>;
+}) => {
+  if (!active || !payload || payload.length === 0) return null;
+  return (
+    <div className="rounded-lg border border-border bg-[hsl(var(--sidebar-background))] p-3 shadow-soft-lg">
+      <p className="text-xs text-muted-foreground">{payload[0]?.payload?.fullTime}</p>
+      <div className="mt-2 space-y-1">
+        {payload.map((item) => {
+          const metric = item.dataKey as MetricType;
+          if (!(metric in metricConfig)) return null;
+          return (
+            <div key={metric} className="flex items-center justify-between gap-4 text-xs">
+              <span className="flex items-center gap-2 text-muted-foreground">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
+                {metricConfig[metric].label}
+              </span>
+              <span className="font-semibold text-foreground">{formatMetricValue(metric, item.value)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 };
 
 type ChartCardProps = {
@@ -240,23 +329,35 @@ const ChartCard: React.FC<ChartCardProps> = ({
 
   const toggleMetric = (metric: MetricType, checked: boolean) => {
     setDraft((prev) => {
-      if (checked) {
-        if (prev.metrics.includes(metric)) return prev;
-        return { ...prev, metrics: [...prev.metrics, metric] };
-      }
-      if (prev.metrics.length === 1) return prev;
-      return { ...prev, metrics: prev.metrics.filter((item) => item !== metric) };
+      const nextMetrics = checked
+        ? prev.metrics.includes(metric)
+          ? prev.metrics
+          : [...prev.metrics, metric]
+        : prev.metrics.length === 1
+          ? prev.metrics
+          : prev.metrics.filter((item) => item !== metric);
+      const nextTitle =
+        prev.title === getAutoChartTitle(prev.metrics) ? getAutoChartTitle(nextMetrics) : prev.title;
+
+      if (nextMetrics === prev.metrics && nextTitle === prev.title) return prev;
+
+      return {
+        ...prev,
+        title: nextTitle,
+        metrics: nextMetrics,
+      };
     });
   };
 
   const handleSave = () => {
     const nextColor =
       colorSelection === "custom" ? (isValidHexColor(customColor) ? customColor : DEFAULT_CUSTOM_COLOR) : draft.color;
+    const nextMetrics = draft.metrics.length ? draft.metrics : ["temperature"];
     onUpdate(config.id, {
-      title: draft.title.trim() || "Custom Chart",
+      title: draft.title.trim() || getAutoChartTitle(nextMetrics),
       icon: draft.icon,
       color: nextColor,
-      metrics: draft.metrics.length ? draft.metrics : ["temperature"],
+      metrics: nextMetrics,
     });
     setIsEditing(false);
   };
@@ -271,43 +372,18 @@ const ChartCard: React.FC<ChartCardProps> = ({
     setDraft((prev) => ({ ...prev, color: value }));
   };
 
-  const formatMetricValue = (metric: MetricType, value: number) => {
-    const unit = metricConfig[metric].unit;
-    return unit ? `${value} ${unit}` : `${value}`;
-  };
+  const yAxisUnit = useMemo(() => {
+    const units = Array.from(new Set(config.metrics.map((metric) => metricConfig[metric].unit).filter(Boolean)));
+    return units.length === 1 ? units[0] : "";
+  }, [config.metrics]);
 
-  const ChartTooltip = ({
-    active,
-    payload,
-  }: {
-    active?: boolean;
-    payload?: Array<{ dataKey: string; value: number; color: string; payload: { fullTime: string } }>;
-  }) => {
-    if (!active || !payload || payload.length === 0) return null;
-    return (
-      <div className="rounded-lg border border-border bg-[hsl(var(--sidebar-background))] p-3 shadow-soft-lg">
-        <p className="text-xs text-muted-foreground">{payload[0]?.payload?.fullTime}</p>
-        <div className="mt-2 space-y-1">
-          {payload.map((item) => {
-            const metric = item.dataKey as MetricType;
-            if (!(metric in metricConfig)) return null;
-            return (
-              <div key={metric} className="flex items-center justify-between gap-4 text-xs">
-                <span className="flex items-center gap-2 text-muted-foreground">
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
-                  {metricConfig[metric].label}
-                </span>
-                <span className="font-semibold text-foreground">{formatMetricValue(metric, item.value)}</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
+  const formatYAxisTick = (value: number | string) => {
+    if (!yAxisUnit) return `${value}`;
+    return `${value} ${yAxisUnit}`;
   };
 
   return (
-    <div className="rounded-2xl border border-border bg-card/70 p-4">
+    <div className="widget-shell-stroke rounded-2xl border border-border bg-card/70 p-4">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center" style={{ color: config.color }}>
@@ -472,7 +548,10 @@ const ChartCard: React.FC<ChartCardProps> = ({
             aria-label="Export chart image"
             onClick={() => {
               if (chartRef.current) {
-                void exportChartAsImage(chartRef.current, config.title);
+                void exportChartAsImage(chartRef.current, {
+                  title: config.title,
+                  subtitle: config.metrics.map((metric) => metricConfig[metric].label).join(" + "),
+                });
               }
             }}
             className="h-8 w-8"
@@ -517,7 +596,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 tickLine={false}
                 tickMargin={10}
                 tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                width={56}
+                tickFormatter={formatYAxisTick}
+                width={72}
               />
               <Tooltip content={<ChartTooltip />} />
               {config.metrics.map((metric, metricIndex) => (
@@ -549,11 +629,11 @@ interface HistoricalChartsProps {
 
 export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addChartSignal }) => {
   const { timezone, isDarkMode } = useApp();
-  const [charts, setCharts] = useState<ChartConfig[]>(() => [createDefaultChart()]);
+  const [charts, setCharts] = useState<ChartConfig[]>([]);
   const previousAddSignal = useRef<number | undefined>(addChartSignal);
 
   const addChart = () => {
-    setCharts((prev) => [...prev, createDefaultChart(`Chart ${prev.length + 1}`)]);
+    setCharts((prev) => [...prev, createDefaultChart()]);
   };
 
   useEffect(() => {
@@ -629,4 +709,3 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
     </div>
   );
 };
-

@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { motion } from 'framer-motion';
-import { Check, Settings, Trash2, Upload } from 'lucide-react';
+import { Check, Settings, Trash2, Upload, Save, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -51,6 +51,12 @@ export const WebsiteSettingsPanel: React.FC = () => {
       ? validateCaptureInterval(captureInterval)
       : null
   );
+  
+  const [draftCameraStartTime, setDraftCameraStartTime] = useState(cameraStartTime);
+  const [draftCameraStopTime, setDraftCameraStopTime] = useState(cameraStopTime);
+  const [draftUseSunriseSunset, setDraftUseSunriseSunset] = useState(useSunriseSunset);
+  const [draftCaptureInterval, setDraftCaptureInterval] = useState(captureInterval);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
 
   useEffect(() => {
     const nextSelection = getCaptureIntervalSelection(captureInterval);
@@ -63,16 +69,27 @@ export const WebsiteSettingsPanel: React.FC = () => {
     );
   }, [captureInterval]);
 
+  // Sync draft times when actual times change
+  useEffect(() => {
+    setDraftCameraStartTime(cameraStartTime);
+    setDraftCameraStopTime(cameraStopTime);
+    setDraftUseSunriseSunset(useSunriseSunset);
+    setDraftCaptureInterval(captureInterval);
+    setScheduleError(null);
+  }, [cameraStartTime, cameraStopTime, useSunriseSunset, captureInterval]);
+
+  const clearScheduleError = () => setScheduleError(null);
+
   const handleIntervalSelect = (value: string) => {
     if (value === CUSTOM_CAPTURE_INTERVAL_VALUE) {
       setIntervalSelection(CUSTOM_CAPTURE_INTERVAL_VALUE);
-      setCustomIntervalInput(captureInterval);
+      setCustomIntervalInput(draftCaptureInterval);
       setIntervalError(null);
       return;
     }
     setIntervalSelection(value);
     setIntervalError(null);
-    setCaptureInterval(value);
+    setDraftCaptureInterval(value);
   };
 
   const handleCustomIntervalChange = (value: string) => {
@@ -85,8 +102,44 @@ export const WebsiteSettingsPanel: React.FC = () => {
       return;
     }
 
-    setCaptureInterval(normalizedValue);
+    setDraftCaptureInterval(normalizedValue);
   };
+
+  const validateScheduleTimes = (): boolean => {
+    // String comparison works because HH:MM format is lexicographically ordered
+    if (draftCameraStartTime >= draftCameraStopTime) {
+      setScheduleError(`Start time (${draftCameraStartTime}) must be earlier than stop time (${draftCameraStopTime})`);
+      return false;
+    }
+    setScheduleError(null);
+    return true;
+  };
+
+  const handleSaveSchedule = () => {
+    if (!validateScheduleTimes()) {
+      return;
+    }
+    setCameraStartTime(draftCameraStartTime);
+    setCameraStopTime(draftCameraStopTime);
+    setUseSunriseSunset(draftUseSunriseSunset);
+    setCaptureInterval(draftCaptureInterval);
+  };
+
+  const handleCancelScheduleEdit = () => {
+    setDraftCameraStartTime(cameraStartTime);
+    setDraftCameraStopTime(cameraStopTime);
+    setDraftUseSunriseSunset(useSunriseSunset);
+    setDraftCaptureInterval(captureInterval);
+    setScheduleError(null);
+  };
+
+  const hasScheduleChanges =
+    draftCameraStartTime !== cameraStartTime ||
+    draftCameraStopTime !== cameraStopTime ||
+    draftUseSunriseSunset !== useSunriseSunset ||
+    draftCaptureInterval !== captureInterval;
+
+  const isButtonDisabled = scheduleControlsDisabled || isStationConfigSaving || !hasScheduleChanges;
 
   const handleLogoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -160,8 +213,8 @@ export const WebsiteSettingsPanel: React.FC = () => {
                     </p>
                   </div>
                   <Switch
-                    checked={useSunriseSunset}
-                    onCheckedChange={setUseSunriseSunset}
+                    checked={draftUseSunriseSunset}
+                    onCheckedChange={setDraftUseSunriseSunset}
                     disabled={scheduleControlsDisabled}
                   />
                 </div>
@@ -171,9 +224,12 @@ export const WebsiteSettingsPanel: React.FC = () => {
                     <label className="text-xs text-muted-foreground">Start time</label>
                     <Input
                       type="time"
-                      value={cameraStartTime}
-                      onChange={(event) => setCameraStartTime(event.target.value)}
-                      disabled={scheduleControlsDisabled || useSunriseSunset}
+                      value={draftCameraStartTime}
+                      onChange={(event) => {
+                        setDraftCameraStartTime(event.target.value);
+                        clearScheduleError();
+                      }}
+                      disabled={scheduleControlsDisabled || draftUseSunriseSunset}
                       className="h-10"
                     />
                   </div>
@@ -181,9 +237,12 @@ export const WebsiteSettingsPanel: React.FC = () => {
                     <label className="text-xs text-muted-foreground">Stop time</label>
                     <Input
                       type="time"
-                      value={cameraStopTime}
-                      onChange={(event) => setCameraStopTime(event.target.value)}
-                      disabled={scheduleControlsDisabled || useSunriseSunset}
+                      value={draftCameraStopTime}
+                      onChange={(event) => {
+                        setDraftCameraStopTime(event.target.value);
+                        clearScheduleError();
+                      }}
+                      disabled={scheduleControlsDisabled || draftUseSunriseSunset}
                       className="h-10"
                     />
                   </div>
@@ -221,6 +280,30 @@ export const WebsiteSettingsPanel: React.FC = () => {
                   </div>
                 )}
                 {intervalError && <p className="text-xs text-destructive">{intervalError}</p>}
+                {scheduleError && <p className="text-xs text-destructive">{scheduleError}</p>}
+                <div className="flex gap-2 pt-2 justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCancelScheduleEdit}
+                    disabled={isButtonDisabled}
+                    className="btn-panel"
+                  >
+                    <X className="h-4 w-4" />
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleSaveSchedule}
+                    disabled={isButtonDisabled}
+                    className="btn-panel"
+                  >
+                    <Save className="h-4 w-4" />
+                    Save Schedule
+                  </Button>
+                </div>
               </div>
             </AccordionContent>
           </AccordionItem>
@@ -318,4 +401,3 @@ export const WebsiteSettingsPanel: React.FC = () => {
     </motion.div>
   );
 };
-

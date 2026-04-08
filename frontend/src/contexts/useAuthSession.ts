@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { removeStoredValue } from "@/lib/storage";
-
 import { fetchJson, isAbortError, LoginResponse, MeResponse } from "./appContextUtils";
 
 type AuthResult = {
@@ -21,11 +19,6 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
   const [authenticatedUsername, setAuthenticatedUsername] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const isAuthenticated = authReady && Boolean(authenticatedUsername);
-
-  useEffect(() => {
-    removeStoredValue("authToken");
-    removeStoredValue("authUsername");
-  }, []);
 
   useEffect(() => {
     const controller = new AbortController();

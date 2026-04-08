@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, memo } from "react";
 
 import { ChevronDown, Download, Search, ArrowUpDown } from "lucide-react";
 import { format } from "date-fns";
@@ -16,6 +16,24 @@ import type { SensorData } from "@/data/types";
 type SortField = "timestamp" | "temperature" | "humidity" | "battery" | "windSpeed" | "pressure";
 type SortDirection = "asc" | "desc";
 
+interface SortableHeaderProps {
+  field: SortField;
+  activeField: SortField;
+  onSort: (field: SortField) => void;
+  children: React.ReactNode;
+}
+
+const SortableHeader = memo<SortableHeaderProps>(({ field, activeField, onSort, children }) => (
+  <TableHead>
+    <button onClick={() => onSort(field)} className="flex items-center gap-1 hover:text-foreground transition-colors">
+      {children}
+      <ArrowUpDown
+        className={cn("w-3 h-3", activeField === field ? "text-primary" : "text-muted-foreground")}
+      />
+    </button>
+  </TableHead>
+));
+
 interface RawDataTableProps {
   data: SensorData[];
 }
@@ -29,13 +47,18 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
+  const formattedTimestamps = useMemo(
+    () => new Map(data.map((d) => [d, formatDateTimeLabel(d.timestamp, timezone)])),
+    [data, timezone]
+  );
+
   const filteredAndSortedData = useMemo(() => {
     let working = [...data];
 
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       working = working.filter((d) => {
-        const dateStr = formatDateTimeLabel(d.timestamp, timezone).toLowerCase();
+        const dateStr = (formattedTimestamps.get(d) ?? "").toLowerCase();
         const values = [d.temperature, d.humidity, d.battery, d.windSpeed, d.pressure]
           .map(String)
           .join(" ");
@@ -59,7 +82,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
     });
 
     return working;
-  }, [data, searchQuery, sortField, sortDirection, timezone]);
+  }, [data, searchQuery, sortField, sortDirection, formattedTimestamps]);
 
   const totalPages = Math.max(1, Math.ceil(filteredAndSortedData.length / itemsPerPage));
   const page = Math.min(currentPage, totalPages);
@@ -68,22 +91,16 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
     page * itemsPerPage
   );
 
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
-
-  const handleSort = (field: SortField) => {
+  const handleSort = useCallback((field: SortField) => {
     if (sortField === field) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
       setSortField(field);
       setSortDirection("desc");
     }
-  };
+  }, [sortField, sortDirection]);
 
-  const handleDownloadCSV = () => {
+  const handleDownloadCSV = useCallback(() => {
     const headers = [
       "Timestamp",
       "Temperature (°C)",
@@ -111,21 +128,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  };
-
-  const SortableHeader: React.FC<{ field: SortField; children: React.ReactNode }> = ({
-    field,
-    children,
-  }) => (
-    <TableHead>
-      <button onClick={() => handleSort(field)} className="flex items-center gap-1 hover:text-foreground transition-colors">
-        {children}
-        <ArrowUpDown
-          className={cn("w-3 h-3", sortField === field ? "text-primary" : "text-muted-foreground")}
-        />
-      </button>
-    </TableHead>
-  );
+  }, [filteredAndSortedData, timezone]);
 
   const startIndex = filteredAndSortedData.length === 0 ? 0 : (page - 1) * itemsPerPage + 1;
   const endIndex = Math.min(page * itemsPerPage, filteredAndSortedData.length);
@@ -177,12 +180,12 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
             <Table className="[&_th+th]:border-l [&_td+td]:border-l [&_th+th]:border-foreground/40 dark:[&_th+th]:border-foreground/30 [&_td+td]:border-foreground/40 dark:[&_td+td]:border-foreground/30">
               <TableHeader>
                 <TableRow className="bg-[hsl(var(--sidebar-background))] dark:bg-muted">
-                  <SortableHeader field="timestamp">Timestamp</SortableHeader>
-                  <SortableHeader field="temperature">Temp</SortableHeader>
-                  <SortableHeader field="humidity">Humidity</SortableHeader>
-                  <SortableHeader field="battery">Battery</SortableHeader>
-                  <SortableHeader field="windSpeed">Wind</SortableHeader>
-                  <SortableHeader field="pressure">Pressure</SortableHeader>
+                  <SortableHeader field="timestamp" activeField={sortField} onSort={handleSort}>Timestamp</SortableHeader>
+                  <SortableHeader field="temperature" activeField={sortField} onSort={handleSort}>Temp</SortableHeader>
+                  <SortableHeader field="humidity" activeField={sortField} onSort={handleSort}>Humidity</SortableHeader>
+                  <SortableHeader field="battery" activeField={sortField} onSort={handleSort}>Battery</SortableHeader>
+                  <SortableHeader field="windSpeed" activeField={sortField} onSort={handleSort}>Wind</SortableHeader>
+                  <SortableHeader field="pressure" activeField={sortField} onSort={handleSort}>Pressure</SortableHeader>
                 </TableRow>
               </TableHeader>
               <TableBody className="bg-muted/70 dark:bg-transparent">
@@ -193,9 +196,9 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paginatedData.map((row, index) => (
-                    <TableRow key={index} className="hover:bg-[hsl(var(--sidebar-background))]">
-                      <TableCell className="font-medium">{formatDateTimeLabel(row.timestamp, timezone)}</TableCell>
+                  paginatedData.map((row) => (
+                    <TableRow key={row.timestamp.getTime()} className="hover:bg-[hsl(var(--sidebar-background))]">
+                      <TableCell className="font-medium">{formattedTimestamps.get(row)}</TableCell>
                       <TableCell>{row.temperature} °C</TableCell>
                       <TableCell>{row.humidity}%</TableCell>
                       <TableCell>
@@ -203,7 +206,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                           className={cn(
                             "px-2 py-0.5 rounded-full text-xs font-medium",
                             row.battery >= 60 && "badge-success",
-                            row.battery >= 30 && row.battery < 60 && "badge-warning",
+                            row.battery < 60 && "badge-warning",
                             row.battery < 30 && "badge-error"
                           )}
                         >

@@ -1,4 +1,5 @@
 import { SensorData, Webcam } from "@/data/types";
+import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 
 type WebcamCoordinatesResponse = {
   lat: number;
@@ -12,6 +13,7 @@ export type StationSummaryResponse = {
   location: string;
   country?: string;
   countryEmoji?: string;
+  battery?: number | null;
   coordinates: WebcamCoordinatesResponse;
 };
 
@@ -79,10 +81,9 @@ type FetchJsonOptions = RequestInit & {
   throwOnHttpError?: boolean;
 };
 
-export const createFallbackWebcam = (): Webcam => ({
+export const FALLBACK_WEBCAM: Webcam = {
   id: "",
-  name: "Loading...",
-  title: "Loading...",
+  name: LOADING_LABEL,
   location: "",
   country: "",
   countryEmoji: "",
@@ -91,22 +92,25 @@ export const createFallbackWebcam = (): Webcam => ({
   isOnline: undefined,
   lastUpdate: null,
   nextUpdate: null,
-});
+};
 
-export const createFallbackStationScheduleConfig = (): StationScheduleConfig => ({
+export const UNAVAILABLE_WEBCAM: Webcam = {
+  ...FALLBACK_WEBCAM,
+  name: UNAVAILABLE_LABEL,
+};
+
+export const FALLBACK_STATION_SCHEDULE_CONFIG: StationScheduleConfig = {
   cameraStartTime: "06:00",
   cameraStopTime: "20:00",
   useSunriseSunset: false,
   captureInterval: "30",
-});
+};
 
 export const selectActiveWebcam = (webcams: Webcam[], activeWebcamId: string) =>
-  webcams.find((webcam) => webcam.id === activeWebcamId) ?? webcams[0] ?? createFallbackWebcam();
+  webcams.find((webcam) => webcam.id === activeWebcamId) ?? webcams[0] ?? FALLBACK_WEBCAM;
 
 export const isAbortError = (error: unknown): boolean =>
   error instanceof DOMException && error.name === "AbortError";
-
-const stripTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
 
 export const resolveApiMediaUrl = (url: string | null | undefined, apiBaseUrl: string): string | null => {
   if (!url) return null;
@@ -114,21 +118,21 @@ export const resolveApiMediaUrl = (url: string | null | undefined, apiBaseUrl: s
   if (url.startsWith("data:") || url.startsWith("blob:")) return url;
   if (!url.startsWith("/")) return url;
 
-  const normalizedBase = stripTrailingSlash(apiBaseUrl);
+  const normalizedBase = apiBaseUrl.replace(/\/+$/, "");
   if (!normalizedBase) return url;
   return `${normalizedBase}${url}`;
 };
 
-export const parseStationSummaryResponse = (item: StationSummaryResponse): Webcam => ({
-  ...item,
-});
-
-export const parseStationDetailResponse = (item: StationDetailResponse, apiBaseUrl: string): Webcam => ({
-  ...item,
-  currentImage: resolveApiMediaUrl(item.currentImage, apiBaseUrl),
-  lastUpdate: item.lastUpdate ? new Date(item.lastUpdate) : null,
-  nextUpdate: item.nextUpdate ? new Date(item.nextUpdate) : null,
-});
+/** Transform station response (summary or detail) to Webcam. */
+export const parseStationResponse = (item: StationDetailResponse | StationSummaryResponse, apiBaseUrl?: string): Webcam => {
+  const baseItem = item as StationDetailResponse;
+  return {
+    ...item,
+    currentImage: apiBaseUrl ? resolveApiMediaUrl(baseItem.currentImage, apiBaseUrl) : (baseItem.currentImage ?? null),
+    lastUpdate: baseItem.lastUpdate ? new Date(baseItem.lastUpdate) : null,
+    nextUpdate: baseItem.nextUpdate ? new Date(baseItem.nextUpdate) : null,
+  };
+};
 
 export const parseStationConfigResponse = (item: StationConfigResponse): StationScheduleConfig => ({
   cameraStartTime: item.camera_start_time,
@@ -152,10 +156,13 @@ export const createStationScheduleUpdate = (schedule: StationScheduleConfig): Pa
   capture_interval_minutes: Number(schedule.captureInterval),
 });
 
-export const parseSensorDataResponse = (row: SensorDataResponse): SensorData => ({
-  ...row,
-  timestamp: new Date(row.timestamp),
-});
+/** Transform API response with ISO timestamp to domain object with Date. */
+export const parseTimestampResponse = <T extends { timestamp: string }, U extends Omit<T, "timestamp"> & { timestamp: Date }>(
+  item: T
+): U => ({
+  ...item,
+  timestamp: new Date(item.timestamp),
+} as U);
 
 export const parseTimelineItemResponse = (item: TimelineItemResponse, apiBaseUrl: string): TimelineImage => ({
   ...item,

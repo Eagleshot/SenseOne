@@ -171,9 +171,43 @@
     box-shadow: 0 18px 45px rgba(0, 0, 0, 0.336);
   }
 
+  .card-elevated,
+  .card-subtle,
+  .card-interactive,
+  .widget-shell-stroke {
+    position: relative;
+  }
+
+  .panel-shell,
+  .card-elevated,
+  .card-subtle,
+  .card-interactive,
+  .widget-shell-stroke {
+    outline: 1px solid rgba(0, 0, 0, 0.14);
+    outline-offset: 0;
+  }
+
   .dark .panel-shell {
     @apply border-transparent bg-card;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.54);
+  }
+
+  .panel-shell::before,
+  .card-elevated::before,
+  .card-subtle::before,
+  .card-interactive::before,
+  .widget-shell-stroke::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+    pointer-events: none;
+  }
+
+  .widget-shell-stroke {
+    outline: 1px solid rgba(0, 0, 0, 0.14);
+    outline-offset: 0;
   }
 
   .btn-panel {

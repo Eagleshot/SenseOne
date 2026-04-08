@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { motion } from 'framer-motion';
 import {
@@ -44,6 +44,7 @@ export const HeroImage: React.FC = () => {
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [isImageUnavailable, setIsImageUnavailable] = useState(false);
   const [displayImageUrl, setDisplayImageUrl] = useState('');
+  const displayImageUrlRef = useRef('');
   const compareRef = useRef<HTMLDivElement | null>(null);
   const scrubRef = useRef<HTMLDivElement | null>(null);
 
@@ -69,6 +70,7 @@ export const HeroImage: React.FC = () => {
   useEffect(() => {
     if (!currentImageUrl) {
       setDisplayImageUrl('');
+      displayImageUrlRef.current = '';
       setIsImageUnavailable(true);
       return;
     }
@@ -77,12 +79,13 @@ export const HeroImage: React.FC = () => {
     const preload = new Image();
     preload.onload = () => {
       if (cancelled) return;
+      displayImageUrlRef.current = currentImageUrl;
       setDisplayImageUrl(currentImageUrl);
       setIsImageUnavailable(false);
     };
     preload.onerror = () => {
       if (cancelled) return;
-      if (!displayImageUrl) {
+      if (!displayImageUrlRef.current) {
         setIsImageUnavailable(true);
       }
     };
@@ -91,7 +94,7 @@ export const HeroImage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [currentImageUrl, displayImageUrl]);
+  }, [currentImageUrl]);
 
   const updateCompareValue = (clientX: number) => {
     const rect = compareRef.current?.getBoundingClientRect();
@@ -153,6 +156,11 @@ export const HeroImage: React.FC = () => {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
+      if (!activeWebcam.id) {
+        window.location.reload();
+        return;
+      }
+
       await refreshImageTimeline();
     } finally {
       setIsRefreshing(false);
@@ -223,7 +231,7 @@ export const HeroImage: React.FC = () => {
                     variant="ghost"
                     size="sm"
                     onClick={handleRefresh}
-                    disabled={isRefreshing || !activeWebcam.id}
+                    disabled={isRefreshing}
                     className={cn("mt-4", actionButtonClass)}
                   >
                     <RefreshCw className={cn("w-4 h-4", isRefreshing && "animate-spin")} />
@@ -341,7 +349,7 @@ export const HeroImage: React.FC = () => {
               variant="ghost"
               size="sm"
               onClick={handleRefresh}
-              disabled={isRefreshing || !activeWebcam.id}
+              disabled={isRefreshing}
               className={actionButtonClass}
             >
               <RefreshCw className={cn("w-4 h-4", isRefreshing && "animate-spin")} />

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -335,7 +335,7 @@ export const Sidebar: React.FC = () => {
             exit={{ opacity: 0, x: -20 }}
             onClick={toggleSidebar}
             aria-label="Open sidebar"
-            className="fixed left-3 top-3 z-50 rounded-xl border border-border bg-card p-3 shadow-soft-lg transition-all hover:shadow-soft-xl md:left-4 md:top-4"
+            className="widget-shell-stroke fixed left-3 top-3 z-50 rounded-xl border border-border bg-card p-3 shadow-soft-lg transition-all hover:shadow-soft-xl md:left-4 md:top-4"
           >
             <Menu className="h-5 w-5 text-foreground" />
           </motion.button>
