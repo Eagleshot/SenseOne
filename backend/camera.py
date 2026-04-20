@@ -1,5 +1,6 @@
 """Camera-related operations and data processing."""
 
+import json
 import sqlite3
 import logging
 from datetime import datetime, timedelta, timezone
@@ -180,6 +181,54 @@ def history_from_camera_db(base_dir: Path, camera_id: str, hours: int) -> list[d
         }
         for row in rows
     ]
+
+
+def chart_data_sources_from_camera_db(base_dir: Path, camera_id: str) -> list[dict[str, object]] | None:
+    """Load chart data sources from the station database."""
+    db_path = camera_db_path(base_dir, camera_id)
+    if not db_path.exists():
+        return None
+
+    try:
+        with sqlite3.connect(db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """
+                SELECT
+                    source_id,
+                    label,
+                    metrics_json,
+                    icon_key,
+                    color_value
+                FROM chart_data_sources
+                ORDER BY label COLLATE NOCASE ASC
+                """
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logging.warning("Failed to read chart data sources for %s: %s", camera_id, exc)
+        return None
+
+    if not rows:
+        return []
+
+    sources: list[dict[str, object]] = []
+    for row in rows:
+        try:
+            metrics = json.loads(row["metrics_json"])
+        except (TypeError, json.JSONDecodeError):
+            metrics = []
+        if not isinstance(metrics, list) or not metrics:
+            continue
+        sources.append(
+            {
+                "id": row["source_id"],
+                "label": row["label"],
+                "metrics": metrics,
+                "icon": row["icon_key"],
+                "color": row["color_value"],
+            }
+        )
+    return sources
 
 
 def latest_camera_battery(base_dir: Path, camera_id: str) -> int | None:

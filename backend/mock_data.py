@@ -140,6 +140,51 @@ TIMEZONES = [
     {"value": "Asia/Tokyo", "label": "Tokyo (JST)"},
 ]
 
+CHART_DATA_SOURCE_SEED = [
+    {
+        "id": "temperature",
+        "label": "Temperature",
+        "metrics": ["temperature"],
+        "icon": "thermometer",
+        "color": "hsl(var(--chart-1))",
+    },
+    {
+        "id": "humidity",
+        "label": "Humidity",
+        "metrics": ["humidity"],
+        "icon": "humidity",
+        "color": "hsl(var(--chart-3))",
+    },
+    {
+        "id": "battery",
+        "label": "Battery Level",
+        "metrics": ["battery"],
+        "icon": "battery",
+        "color": "hsl(var(--chart-2))",
+    },
+    {
+        "id": "wind",
+        "label": "Wind Conditions",
+        "metrics": ["windSpeed"],
+        "icon": "wind",
+        "color": "hsl(var(--chart-1))",
+    },
+    {
+        "id": "atmosphere",
+        "label": "Atmospheric Conditions",
+        "metrics": ["pressure", "visibility"],
+        "icon": "gauge",
+        "color": "hsl(var(--chart-2))",
+    },
+    {
+        "id": "thermal-comfort",
+        "label": "Thermal Comfort",
+        "metrics": ["temperature", "dewPoint", "feelsLike"],
+        "icon": "activity",
+        "color": "hsl(var(--chart-3))",
+    },
+]
+
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

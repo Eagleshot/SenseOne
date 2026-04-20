@@ -31,6 +31,14 @@ export interface SensorData {
   feelsLike: number;
 }
 
+export interface ChartDataSource {
+  id: string;
+  label: string;
+  metrics: string[];
+  icon: string;
+  color: string;
+}
+
 export interface TimezoneOption {
   value: string;
   label: string;

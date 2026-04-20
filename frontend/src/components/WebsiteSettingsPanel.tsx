@@ -321,10 +321,10 @@ export const WebsiteSettingsPanel: React.FC = () => {
                       type="button"
                       onClick={() => setColorTheme(themeKey)}
                       className={cn(
-                        'rounded-xl border p-3 text-left transition-all',
+                        'selector-tile p-3 text-left',
                         colorTheme === themeKey
                           ? 'border-primary bg-primary/5 shadow-soft-md'
-                          : 'border-border bg-[hsl(var(--sidebar-background))]/40 hover:border-primary/40'
+                          : ''
                       )}
                     >
                       <div className="flex items-start justify-between gap-2">

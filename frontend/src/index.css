@@ -53,7 +53,7 @@
     --sidebar-foreground: 231 13% 21%;
     --sidebar-accent: 240 12% 93%;
     --sidebar-accent-foreground: 231 13% 21%;
-    --sidebar-border: 220 13% 91%;
+    --sidebar-border: 220 10% 80%;
     --sidebar-ring: 215 75% 50%;
 
     /* Status colors */
@@ -111,7 +111,7 @@
     --sidebar-foreground: 60 7% 97%;
     --sidebar-accent: 225 30% 8%;
     --sidebar-accent-foreground: 60 7% 97%;
-    --sidebar-border: 222 20% 18%;
+    --sidebar-border: 222 18% 28%;
     --sidebar-ring: 215 75% 55%;
 
     --success: 142 70% 40%;
@@ -171,19 +171,34 @@
     box-shadow: 0 18px 45px rgba(0, 0, 0, 0.336);
   }
 
+  .panel-shell,
+  .widget-shell-stroke,
+  .chrome-shell-stroke,
   .card-elevated,
   .card-subtle,
   .card-interactive,
-  .widget-shell-stroke {
+  .btn-panel,
+  .btn-icon-panel,
+  .selector-tile,
+  .btn-glass {
     position: relative;
   }
 
   .panel-shell,
+  .widget-shell-stroke {
+    outline: 1px solid rgba(0, 0, 0, 0.084);
+    outline-offset: 0;
+  }
+
+  .chrome-shell-stroke,
   .card-elevated,
   .card-subtle,
   .card-interactive,
-  .widget-shell-stroke {
-    outline: 1px solid rgba(0, 0, 0, 0.14);
+  .btn-panel,
+  .btn-icon-panel,
+  .selector-tile,
+  .btn-glass {
+    outline: 1px solid rgba(0, 0, 0, 0.048);
     outline-offset: 0;
   }
 
@@ -193,21 +208,29 @@
   }
 
   .panel-shell::before,
-  .card-elevated::before,
-  .card-subtle::before,
-  .card-interactive::before,
   .widget-shell-stroke::before {
     content: "";
     position: absolute;
     inset: 0;
     border-radius: inherit;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
     pointer-events: none;
   }
 
-  .widget-shell-stroke {
-    outline: 1px solid rgba(0, 0, 0, 0.14);
-    outline-offset: 0;
+  .chrome-shell-stroke::before,
+  .card-elevated::before,
+  .card-subtle::before,
+  .card-interactive::before,
+  .btn-panel::before,
+  .btn-icon-panel::before,
+  .selector-tile::before,
+  .btn-glass::before {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.036);
+    pointer-events: none;
   }
 
   .btn-panel {
@@ -217,6 +240,30 @@
 
   .btn-panel:hover {
     background-color: hsl(var(--sidebar-accent));
+  }
+
+  .btn-icon-panel {
+    @apply border border-border/60 bg-background/60 text-foreground backdrop-blur-sm transition-all duration-200;
+  }
+
+  .btn-icon-panel:hover {
+    @apply border-border bg-background/80;
+  }
+
+  .btn-inline-muted {
+    @apply h-auto px-0 py-0 text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground;
+  }
+
+  .btn-inline-control {
+    @apply inline-flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground;
+  }
+
+  .selector-tile {
+    @apply rounded-xl border border-border bg-[hsl(var(--sidebar-background))]/40 transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/35;
+  }
+
+  .selector-tile:hover {
+    @apply border-primary/40;
   }
 
   /* Status badges */

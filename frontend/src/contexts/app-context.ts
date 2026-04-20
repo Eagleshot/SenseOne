@@ -1,5 +1,6 @@
 import { createContext } from "react";
 
+import { MapStyleKey } from "@/contexts/useAppPreferences";
 import { SensorData, TimezoneOption, Webcam } from "@/data/types";
 import { ColorThemeKey } from "@/lib/appThemes";
 
@@ -18,6 +19,8 @@ export interface AppContextType {
   setColorTheme: (theme: ColorThemeKey) => void;
   brandLogoUrl: string | null;
   setBrandLogoUrl: (logoUrl: string | null) => void;
+  mapStyle: MapStyleKey;
+  setMapStyle: (style: MapStyleKey) => void;
 
   // Timezone
   timezone: string;

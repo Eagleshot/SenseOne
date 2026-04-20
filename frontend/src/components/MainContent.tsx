@@ -139,7 +139,7 @@ export const MainContent: React.FC = () => {
                   size="sm"
                   onClick={handleStartEdit}
                   disabled={isStationConfigLoading}
-                  className="shrink-0 gap-2 self-start"
+                  className="btn-inline-muted shrink-0 gap-2 self-start"
                 >
                   <Pencil className="h-4 w-4" />
                   {description ? "Edit description" : "Add description"}
@@ -172,15 +172,17 @@ export const MainContent: React.FC = () => {
               {activeWebcam.id && (
                 <>
                   <p>{`Camera ID: ${activeWebcam.id}`}</p>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => void handleCopyCameraId()}
-                    className="inline-flex items-center gap-1 underline underline-offset-4 hover:text-foreground"
+                    className="btn-inline-muted gap-1 text-xs underline underline-offset-4"
                     aria-label={`Copy camera ID ${activeWebcam.id}`}
                   >
                     <Copy className="h-3 w-3" />
                     {cameraIdCopied ? "Copied" : "Copy"}
-                  </button>
+                  </Button>
                 </>
               )}
             </div>

@@ -56,6 +56,14 @@ export const Sidebar: React.FC = () => {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
+  const sidebarInsetFocusClass =
+    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/35 focus-visible:ring-offset-0";
+  const sidebarSurfaceClass =
+    "border-sidebar-border/90 bg-sidebar-accent shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]";
+  const sidebarActionButtonClass = `${sidebarSurfaceClass} text-sidebar-foreground hover:border-primary/25 hover:bg-sidebar-accent/80 ${sidebarInsetFocusClass}`;
+  const sidebarIconButtonClass = `chrome-shell-stroke rounded-lg border border-sidebar-border/80 bg-sidebar-accent/80 p-2 text-sidebar-foreground transition-colors hover:bg-sidebar-accent ${sidebarInsetFocusClass}`;
+  const sidebarFieldClass = `${sidebarSurfaceClass} ${sidebarInsetFocusClass}`;
+
   const filteredWebcams = useMemo(() => {
     if (!searchQuery.trim()) return webcamList;
     const query = searchQuery.toLowerCase();
@@ -115,7 +123,7 @@ export const Sidebar: React.FC = () => {
           ease: [0.4, 0, 0.2, 1],
         }}
         className={cn(
-          "fixed z-50 flex h-dvh max-w-[22rem] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar lg:sticky lg:top-0 lg:h-screen",
+          "chrome-shell-stroke fixed z-50 flex h-dvh max-w-[22rem] flex-col overflow-hidden border-r border-sidebar-border bg-sidebar lg:sticky lg:top-0 lg:h-screen",
           !isSidebarOpen && "pointer-events-none lg:pointer-events-auto"
         )}
       >
@@ -130,7 +138,7 @@ export const Sidebar: React.FC = () => {
           <button
             onClick={toggleSidebar}
             aria-label="Close sidebar"
-            className="rounded-lg p-2 transition-colors hover:bg-sidebar-accent"
+            className={sidebarIconButtonClass}
           >
             <X className="h-5 w-5 text-sidebar-foreground" />
           </button>
@@ -143,7 +151,7 @@ export const Sidebar: React.FC = () => {
               placeholder="Search webcams..."
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              className="border-sidebar-border bg-sidebar-accent pl-10"
+              className={cn("pl-10 focus-visible:border-primary/55", sidebarFieldClass)}
             />
           </div>
         </div>
@@ -160,10 +168,10 @@ export const Sidebar: React.FC = () => {
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 className={cn(
-                  "w-full rounded-xl border p-3 text-left transition-all duration-200",
+                  `chrome-shell-stroke w-full rounded-xl border p-3 text-left transition-all duration-200 ${sidebarInsetFocusClass}`,
                   activeWebcam.id === webcam.id
-                    ? "border-primary/30 bg-sidebar-accent shadow-soft-md"
-                    : "border-transparent bg-sidebar-accent hover:border-sidebar-border hover:bg-sidebar-accent"
+                    ? "border-primary/60 bg-sidebar-accent shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(15,23,42,0.08)]"
+                    : `${sidebarSurfaceClass} hover:border-primary/25 hover:bg-sidebar-accent`
                 )}
               >
                 <div className="flex gap-3">
@@ -187,12 +195,12 @@ export const Sidebar: React.FC = () => {
         <div className="mx-4 mb-3 h-px bg-sidebar-border/80" />
 
         <div className="px-4 pb-4">
-          <Button
-            asChild
-            variant="outline"
-            size="sm"
-            className="w-full justify-center gap-2 border-sidebar-border bg-sidebar-accent text-sidebar-foreground hover:bg-sidebar-accent/80"
-          >
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className={cn("w-full justify-center gap-2", sidebarActionButtonClass)}
+            >
             <a href="#map">
               Go to Map
               <ExternalLink className="h-3.5 w-3.5" />
@@ -209,7 +217,7 @@ export const Sidebar: React.FC = () => {
                 size="sm"
                 onClick={() => setIsLoginFormOpen((prev) => !prev)}
                 disabled={!authReady || isAuthenticating}
-                className="w-full justify-center gap-2 border-sidebar-border bg-sidebar-accent text-sidebar-foreground hover:bg-sidebar-accent/80"
+                className={cn("w-full justify-center gap-2", sidebarActionButtonClass)}
               >
                 <LogIn className="h-3.5 w-3.5" />
                 Login
@@ -223,7 +231,7 @@ export const Sidebar: React.FC = () => {
                     exit={{ height: 0, opacity: 0 }}
                     transition={{ duration: 0.2 }}
                     onSubmit={handleLoginSubmit}
-                    className="space-y-2 overflow-hidden rounded-lg border border-sidebar-border bg-sidebar-accent/70 p-3"
+                    className="chrome-shell-stroke space-y-2 overflow-hidden rounded-lg border border-sidebar-border bg-sidebar-accent/70 p-3"
                   >
                     <Input
                       type="text"
@@ -254,7 +262,7 @@ export const Sidebar: React.FC = () => {
           )}
 
           {isAuthenticated && (
-            <div className="space-y-2 rounded-lg border border-sidebar-border bg-sidebar-accent/70 p-3">
+            <div className="chrome-shell-stroke space-y-2 rounded-lg border border-sidebar-border bg-sidebar-accent/70 p-3">
               <p className="text-xs text-muted-foreground">
                 Signed in as <span className="font-medium text-sidebar-foreground">{authenticatedUsername}</span>
               </p>
@@ -263,7 +271,10 @@ export const Sidebar: React.FC = () => {
                 variant="outline"
                 size="sm"
                 onClick={handleLogout}
-                className="w-full justify-center gap-2 border-sidebar-border bg-background/60 text-sidebar-foreground hover:bg-background/80"
+                className={cn(
+                  "w-full justify-center gap-2 border-sidebar-border/90 bg-background/60 text-sidebar-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] hover:border-primary/25 hover:bg-background/80",
+                  sidebarInsetFocusClass
+                )}
               >
                 <LogOut className="h-3.5 w-3.5" />
                 Logout
@@ -301,7 +312,7 @@ export const Sidebar: React.FC = () => {
                     Timezone
                   </label>
                   <Select value={timezone} onValueChange={setTimezone}>
-                    <SelectTrigger className="border-sidebar-border bg-sidebar-accent text-sm">
+                    <SelectTrigger className={cn("text-sm focus:border-primary/55 data-[state=open]:border-primary/55", sidebarFieldClass)}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -335,7 +346,10 @@ export const Sidebar: React.FC = () => {
             exit={{ opacity: 0, x: -20 }}
             onClick={toggleSidebar}
             aria-label="Open sidebar"
-            className="widget-shell-stroke fixed left-3 top-3 z-50 rounded-xl border border-border bg-card p-3 shadow-soft-lg transition-all hover:shadow-soft-xl md:left-4 md:top-4"
+            className={cn(
+              "chrome-shell-stroke fixed left-3 top-3 z-50 rounded-xl border border-border bg-card p-3 shadow-soft-lg transition-all hover:shadow-soft-xl md:left-4 md:top-4",
+              sidebarInsetFocusClass
+            )}
           >
             <Menu className="h-5 w-5 text-foreground" />
           </motion.button>

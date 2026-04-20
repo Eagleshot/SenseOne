@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, Query
 
-from models import AppConfig
+from models import AppConfig, ChartDataSource
 from auth import get_current_username
 from camera import (
     all_camera_ids,
@@ -11,6 +11,7 @@ from camera import (
     timeline_from_camera_db,
     timeline_from_image_dir,
     history_from_camera_db,
+    chart_data_sources_from_camera_db,
 )
 from config import read_camera_config, write_camera_config, get_data_dir
 from routes import ValidStationId
@@ -68,6 +69,17 @@ def get_station_history(
 ) -> list[dict]:
     """Return sensor history for a station."""
     return history_from_camera_db(get_data_dir(), station_id, hours) or []
+
+
+@router.get(
+    "/{station_id}/chart-data-sources",
+    response_model=list[ChartDataSource],
+    summary="Get Chart Data Sources",
+    description="Return the selectable chart data sources configured for a station.",
+)
+def get_station_chart_data_sources(station_id: ValidStationId) -> list[ChartDataSource]:
+    """Return chart data sources for a station."""
+    return chart_data_sources_from_camera_db(get_data_dir(), station_id) or []
 
 
 @router.get(

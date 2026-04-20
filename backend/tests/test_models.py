@@ -2,7 +2,7 @@
 
 import pytest
 
-from models import AppConfig, LoginRequest, AuthResponse, MeResponse
+from models import AppConfig, LoginRequest, AuthResponse, MeResponse, ChartDataSource
 
 
 class TestAppConfig:
@@ -142,3 +142,30 @@ class TestMeResponse:
         """Test MeResponse structure."""
         response = MeResponse(username="testuser")
         assert response.username == "testuser"
+
+
+class TestChartDataSource:
+    """Test ChartDataSource model."""
+
+    def test_chart_data_source_structure(self):
+        """Test ChartDataSource with valid values."""
+        source = ChartDataSource(
+            id="temperature",
+            label="Temperature",
+            metrics=["temperature"],
+            icon="thermometer",
+            color="hsl(var(--chart-1))",
+        )
+        assert source.id == "temperature"
+        assert source.metrics == ["temperature"]
+
+    def test_chart_data_source_requires_metrics(self):
+        """Test ChartDataSource rejects empty metrics."""
+        with pytest.raises(ValueError, match="at least 1 item"):
+            ChartDataSource(
+                id="temperature",
+                label="Temperature",
+                metrics=[],
+                icon="thermometer",
+                color="hsl(var(--chart-1))",
+            )

@@ -25,7 +25,7 @@ interface SortableHeaderProps {
 
 const SortableHeader = memo<SortableHeaderProps>(({ field, activeField, onSort, children }) => (
   <TableHead>
-    <button onClick={() => onSort(field)} className="flex items-center gap-1 hover:text-foreground transition-colors">
+    <button onClick={() => onSort(field)} className="btn-inline-control">
       {children}
       <ArrowUpDown
         className={cn("w-3 h-3", activeField === field ? "text-primary" : "text-muted-foreground")}
@@ -139,7 +139,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
         <button
           type="button"
           aria-label={isOpen ? "Collapse raw data" : "Expand raw data"}
-          className="w-full flex items-center justify-between pt-4 pb-2 border-t border-foreground/40 dark:border-foreground/30 text-left"
+          className="w-full flex items-center justify-between pt-4 pb-2 border-t border-foreground/40 text-left transition-colors hover:text-foreground dark:border-foreground/30"
         >
           <span className="text-base font-semibold text-foreground">Raw Data</span>
           <ChevronDown
@@ -234,7 +234,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                 size="sm"
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1}
-                className="border-border/70 bg-[hsl(var(--sidebar-background))] text-foreground hover:bg-[hsl(var(--sidebar-accent))]"
+                className="btn-panel"
               >
                 Previous
               </Button>
@@ -246,7 +246,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                 size="sm"
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                 disabled={page === totalPages}
-                className="border-border/70 bg-[hsl(var(--sidebar-background))] text-foreground hover:bg-[hsl(var(--sidebar-accent))]"
+                className="btn-panel"
               >
                 Next
               </Button>

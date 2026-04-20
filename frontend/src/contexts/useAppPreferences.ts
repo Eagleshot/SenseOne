@@ -9,6 +9,10 @@ import {
   setStoredString,
 } from "@/lib/storage";
 
+export type MapStyleKey = "abstract" | "satellite";
+
+const isMapStyleKey = (value: string | null): value is MapStyleKey => value === "abstract" || value === "satellite";
+
 export type AppPreferencesState = {
   isDarkMode: boolean;
   toggleDarkMode: () => void;
@@ -16,6 +20,8 @@ export type AppPreferencesState = {
   setColorTheme: (theme: ColorThemeKey) => void;
   brandLogoUrl: string | null;
   setBrandLogoUrl: (logoUrl: string | null) => void;
+  mapStyle: MapStyleKey;
+  setMapStyle: (style: MapStyleKey) => void;
   timezone: string;
   setTimezone: (tz: string) => void;
 };
@@ -36,6 +42,16 @@ export const useAppPreferences = (): AppPreferencesState => {
     return isColorThemeKey(storedTheme) ? storedTheme : "embernova";
   });
   const [brandLogoUrl, setBrandLogoUrlState] = useState<string | null>(() => getStoredOptionalString("brandLogoUrl"));
+  const [mapStyle, setMapStyleState] = useState<MapStyleKey>(() => {
+    const storedStyle = getStoredOptionalString("mapStyle");
+    if (isMapStyleKey(storedStyle)) {
+      return storedStyle;
+    }
+    if (storedStyle === "smoothBright" || storedStyle === "smoothDark") {
+      return "abstract";
+    }
+    return "abstract";
+  });
   const [timezone, setTimezoneState] = useState(() => getStoredString("timezone", "Europe/Zurich"));
 
   useEffect(() => {
@@ -56,6 +72,10 @@ export const useAppPreferences = (): AppPreferencesState => {
     setStoredOptionalString("brandLogoUrl", brandLogoUrl);
   }, [brandLogoUrl]);
 
+  useEffect(() => {
+    setStoredString("mapStyle", mapStyle);
+  }, [mapStyle]);
+
   return {
     isDarkMode,
     toggleDarkMode: () => setIsDarkMode((currentValue) => !currentValue),
@@ -63,6 +83,8 @@ export const useAppPreferences = (): AppPreferencesState => {
     setColorTheme: (theme) => setColorThemeState(theme),
     brandLogoUrl,
     setBrandLogoUrl: (logoUrl) => setBrandLogoUrlState(logoUrl),
+    mapStyle,
+    setMapStyle: (style) => setMapStyleState(style),
     timezone,
     setTimezone: (tz) => setTimezoneState(tz),
   };

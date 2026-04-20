@@ -83,3 +83,26 @@ class AuthResponse(BaseModel):
 class MeResponse(BaseModel):
     """Response from /auth/me endpoint."""
     username: str
+
+
+class ChartDataSource(BaseModel):
+    """Selectable chart data source stored in the station database."""
+
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    metrics: list[str] = Field(default_factory=list, min_length=1)
+    icon: str = Field(min_length=1)
+    color: str = Field(min_length=1)
+
+    @field_validator("id", "label", "icon", "color")
+    @classmethod
+    def validate_chart_text_field(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("metrics")
+    @classmethod
+    def validate_metrics_field(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        if not cleaned:
+            raise ValueError("At least one metric is required.")
+        return cleaned

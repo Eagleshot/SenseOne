@@ -20,13 +20,13 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+import { fetchJson, isAbortError } from "@/contexts/appContextUtils";
 import { formatDateTimeLabel, formatTimeLabel } from "@/lib/datetime";
 import { useApp } from "@/contexts/useApp";
-import type { SensorData } from "@/data/types";
+import type { ChartDataSource, SensorData } from "@/data/types";
 
 type MetricType =
   | "temperature"
@@ -46,10 +46,12 @@ type ChartConfig = {
   title: string;
   icon: ChartIconKey;
   color: string;
+  dataSourceId: string;
   metrics: MetricType[];
 };
 
 type ChartDraft = Omit<ChartConfig, "id">;
+type ChartDataSourceOption = Omit<ChartDataSource, "metrics" | "icon"> & { metrics: MetricType[]; icon: ChartIconKey };
 
 const metricConfig: Record<MetricType, { label: string; unit: string; color: string }> = {
   temperature: { label: "Temperature", unit: "°C", color: "hsl(var(--chart-1))" },
@@ -85,9 +87,8 @@ const chartIconOptions: Array<{ value: ChartIconKey; label: string }> = [
   { value: "eye", label: "Eye" },
 ];
 
-const metricOptions = Object.keys(metricConfig) as MetricType[];
-const getAutoChartTitle = (metrics: MetricType[]) =>
-  metrics.map((metric) => metricConfig[metric].label).join(" + ") || "Custom Chart";
+const getAutoChartTitle = (sourceLabel: string, metrics: MetricType[]) =>
+  sourceLabel.trim() || metrics.map((metric) => metricConfig[metric].label).join(" + ") || "Custom Chart";
 const chartThemeColorOptions = [
   { value: "hsl(var(--chart-1))", label: "Theme Chart 1" },
   { value: "hsl(var(--chart-2))", label: "Theme Chart 2" },
@@ -98,12 +99,13 @@ type ChartColorSelection = ChartThemeColorValue | "custom";
 
 const createChartId = () => `chart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const createDefaultChart = (metrics: MetricType[] = ["temperature"]): ChartConfig => ({
+const createDefaultChart = (source: ChartDataSourceOption): ChartConfig => ({
   id: createChartId(),
-  title: getAutoChartTitle(metrics),
-  icon: "thermometer",
-  color: metricConfig.temperature.color,
-  metrics,
+  title: getAutoChartTitle(source.label, source.metrics),
+  icon: source.icon,
+  color: source.color,
+  dataSourceId: source.id,
+  metrics: [...source.metrics],
 });
 
 const sanitizeFileName = (value: string) =>
@@ -125,6 +127,21 @@ const getColorSelection = (value: string): ChartColorSelection => {
   if (themeColorValue) return themeColorValue;
   if (isValidHexColor(value)) return "custom";
   return chartThemeColorOptions[0].value;
+};
+
+const isMetricType = (value: string): value is MetricType => value in metricConfig;
+const isChartIconKey = (value: string): value is ChartIconKey => value in chartIconConfig;
+
+const normalizeChartDataSource = (item: ChartDataSource): ChartDataSourceOption | null => {
+  const metrics = item.metrics.filter(isMetricType);
+  if (!metrics.length) return null;
+
+  return {
+    ...item,
+    metrics,
+    icon: isChartIconKey(item.icon) ? item.icon : "line",
+    color: item.color?.trim() || chartThemeColorOptions[0].value,
+  };
 };
 
 const inlineSvgStyles = (source: Element, target: Element) => {
@@ -263,6 +280,8 @@ const ChartTooltip = ({
 type ChartCardProps = {
   config: ChartConfig;
   data: SensorData[];
+  dataSources: ChartDataSourceOption[];
+  sourceById: Map<string, ChartDataSourceOption>;
   timezone: string;
   isDarkMode: boolean;
   index: number;
@@ -275,6 +294,8 @@ type ChartCardProps = {
 const ChartCard: React.FC<ChartCardProps> = ({
   config,
   data,
+  dataSources,
+  sourceById,
   timezone,
   isDarkMode,
   index,
@@ -290,6 +311,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
     title: config.title,
     icon: config.icon,
     color: config.color,
+    dataSourceId: config.dataSourceId,
     metrics: config.metrics,
   });
   const [colorSelection, setColorSelection] = useState<ChartColorSelection>(() => getColorSelection(config.color));
@@ -303,6 +325,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
       title: config.title,
       icon: config.icon,
       color: config.color,
+      dataSourceId: config.dataSourceId,
       metrics: config.metrics,
     });
     setColorSelection(getColorSelection(config.color));
@@ -327,36 +350,36 @@ const ChartCard: React.FC<ChartCardProps> = ({
     [data, timezone]
   );
 
-  const toggleMetric = (metric: MetricType, checked: boolean) => {
+  const handleDataSourceChange = (sourceId: string) => {
+    const nextSource = sourceById.get(sourceId);
+    if (!nextSource) return;
+
     setDraft((prev) => {
-      const nextMetrics = checked
-        ? prev.metrics.includes(metric)
-          ? prev.metrics
-          : [...prev.metrics, metric]
-        : prev.metrics.length === 1
-          ? prev.metrics
-          : prev.metrics.filter((item) => item !== metric);
-      const nextTitle =
-        prev.title === getAutoChartTitle(prev.metrics) ? getAutoChartTitle(nextMetrics) : prev.title;
-
-      if (nextMetrics === prev.metrics && nextTitle === prev.title) return prev;
-
+      const previousSource = sourceById.get(prev.dataSourceId);
+      const previousAutoTitle = getAutoChartTitle(previousSource?.label ?? "", prev.metrics);
       return {
         ...prev,
-        title: nextTitle,
-        metrics: nextMetrics,
+        title: prev.title === previousAutoTitle ? getAutoChartTitle(nextSource.label, nextSource.metrics) : prev.title,
+        icon: nextSource.icon,
+        color: nextSource.color,
+        dataSourceId: nextSource.id,
+        metrics: [...nextSource.metrics],
       };
     });
+    setColorSelection(getColorSelection(nextSource.color));
+    setCustomColor(isValidHexColor(nextSource.color) ? nextSource.color : DEFAULT_CUSTOM_COLOR);
   };
 
   const handleSave = () => {
     const nextColor =
       colorSelection === "custom" ? (isValidHexColor(customColor) ? customColor : DEFAULT_CUSTOM_COLOR) : draft.color;
-    const nextMetrics = draft.metrics.length ? draft.metrics : ["temperature"];
+    const selectedSource = sourceById.get(draft.dataSourceId);
+    const nextMetrics = selectedSource?.metrics.length ? selectedSource.metrics : draft.metrics.length ? draft.metrics : ["temperature"];
     onUpdate(config.id, {
-      title: draft.title.trim() || getAutoChartTitle(nextMetrics),
+      title: draft.title.trim() || getAutoChartTitle(selectedSource?.label ?? "", nextMetrics),
       icon: draft.icon,
       color: nextColor,
+      dataSourceId: selectedSource?.id ?? draft.dataSourceId,
       metrics: nextMetrics,
     });
     setIsEditing(false);
@@ -376,6 +399,10 @@ const ChartCard: React.FC<ChartCardProps> = ({
     const units = Array.from(new Set(config.metrics.map((metric) => metricConfig[metric].unit).filter(Boolean)));
     return units.length === 1 ? units[0] : "";
   }, [config.metrics]);
+  const metricsLabel = useMemo(
+    () => config.metrics.map((metric) => metricConfig[metric].label).join(" + "),
+    [config.metrics]
+  );
 
   const formatYAxisTick = (value: number | string) => {
     if (!yAxisUnit) return `${value}`;
@@ -385,16 +412,9 @@ const ChartCard: React.FC<ChartCardProps> = ({
   return (
     <div className="widget-shell-stroke rounded-2xl border border-border bg-card/70 p-4">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center" style={{ color: config.color }}>
-            <Icon className="h-6 w-6" />
-          </div>
-          <div>
-            <p className="font-semibold text-foreground">{config.title}</p>
-            <p className="text-xs text-muted-foreground">
-              {config.metrics.map((metric) => metricConfig[metric].label).join(" + ")}
-            </p>
-          </div>
+        <div className="flex items-center gap-2">
+          <Icon className="h-5 w-5 text-muted-foreground" />
+          <h2 className="text-2xl font-bold text-foreground">{config.title}</h2>
         </div>
 
         <div className="flex items-center gap-1">
@@ -405,7 +425,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
             aria-label="Move chart up"
             disabled={index === 0}
             onClick={() => onMove(config.id, "up")}
-            className="h-8 w-8"
+            className="btn-icon-panel h-8 w-8"
           >
             <ArrowUp className="h-4 w-4" />
           </Button>
@@ -416,22 +436,19 @@ const ChartCard: React.FC<ChartCardProps> = ({
             aria-label="Move chart down"
             disabled={index === total - 1}
             onClick={() => onMove(config.id, "down")}
-            className="h-8 w-8"
+            className="btn-icon-panel h-8 w-8"
           >
             <ArrowDown className="h-4 w-4" />
           </Button>
           <Dialog open={isEditing} onOpenChange={setIsEditing}>
             <DialogTrigger asChild>
-              <Button type="button" variant="ghost" size="icon" aria-label="Edit chart" className="h-8 w-8">
+              <Button type="button" variant="ghost" size="icon" aria-label="Edit chart" className="btn-icon-panel h-8 w-8">
                 <Settings2 className="h-4 w-4" />
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Edit Chart</DialogTitle>
-                <DialogDescription>
-                  Change title, icon, color theme/custom color, and metrics for this chart.
-                </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
                 <div className="space-y-2">
@@ -520,18 +537,19 @@ const ChartCard: React.FC<ChartCardProps> = ({
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Data Sources</label>
-                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-border/70 p-3">
-                    {metricOptions.map((metric) => (
-                      <label key={metric} className="flex items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={draft.metrics.includes(metric)}
-                          onCheckedChange={(checked) => toggleMetric(metric, Boolean(checked))}
-                        />
-                        <span className="text-foreground">{metricConfig[metric].label}</span>
-                      </label>
-                    ))}
-                  </div>
+                  <label className="text-sm text-muted-foreground">Data Source</label>
+                  <Select value={draft.dataSourceId} onValueChange={handleDataSourceChange} disabled={dataSources.length === 0}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue placeholder="Select data source" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {dataSources.map((source) => (
+                        <SelectItem key={source.id} value={source.id}>
+                          {source.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex justify-end">
                   <Button type="button" onClick={handleSave}>
@@ -550,11 +568,11 @@ const ChartCard: React.FC<ChartCardProps> = ({
               if (chartRef.current) {
                 void exportChartAsImage(chartRef.current, {
                   title: config.title,
-                  subtitle: config.metrics.map((metric) => metricConfig[metric].label).join(" + "),
+                  subtitle: metricsLabel,
                 });
               }
             }}
-            className="h-8 w-8"
+            className="btn-icon-panel h-8 w-8"
           >
             <Download className="h-4 w-4" />
           </Button>
@@ -564,7 +582,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
             size="icon"
             aria-label="Remove chart"
             onClick={() => onRemove(config.id)}
-            className="h-8 w-8 text-destructive hover:text-destructive"
+            className="btn-icon-panel h-8 w-8 text-destructive hover:text-destructive"
           >
             <Trash2 className="h-4 w-4" />
           </Button>
@@ -628,13 +646,56 @@ interface HistoricalChartsProps {
 }
 
 export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addChartSignal }) => {
-  const { timezone, isDarkMode } = useApp();
+  const { activeWebcam, timezone, isDarkMode } = useApp();
   const [charts, setCharts] = useState<ChartConfig[]>([]);
+  const [dataSources, setDataSources] = useState<ChartDataSourceOption[]>([]);
+  const [isLoadingDataSources, setIsLoadingDataSources] = useState(false);
   const previousAddSignal = useRef<number | undefined>(addChartSignal);
+  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api";
+  const sourceById = useMemo(
+    () => new Map(dataSources.map((source) => [source.id, source])),
+    [dataSources]
+  );
 
   const addChart = () => {
-    setCharts((prev) => [...prev, createDefaultChart()]);
+    if (!dataSources.length) return;
+    setCharts((prev) => [...prev, createDefaultChart(dataSources[0])]);
   };
+
+  useEffect(() => {
+    if (!activeWebcam.id) {
+      setDataSources([]);
+      setIsLoadingDataSources(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const loadDataSources = async () => {
+      setIsLoadingDataSources(true);
+      try {
+        const response = await fetchJson<ChartDataSource[]>(
+          `${apiBaseUrl}/stations/${encodeURIComponent(activeWebcam.id)}/chart-data-sources`,
+          { signal: controller.signal }
+        );
+        const nextSources = (response ?? [])
+          .map(normalizeChartDataSource)
+          .filter((source): source is ChartDataSourceOption => source !== null);
+        setDataSources(nextSources);
+      } catch (error) {
+        if (!isAbortError(error)) {
+          setDataSources([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoadingDataSources(false);
+        }
+      }
+    };
+
+    void loadDataSources();
+
+    return () => controller.abort();
+  }, [activeWebcam.id, apiBaseUrl]);
 
   useEffect(() => {
     if (addChartSignal === undefined) return;
@@ -643,10 +704,12 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
       return;
     }
     if (addChartSignal !== previousAddSignal.current) {
-      addChart();
+      if (dataSources.length) {
+        setCharts((prev) => [...prev, createDefaultChart(dataSources[0])]);
+      }
       previousAddSignal.current = addChartSignal;
     }
-  }, [addChartSignal]);
+  }, [addChartSignal, dataSources]);
 
   const updateChart = (id: string, updates: Partial<ChartConfig>) => {
     setCharts((prev) => prev.map((chart) => (chart.id === id ? { ...chart, ...updates } : chart)));
@@ -671,13 +734,15 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
   return (
     <div className="space-y-4">
       {charts.length === 0 ? (
-        <div className="flex min-h-[340px] flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-border/70 bg-background p-6 text-center">
+        <div className="flex min-h-[340px] flex-col items-center justify-center gap-4 rounded-2xl bg-background p-6 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border/70 bg-card">
             <LineChartIcon className="h-7 w-7 text-muted-foreground" />
           </div>
           <div className="space-y-1">
             <p className="text-base font-semibold text-foreground">No charts added</p>
-            <p className="text-sm text-muted-foreground">Create a new chart to start visualizing sensor data.</p>
+            <p className="text-sm text-muted-foreground">
+              {isLoadingDataSources ? "Loading data sources from the backend." : "Create a new chart to start visualizing sensor data."}
+            </p>
           </div>
           <Button
             type="button"
@@ -685,6 +750,7 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
             size="sm"
             onClick={addChart}
             className="btn-panel"
+            disabled={isLoadingDataSources || dataSources.length === 0}
           >
             <Plus className="h-4 w-4" />
             Create Chart
@@ -696,6 +762,8 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
             key={chart.id}
             config={chart}
             data={data}
+            dataSources={dataSources}
+            sourceById={sourceById}
             timezone={timezone}
             isDarkMode={isDarkMode}
             index={index}

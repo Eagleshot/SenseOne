@@ -14,6 +14,7 @@ import {
   SkipForward,
 } from 'lucide-react';
 
+import { FullscreenDialog } from '@/components/FullscreenDialog';
 import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
@@ -178,8 +179,7 @@ export const HeroImage: React.FC = () => {
   };
 
   const controlIconButtonClass = 'transition-all border-0 bg-transparent hover:bg-transparent';
-  const actionButtonClass =
-    'gap-2 border-0 bg-[hsl(var(--sidebar-background))] text-foreground hover:bg-[hsl(var(--sidebar-accent))]';
+  const actionButtonClass = 'btn-panel';
 
   return (
     <div className="space-y-4">
@@ -243,35 +243,37 @@ export const HeroImage: React.FC = () => {
           )}
 
           {/* Enlarge button */}
-          <Dialog>
-            {hasDisplayImage && (
-              <DialogTrigger asChild>
+          <FullscreenDialog
+            title={`${activeWebcam.name} image fullscreen`}
+            edgeToEdge
+            trigger={
+              hasDisplayImage ? (
                 <Button
                   variant="outline"
                   size="icon"
-                  className="absolute top-4 right-4 z-10 bg-background/50 backdrop-blur-sm border border-border/50 hover:bg-background/80"
+                  className="btn-icon-panel absolute top-4 right-4 z-10"
                 >
                   <Maximize2 className="w-4 h-4" />
                   <span className="sr-only">Enlarge image</span>
                 </Button>
-              </DialogTrigger>
-            )}
-            <DialogContent className="max-w-[96vw] w-[96vw] max-h-[94vh] h-[94vh] p-0 overflow-hidden bg-black/90 border border-border/40 flex items-center justify-center">
-              {hasDisplayImage ? (
-                <img src={displayImageUrl} alt={`${activeWebcam.name} webcam view`} className="max-w-full max-h-full object-contain bg-black" />
-              ) : (
-                <div className="mx-4 max-w-md text-center">
-                  <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-white/10">
-                    <ImageOff className="h-7 w-7 text-white/80" />
-                  </div>
-                  <p className="text-lg font-semibold text-white">No pictures available</p>
-                  <p className="mt-2 text-sm leading-relaxed text-white/75">
-                    Try another camera or check back soon.
-                  </p>
+              ) : undefined
+            }
+            contentClassName="flex items-center justify-center bg-black/90"
+          >
+            {hasDisplayImage ? (
+              <img src={displayImageUrl} alt={`${activeWebcam.name} webcam view`} className="h-full w-full object-contain bg-black" />
+            ) : (
+              <div className="mx-4 max-w-md text-center">
+                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-white/10">
+                  <ImageOff className="h-7 w-7 text-white/80" />
                 </div>
-              )}
-            </DialogContent>
-          </Dialog>
+                <p className="text-lg font-semibold text-white">No pictures available</p>
+                <p className="mt-2 text-sm leading-relaxed text-white/75">
+                  Try another camera or check back soon.
+                </p>
+              </div>
+            )}
+          </FullscreenDialog>
 
           {/* Refreshing overlay */}
           {isRefreshing && (

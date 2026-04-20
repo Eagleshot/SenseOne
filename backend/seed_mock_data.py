@@ -10,9 +10,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
-    from .mock_data import WEBCAM_SEED, generate_historical_data
+    from .mock_data import CHART_DATA_SOURCE_SEED, WEBCAM_SEED, generate_historical_data
 except ImportError:
-    from mock_data import WEBCAM_SEED, generate_historical_data
+    from mock_data import CHART_DATA_SOURCE_SEED, WEBCAM_SEED, generate_historical_data
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -57,6 +57,15 @@ def _yaml_optional_string(value: str | None) -> str:
 
 def _iso_utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _camera_seed(camera_id: str) -> dict[str, object]:
@@ -129,6 +138,60 @@ def _ensure_camera_schema(db_path: Path) -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chart_data_sources (
+                source_id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                metrics_json TEXT NOT NULL,
+                icon_key TEXT NOT NULL,
+                color_value TEXT NOT NULL
+            )
+            """
+        )
+        chart_source_columns = [
+            row[1]
+            for row in connection.execute("PRAGMA table_info(chart_data_sources)").fetchall()
+        ]
+        expected_chart_source_columns = [
+            "source_id",
+            "label",
+            "metrics_json",
+            "icon_key",
+            "color_value",
+        ]
+        if chart_source_columns and chart_source_columns != expected_chart_source_columns:
+            connection.execute("ALTER TABLE chart_data_sources RENAME TO chart_data_sources_legacy")
+            connection.execute(
+                """
+                CREATE TABLE chart_data_sources (
+                    source_id TEXT PRIMARY KEY,
+                    label TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    icon_key TEXT NOT NULL,
+                    color_value TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO chart_data_sources (
+                    source_id,
+                    label,
+                    metrics_json,
+                    icon_key,
+                    color_value
+                )
+                SELECT
+                    source_id,
+                    label,
+                    metrics_json,
+                    icon_key,
+                    color_value
+                FROM chart_data_sources_legacy
+                """
+            )
+            connection.execute("DROP TABLE chart_data_sources_legacy")
         connection.commit()
 
 
@@ -183,6 +246,37 @@ def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) ->
         with sqlite3.connect(db_path) as connection:
             connection.execute("DELETE FROM camera_images")
             connection.execute("DELETE FROM sensor_history")
+            connection.execute("DELETE FROM chart_data_sources")
+            connection.commit()
+
+    with sqlite3.connect(db_path) as connection:
+        if overwrite:
+            connection.execute("DELETE FROM chart_data_sources")
+
+        source_rows = [
+            (
+                source["id"],
+                source["label"],
+                json.dumps(source["metrics"]),
+                source["icon"],
+                source["color"],
+            )
+            for source in CHART_DATA_SOURCE_SEED
+        ]
+        if source_rows:
+            connection.executemany(
+                """
+                INSERT OR REPLACE INTO chart_data_sources (
+                    source_id,
+                    label,
+                    metrics_json,
+                    icon_key,
+                    color_value
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                source_rows,
+            )
             connection.commit()
 
     sensor_rows = [
@@ -202,10 +296,19 @@ def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) ->
         for row in generate_historical_data(SENSOR_HISTORY_HOURS, webcam_id=camera_id)
     ]
     with sqlite3.connect(db_path) as connection:
+        refresh_history = overwrite
         if overwrite:
             connection.execute("DELETE FROM sensor_history")
-        elif connection.execute("SELECT 1 FROM sensor_history LIMIT 1").fetchone():
-            sensor_rows = []
+        else:
+            latest_history_timestamp = connection.execute(
+                "SELECT MAX(timestamp) FROM sensor_history"
+            ).fetchone()[0]
+            latest_history_at = _parse_iso_utc(latest_history_timestamp)
+            refresh_history = latest_history_at is None or latest_history_at < (datetime.now(timezone.utc) - timedelta(hours=24))
+            if refresh_history:
+                connection.execute("DELETE FROM sensor_history")
+            else:
+                sensor_rows = []
 
         if sensor_rows:
             connection.executemany(
