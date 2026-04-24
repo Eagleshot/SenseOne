@@ -143,7 +143,6 @@ def _ensure_camera_schema(db_path: Path) -> None:
             CREATE TABLE IF NOT EXISTS chart_data_sources (
                 source_id TEXT PRIMARY KEY,
                 label TEXT NOT NULL,
-                metrics_json TEXT NOT NULL,
                 icon_key TEXT NOT NULL,
                 color_value TEXT NOT NULL
             )
@@ -156,7 +155,6 @@ def _ensure_camera_schema(db_path: Path) -> None:
         expected_chart_source_columns = [
             "source_id",
             "label",
-            "metrics_json",
             "icon_key",
             "color_value",
         ]
@@ -167,7 +165,6 @@ def _ensure_camera_schema(db_path: Path) -> None:
                 CREATE TABLE chart_data_sources (
                     source_id TEXT PRIMARY KEY,
                     label TEXT NOT NULL,
-                    metrics_json TEXT NOT NULL,
                     icon_key TEXT NOT NULL,
                     color_value TEXT NOT NULL
                 )
@@ -178,14 +175,12 @@ def _ensure_camera_schema(db_path: Path) -> None:
                 INSERT INTO chart_data_sources (
                     source_id,
                     label,
-                    metrics_json,
                     icon_key,
                     color_value
                 )
                 SELECT
                     source_id,
                     label,
-                    metrics_json,
                     icon_key,
                     color_value
                 FROM chart_data_sources_legacy
@@ -257,7 +252,6 @@ def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) ->
             (
                 source["id"],
                 source["label"],
-                json.dumps(source["metrics"]),
                 source["icon"],
                 source["color"],
             )
@@ -269,11 +263,10 @@ def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) ->
                 INSERT OR REPLACE INTO chart_data_sources (
                     source_id,
                     label,
-                    metrics_json,
                     icon_key,
                     color_value
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?)
                 """,
                 source_rows,
             )

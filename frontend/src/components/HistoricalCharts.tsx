@@ -19,50 +19,37 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import { fetchJson, isAbortError } from "@/contexts/appContextUtils";
 import { formatDateTimeLabel, formatTimeLabel } from "@/lib/datetime";
+import { TEMPERATURE_UNIT } from "@/lib/units";
 import { useApp } from "@/contexts/useApp";
-import type { ChartDataSource, SensorData } from "@/data/types";
-
-type MetricType =
-  | "temperature"
-  | "battery"
-  | "humidity"
-  | "windSpeed"
-  | "pressure"
-  | "visibility"
-  | "uvIndex"
-  | "dewPoint"
-  | "feelsLike";
-
-type ChartIconKey = "line" | "thermometer" | "battery" | "humidity" | "wind" | "gauge" | "activity" | "eye";
+import type { SensorData } from "@/data/types";
+import type { ChartIconKey, MetricType } from "./historicalChartUtils";
 
 type ChartConfig = {
   id: string;
   title: string;
   icon: ChartIconKey;
   color: string;
-  dataSourceId: string;
   metrics: MetricType[];
 };
 
 type ChartDraft = Omit<ChartConfig, "id">;
-type ChartDataSourceOption = Omit<ChartDataSource, "metrics" | "icon"> & { metrics: MetricType[]; icon: ChartIconKey };
 
 const metricConfig: Record<MetricType, { label: string; unit: string; color: string }> = {
-  temperature: { label: "Temperature", unit: "°C", color: "hsl(var(--chart-1))" },
+  temperature: { label: "Temperature", unit: TEMPERATURE_UNIT, color: "hsl(var(--chart-1))" },
   battery: { label: "Battery Level", unit: "%", color: "hsl(var(--chart-2))" },
   humidity: { label: "Humidity", unit: "%", color: "hsl(var(--chart-3))" },
   windSpeed: { label: "Wind Speed", unit: "km/h", color: "hsl(var(--chart-1))" },
   pressure: { label: "Pressure", unit: "hPa", color: "hsl(var(--chart-2))" },
   visibility: { label: "Visibility", unit: "km", color: "hsl(var(--chart-3))" },
   uvIndex: { label: "UV Index", unit: "", color: "hsl(var(--chart-1))" },
-  dewPoint: { label: "Dew Point", unit: "°C", color: "hsl(var(--chart-2))" },
-  feelsLike: { label: "Feels Like", unit: "°C", color: "hsl(var(--chart-3))" },
+  dewPoint: { label: "Dew Point", unit: TEMPERATURE_UNIT, color: "hsl(var(--chart-2))" },
+  feelsLike: { label: "Feels Like", unit: TEMPERATURE_UNIT, color: "hsl(var(--chart-3))" },
 };
 
 const chartIconConfig: Record<ChartIconKey, React.ComponentType<{ className?: string }>> = {
@@ -87,8 +74,11 @@ const chartIconOptions: Array<{ value: ChartIconKey; label: string }> = [
   { value: "eye", label: "Eye" },
 ];
 
-const getAutoChartTitle = (sourceLabel: string, metrics: MetricType[]) =>
-  sourceLabel.trim() || metrics.map((metric) => metricConfig[metric].label).join(" + ") || "Custom Chart";
+const ADD_CHART_LABEL = "Add Chart";
+const CHART_SETTINGS_LABEL = "Chart Settings";
+
+const getAutoChartTitle = (metrics: MetricType[]) =>
+  metrics.map((metric) => metricConfig[metric].label).join(" + ") || "Custom Chart";
 const chartThemeColorOptions = [
   { value: "hsl(var(--chart-1))", label: "Theme Chart 1" },
   { value: "hsl(var(--chart-2))", label: "Theme Chart 2" },
@@ -99,13 +89,29 @@ type ChartColorSelection = ChartThemeColorValue | "custom";
 
 const createChartId = () => `chart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const createDefaultChart = (source: ChartDataSourceOption): ChartConfig => ({
+const ALL_METRICS: MetricType[] = [
+  "temperature",
+  "battery",
+  "humidity",
+  "windSpeed",
+  "pressure",
+  "visibility",
+  "uvIndex",
+  "dewPoint",
+  "feelsLike",
+];
+
+const getDefaultMetrics = (): MetricType[] => ["temperature"];
+
+const orderMetrics = (selectedMetrics: MetricType[]) =>
+  ALL_METRICS.filter((metric) => selectedMetrics.includes(metric));
+
+const createDefaultChart = (): ChartConfig => ({
   id: createChartId(),
-  title: getAutoChartTitle(source.label, source.metrics),
-  icon: source.icon,
-  color: source.color,
-  dataSourceId: source.id,
-  metrics: [...source.metrics],
+  title: getAutoChartTitle(getDefaultMetrics()),
+  icon: "line",
+  color: chartThemeColorOptions[0].value,
+  metrics: getDefaultMetrics(),
 });
 
 const sanitizeFileName = (value: string) =>
@@ -127,21 +133,6 @@ const getColorSelection = (value: string): ChartColorSelection => {
   if (themeColorValue) return themeColorValue;
   if (isValidHexColor(value)) return "custom";
   return chartThemeColorOptions[0].value;
-};
-
-const isMetricType = (value: string): value is MetricType => value in metricConfig;
-const isChartIconKey = (value: string): value is ChartIconKey => value in chartIconConfig;
-
-const normalizeChartDataSource = (item: ChartDataSource): ChartDataSourceOption | null => {
-  const metrics = item.metrics.filter(isMetricType);
-  if (!metrics.length) return null;
-
-  return {
-    ...item,
-    metrics,
-    icon: isChartIconKey(item.icon) ? item.icon : "line",
-    color: item.color?.trim() || chartThemeColorOptions[0].value,
-  };
 };
 
 const inlineSvgStyles = (source: Element, target: Element) => {
@@ -280,12 +271,12 @@ const ChartTooltip = ({
 type ChartCardProps = {
   config: ChartConfig;
   data: SensorData[];
-  dataSources: ChartDataSourceOption[];
-  sourceById: Map<string, ChartDataSourceOption>;
   timezone: string;
   isDarkMode: boolean;
+  isSettingsOpen: boolean;
   index: number;
   total: number;
+  onSettingsOpenChange: (open: boolean) => void;
   onUpdate: (id: string, updates: Partial<ChartConfig>) => void;
   onMove: (id: string, direction: "up" | "down") => void;
   onRemove: (id: string) => void;
@@ -294,43 +285,42 @@ type ChartCardProps = {
 const ChartCard: React.FC<ChartCardProps> = ({
   config,
   data,
-  dataSources,
-  sourceById,
   timezone,
   isDarkMode,
+  isSettingsOpen,
   index,
   total,
+  onSettingsOpenChange,
   onUpdate,
   onMove,
   onRemove,
 }) => {
   const Icon = chartIconConfig[config.icon];
   const chartRef = useRef<HTMLDivElement | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<ChartDraft>({
     title: config.title,
     icon: config.icon,
     color: config.color,
-    dataSourceId: config.dataSourceId,
     metrics: config.metrics,
   });
+  const [metricsDropdownOpen, setMetricsDropdownOpen] = useState(false);
   const [colorSelection, setColorSelection] = useState<ChartColorSelection>(() => getColorSelection(config.color));
   const [customColor, setCustomColor] = useState<string>(
     isValidHexColor(config.color) ? config.color : DEFAULT_CUSTOM_COLOR
   );
 
   useEffect(() => {
-    if (!isEditing) return;
+    if (!isSettingsOpen) return;
     setDraft({
       title: config.title,
       icon: config.icon,
       color: config.color,
-      dataSourceId: config.dataSourceId,
       metrics: config.metrics,
     });
     setColorSelection(getColorSelection(config.color));
     setCustomColor(isValidHexColor(config.color) ? config.color : DEFAULT_CUSTOM_COLOR);
-  }, [config, isEditing]);
+    setMetricsDropdownOpen(false);
+  }, [config, isSettingsOpen]);
 
   const chartData = useMemo(
     () =>
@@ -350,39 +340,43 @@ const ChartCard: React.FC<ChartCardProps> = ({
     [data, timezone]
   );
 
-  const handleDataSourceChange = (sourceId: string) => {
-    const nextSource = sourceById.get(sourceId);
-    if (!nextSource) return;
-
+  const handleMetricToggle = (metric: MetricType, checked: boolean | "indeterminate") => {
     setDraft((prev) => {
-      const previousSource = sourceById.get(prev.dataSourceId);
-      const previousAutoTitle = getAutoChartTitle(previousSource?.label ?? "", prev.metrics);
+      const currentAutoTitle = getAutoChartTitle(prev.metrics);
+
+      if (checked === true) {
+        const nextMetrics = orderMetrics([...prev.metrics, metric]);
+        return {
+          ...prev,
+          title: prev.title === currentAutoTitle ? getAutoChartTitle(nextMetrics) : prev.title,
+          metrics: nextMetrics,
+        };
+      }
+
+      const nextMetrics = prev.metrics.filter((item) => item !== metric);
+      if (nextMetrics.length === 0) {
+        return prev;
+      }
+
       return {
         ...prev,
-        title: prev.title === previousAutoTitle ? getAutoChartTitle(nextSource.label, nextSource.metrics) : prev.title,
-        icon: nextSource.icon,
-        color: nextSource.color,
-        dataSourceId: nextSource.id,
-        metrics: [...nextSource.metrics],
+        title: prev.title === currentAutoTitle ? getAutoChartTitle(nextMetrics) : prev.title,
+        metrics: orderMetrics(nextMetrics),
       };
     });
-    setColorSelection(getColorSelection(nextSource.color));
-    setCustomColor(isValidHexColor(nextSource.color) ? nextSource.color : DEFAULT_CUSTOM_COLOR);
   };
 
   const handleSave = () => {
     const nextColor =
       colorSelection === "custom" ? (isValidHexColor(customColor) ? customColor : DEFAULT_CUSTOM_COLOR) : draft.color;
-    const selectedSource = sourceById.get(draft.dataSourceId);
-    const nextMetrics = selectedSource?.metrics.length ? selectedSource.metrics : draft.metrics.length ? draft.metrics : ["temperature"];
+    const nextMetrics = draft.metrics.length > 0 ? orderMetrics(draft.metrics) : getDefaultMetrics();
     onUpdate(config.id, {
-      title: draft.title.trim() || getAutoChartTitle(selectedSource?.label ?? "", nextMetrics),
+      title: draft.title.trim() || getAutoChartTitle(nextMetrics),
       icon: draft.icon,
       color: nextColor,
-      dataSourceId: selectedSource?.id ?? draft.dataSourceId,
       metrics: nextMetrics,
     });
-    setIsEditing(false);
+    onSettingsOpenChange(false);
   };
 
   const handleColorSelectionChange = (value: ChartColorSelection) => {
@@ -440,15 +434,15 @@ const ChartCard: React.FC<ChartCardProps> = ({
           >
             <ArrowDown className="h-4 w-4" />
           </Button>
-          <Dialog open={isEditing} onOpenChange={setIsEditing}>
+          <Dialog open={isSettingsOpen} onOpenChange={onSettingsOpenChange}>
             <DialogTrigger asChild>
-              <Button type="button" variant="ghost" size="icon" aria-label="Edit chart" className="btn-icon-panel h-8 w-8">
+              <Button type="button" variant="ghost" size="icon" aria-label={CHART_SETTINGS_LABEL} className="btn-icon-panel h-8 w-8">
                 <Settings2 className="h-4 w-4" />
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Edit Chart</DialogTitle>
+                <DialogTitle>{CHART_SETTINGS_LABEL}</DialogTitle>
               </DialogHeader>
               <div className="space-y-4">
                 <div className="space-y-2">
@@ -458,6 +452,45 @@ const ChartCard: React.FC<ChartCardProps> = ({
                     onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
                     placeholder="Chart title"
                   />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm text-muted-foreground">Metrics</label>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setMetricsDropdownOpen(!metricsDropdownOpen)}
+                      className="inline-flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <span className="text-left">
+                        {draft.metrics.length > 0
+                          ? draft.metrics.map((m) => metricConfig[m].label).join(", ")
+                          : "Select metrics..."}
+                      </span>
+                      <span className="ml-2 opacity-50">▼</span>
+                    </button>
+                    {metricsDropdownOpen && (
+                      <div className="absolute z-50 mt-1 w-full rounded-md border border-input bg-popover shadow-md">
+                        {ALL_METRICS.map((metric, index) => (
+                          <label
+                            key={metric}
+                            className={`flex items-center gap-3 px-3 py-2 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground transition-colors ${
+                              index < ALL_METRICS.length - 1 ? 'border-b border-border/50' : ''
+                            }`}
+                          >
+                            <Checkbox
+                              checked={draft.metrics.includes(metric)}
+                              onCheckedChange={(checked) => handleMetricToggle(metric, checked)}
+                              disabled={draft.metrics.length === 1 && draft.metrics.includes(metric)}
+                            />
+                            <span className="flex flex-1 items-center justify-between gap-2">
+                              <span className="font-medium text-foreground">{metricConfig[metric].label}</span>
+                              <span className="text-xs text-muted-foreground">{metricConfig[metric].unit || "Value"}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-2">
@@ -535,21 +568,6 @@ const ChartCard: React.FC<ChartCardProps> = ({
                       )}
                     </div>
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Data Source</label>
-                  <Select value={draft.dataSourceId} onValueChange={handleDataSourceChange} disabled={dataSources.length === 0}>
-                    <SelectTrigger className="h-9">
-                      <SelectValue placeholder="Select data source" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {dataSources.map((source) => (
-                        <SelectItem key={source.id} value={source.id}>
-                          {source.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                 </div>
                 <div className="flex justify-end">
                   <Button type="button" onClick={handleSave}>
@@ -641,61 +659,36 @@ const ChartCard: React.FC<ChartCardProps> = ({
 };
 
 interface HistoricalChartsProps {
+  activeStationId: string;
   data: SensorData[];
   addChartSignal?: number;
 }
 
-export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addChartSignal }) => {
-  const { activeWebcam, timezone, isDarkMode } = useApp();
+export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({
+  activeStationId,
+  data,
+  addChartSignal,
+}) => {
+  const { timezone, isDarkMode } = useApp();
   const [charts, setCharts] = useState<ChartConfig[]>([]);
-  const [dataSources, setDataSources] = useState<ChartDataSourceOption[]>([]);
-  const [isLoadingDataSources, setIsLoadingDataSources] = useState(false);
+  const [activeSettingsChartId, setActiveSettingsChartId] = useState<string | null>(null);
   const previousAddSignal = useRef<number | undefined>(addChartSignal);
-  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api";
-  const sourceById = useMemo(
-    () => new Map(dataSources.map((source) => [source.id, source])),
-    [dataSources]
-  );
+  const previousStationId = useRef(activeStationId);
 
   const addChart = () => {
-    if (!dataSources.length) return;
-    setCharts((prev) => [...prev, createDefaultChart(dataSources[0])]);
+    const nextChart = createDefaultChart();
+    setCharts((prev) => [...prev, nextChart]);
+    setActiveSettingsChartId(nextChart.id);
   };
 
   useEffect(() => {
-    if (!activeWebcam.id) {
-      setDataSources([]);
-      setIsLoadingDataSources(false);
-      return;
-    }
+    if (activeStationId === previousStationId.current) return;
 
-    const controller = new AbortController();
-    const loadDataSources = async () => {
-      setIsLoadingDataSources(true);
-      try {
-        const response = await fetchJson<ChartDataSource[]>(
-          `${apiBaseUrl}/stations/${encodeURIComponent(activeWebcam.id)}/chart-data-sources`,
-          { signal: controller.signal }
-        );
-        const nextSources = (response ?? [])
-          .map(normalizeChartDataSource)
-          .filter((source): source is ChartDataSourceOption => source !== null);
-        setDataSources(nextSources);
-      } catch (error) {
-        if (!isAbortError(error)) {
-          setDataSources([]);
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsLoadingDataSources(false);
-        }
-      }
-    };
-
-    void loadDataSources();
-
-    return () => controller.abort();
-  }, [activeWebcam.id, apiBaseUrl]);
+    setCharts([]);
+    setActiveSettingsChartId(null);
+    previousAddSignal.current = addChartSignal;
+    previousStationId.current = activeStationId;
+  }, [activeStationId, addChartSignal]);
 
   useEffect(() => {
     if (addChartSignal === undefined) return;
@@ -704,12 +697,12 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
       return;
     }
     if (addChartSignal !== previousAddSignal.current) {
-      if (dataSources.length) {
-        setCharts((prev) => [...prev, createDefaultChart(dataSources[0])]);
-      }
+      const nextChart = createDefaultChart();
+      setCharts((prev) => [...prev, nextChart]);
+      setActiveSettingsChartId(nextChart.id);
       previousAddSignal.current = addChartSignal;
     }
-  }, [addChartSignal, dataSources]);
+  }, [addChartSignal]);
 
   const updateChart = (id: string, updates: Partial<ChartConfig>) => {
     setCharts((prev) => prev.map((chart) => (chart.id === id ? { ...chart, ...updates } : chart)));
@@ -728,6 +721,7 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
   };
 
   const removeChart = (id: string) => {
+    setActiveSettingsChartId((currentId) => (currentId === id ? null : currentId));
     setCharts((prev) => prev.filter((chart) => chart.id !== id));
   };
 
@@ -741,7 +735,7 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
           <div className="space-y-1">
             <p className="text-base font-semibold text-foreground">No charts added</p>
             <p className="text-sm text-muted-foreground">
-              {isLoadingDataSources ? "Loading data sources from the backend." : "Create a new chart to start visualizing sensor data."}
+              Create a new chart to start visualizing sensor data.
             </p>
           </div>
           <Button
@@ -750,11 +744,10 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
             size="sm"
             onClick={addChart}
             className="btn-panel"
-            disabled={isLoadingDataSources || dataSources.length === 0}
           >
-            <Plus className="h-4 w-4" />
-            Create Chart
-          </Button>
+              <Plus className="h-4 w-4" />
+              {ADD_CHART_LABEL}
+            </Button>
         </div>
       ) : (
         charts.map((chart, index) => (
@@ -762,12 +755,14 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, addCha
             key={chart.id}
             config={chart}
             data={data}
-            dataSources={dataSources}
-            sourceById={sourceById}
             timezone={timezone}
             isDarkMode={isDarkMode}
+            isSettingsOpen={activeSettingsChartId === chart.id}
             index={index}
             total={charts.length}
+            onSettingsOpenChange={(open) =>
+              setActiveSettingsChartId((currentId) => (open ? chart.id : currentId === chart.id ? null : currentId))
+            }
             onUpdate={updateChart}
             onMove={moveChart}
             onRemove={removeChart}

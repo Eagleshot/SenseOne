@@ -1,4 +1,3 @@
-import { endOfDay, startOfDay } from "date-fns";
 import type { DateRange } from "react-day-picker";
 
 import { SensorData } from "@/data/types";
@@ -10,6 +9,7 @@ type HistoryFilterOptions = {
   dateRange?: DateRange;
   timeFrom: string;
   timeTo: string;
+  timezone: string;
 };
 
 export const createDefaultHistoryDateRange = (): DateRange => ({
@@ -46,18 +46,46 @@ export const isMinuteWithinRange = (
   return currentMinutes <= toMinutes!;
 };
 
-export const filterHistoricalData = ({ data, dateRange, timeFrom, timeTo }: HistoryFilterOptions) => {
-  const fromDate = dateRange?.from ? startOfDay(dateRange.from) : undefined;
-  const toDate = dateRange?.to ? endOfDay(dateRange.to) : undefined;
+const padNumber = (value: number) => String(value).padStart(2, "0");
+
+const getLocalDateKey = (value: Date) =>
+  `${value.getFullYear()}-${padNumber(value.getMonth() + 1)}-${padNumber(value.getDate())}`;
+
+const createZonedDateTimeFormatter = (timezone: string) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
+  });
+
+const getDateKeyAndMinuteOfDay = (value: Date, formatter: Intl.DateTimeFormat) => {
+  const parts = Object.fromEntries(formatter.formatToParts(value).map((part) => [part.type, part.value]));
+  const hour = Number(parts.hour ?? "0");
+  const minute = Number(parts.minute ?? "0");
+
+  return {
+    dateKey: `${parts.year}-${parts.month}-${parts.day}`,
+    minuteOfDay: hour * 60 + minute,
+  };
+};
+
+export const filterHistoricalData = ({ data, dateRange, timeFrom, timeTo, timezone }: HistoryFilterOptions) => {
+  const fromDateKey = dateRange?.from ? getLocalDateKey(dateRange.from) : undefined;
+  const toDateKey = dateRange?.to ? getLocalDateKey(dateRange.to) : undefined;
   const fromMinutes = parseTimeToMinutes(timeFrom);
   const toMinutes = parseTimeToMinutes(timeTo);
+  const formatter = createZonedDateTimeFormatter(timezone);
 
   return data.filter((row) => {
-    const timestamp = row.timestamp;
-    if (fromDate && timestamp < fromDate) return false;
-    if (toDate && timestamp > toDate) return false;
+    const { dateKey, minuteOfDay } = getDateKeyAndMinuteOfDay(row.timestamp, formatter);
+    if (fromDateKey && dateKey < fromDateKey) return false;
+    if (toDateKey && dateKey > toDateKey) return false;
 
-    const currentMinutes = timestamp.getHours() * 60 + timestamp.getMinutes();
-    return isMinuteWithinRange(currentMinutes, fromMinutes, toMinutes);
+    return isMinuteWithinRange(minuteOfDay, fromMinutes, toMinutes);
   });
 };

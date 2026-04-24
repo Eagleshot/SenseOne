@@ -167,7 +167,7 @@ export const InteractiveMap: React.FC = () => {
               <h2 className="text-2xl font-bold text-foreground">Map</h2>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-background/70 p-1">
+              <div className="chrome-shell-stroke inline-flex items-center gap-1 rounded-lg border border-input bg-background/70 p-1">
                 <Button
                   type="button"
                   size="sm"
@@ -254,7 +254,7 @@ export const InteractiveMap: React.FC = () => {
                 <h2 className="text-xl font-semibold text-foreground">Map</h2>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-background/70 p-1">
+                <div className="chrome-shell-stroke inline-flex items-center gap-1 rounded-lg border border-input bg-background/70 p-1">
                   <Button
                     type="button"
                     size="sm"

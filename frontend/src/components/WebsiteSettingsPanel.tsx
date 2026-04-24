@@ -189,22 +189,21 @@ export const WebsiteSettingsPanel: React.FC = () => {
         >
           <AccordionItem value="camera-schedule" className="rounded-xl border border-border bg-transparent">
             <AccordionTrigger className="px-4 text-sm font-semibold text-foreground hover:no-underline">
-              Camera Schedule
+              Schedule
             </AccordionTrigger>
             <AccordionContent className="px-4 pb-4 pt-0">
-              <div className="space-y-4 rounded-xl border border-border bg-[hsl(var(--sidebar-background))]/40 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <p className="text-muted-foreground">These settings are saved to the selected station.</p>
-                  <p className={cn('font-medium', stationConfigError ? 'text-destructive' : 'text-muted-foreground')}>
-                    {stationConfigError
-                      ? stationConfigError
-                      : isStationConfigLoading
-                        ? 'Loading station settings...'
-                        : isStationConfigSaving
-                          ? 'Saving changes...'
-                          : 'All changes saved.'}
-                  </p>
-                </div>
+              <div className="space-y-4 pt-1">
+                {(stationConfigError || isStationConfigLoading || isStationConfigSaving) && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <p className={cn('font-medium', stationConfigError ? 'text-destructive' : 'text-muted-foreground')}>
+                      {stationConfigError
+                        ? stationConfigError
+                        : isStationConfigLoading
+                          ? 'Loading station settings...'
+                          : 'Saving changes...'}
+                    </p>
+                  </div>
+                )}
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="text-sm font-medium text-foreground">Use sunrise/sunset</p>

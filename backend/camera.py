@@ -1,6 +1,5 @@
 """Camera-related operations and data processing."""
 
-import json
 import sqlite3
 import logging
 from datetime import datetime, timedelta, timezone
@@ -197,7 +196,6 @@ def chart_data_sources_from_camera_db(base_dir: Path, camera_id: str) -> list[di
                 SELECT
                     source_id,
                     label,
-                    metrics_json,
                     icon_key,
                     color_value
                 FROM chart_data_sources
@@ -213,17 +211,10 @@ def chart_data_sources_from_camera_db(base_dir: Path, camera_id: str) -> list[di
 
     sources: list[dict[str, object]] = []
     for row in rows:
-        try:
-            metrics = json.loads(row["metrics_json"])
-        except (TypeError, json.JSONDecodeError):
-            metrics = []
-        if not isinstance(metrics, list) or not metrics:
-            continue
         sources.append(
             {
                 "id": row["source_id"],
                 "label": row["label"],
-                "metrics": metrics,
                 "icon": row["icon_key"],
                 "color": row["color_value"],
             }

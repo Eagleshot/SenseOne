@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 import { cn } from "@/lib/utils";
 import { formatCsvTimestamp, formatDateTimeLabel } from "@/lib/datetime";
+import { TEMPERATURE_UNIT } from "@/lib/units";
 import { useApp } from "@/contexts/useApp";
 import type { SensorData } from "@/data/types";
 
@@ -50,6 +51,10 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
   const formattedTimestamps = useMemo(
     () => new Map(data.map((d) => [d, formatDateTimeLabel(d.timestamp, timezone)])),
     [data, timezone]
+  );
+  const rowKeys = useMemo(
+    () => new Map(data.map((row, index) => [row, `${row.timestamp.toISOString()}-${index}`])),
+    [data]
   );
 
   const filteredAndSortedData = useMemo(() => {
@@ -103,7 +108,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
   const handleDownloadCSV = useCallback(() => {
     const headers = [
       "Timestamp",
-      "Temperature (°C)",
+      `Temperature (${TEMPERATURE_UNIT})`,
       "Humidity (%)",
       "Battery (%)",
       "Wind (km/h)",
@@ -197,9 +202,9 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                   </TableRow>
                 ) : (
                   paginatedData.map((row) => (
-                    <TableRow key={row.timestamp.getTime()} className="hover:bg-[hsl(var(--sidebar-background))]">
+                    <TableRow key={rowKeys.get(row) ?? row.timestamp.toISOString()} className="hover:bg-[hsl(var(--sidebar-background))]">
                       <TableCell className="font-medium">{formattedTimestamps.get(row)}</TableCell>
-                      <TableCell>{row.temperature} °C</TableCell>
+                      <TableCell>{row.temperature} {TEMPERATURE_UNIT}</TableCell>
                       <TableCell>{row.humidity}%</TableCell>
                       <TableCell>
                         <span

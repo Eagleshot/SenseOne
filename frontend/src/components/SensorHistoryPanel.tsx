@@ -15,8 +15,10 @@ import { createDefaultHistoryDateRange, filterHistoricalData } from "@/lib/histo
 import { HistoricalCharts } from "./HistoricalCharts";
 import { RawDataTable } from "./RawDataTable";
 
+const ADD_CHART_LABEL = "Add Chart";
+
 export const SensorHistoryPanel: React.FC = () => {
-  const { historicalData } = useApp();
+  const { activeWebcam, historicalData, timezone } = useApp();
   const [dateRange, setDateRange] = useState<DateRange | undefined>(createDefaultHistoryDateRange);
   const [timeFrom, setTimeFrom] = useState("00:00");
   const [timeTo, setTimeTo] = useState("23:59");
@@ -28,8 +30,9 @@ export const SensorHistoryPanel: React.FC = () => {
       dateRange,
       timeFrom,
       timeTo,
+      timezone,
     });
-  }, [historicalData, dateRange, timeFrom, timeTo]);
+  }, [historicalData, dateRange, timeFrom, timeTo, timezone]);
 
   return (
     <motion.div
@@ -42,7 +45,7 @@ export const SensorHistoryPanel: React.FC = () => {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
             <LineChart className="h-5 w-5 text-muted-foreground" />
-            <h2 className="text-2xl font-bold text-foreground">Sensor Data</h2>
+            <h2 className="text-2xl font-bold text-foreground">Data</h2>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Button
@@ -53,7 +56,7 @@ export const SensorHistoryPanel: React.FC = () => {
               className="btn-panel"
             >
               <Plus className="w-4 h-4" />
-              Add Chart
+              {ADD_CHART_LABEL}
             </Button>
             <Popover>
               <PopoverTrigger asChild>
@@ -102,10 +105,13 @@ export const SensorHistoryPanel: React.FC = () => {
       </div>
 
       <div className="space-y-6 p-4 sm:p-6">
-        <HistoricalCharts data={filteredData} addChartSignal={addChartSignal} />
+        <HistoricalCharts
+          activeStationId={activeWebcam.id}
+          addChartSignal={addChartSignal}
+          data={filteredData}
+        />
         <RawDataTable data={filteredData} />
       </div>
     </motion.div>
   );
 };
-

@@ -123,14 +123,19 @@ export const resolveApiMediaUrl = (url: string | null | undefined, apiBaseUrl: s
   return `${normalizedBase}${url}`;
 };
 
+// Python-generated mock data includes microsecond precision, which some browsers
+// parse inconsistently. Trim to milliseconds before constructing Date objects.
+export const parseApiTimestamp = (value: string): Date =>
+  new Date(value.replace(/(\.\d{3})\d+(?=(?:Z|[+-]\d{2}:\d{2})$)/, "$1"));
+
 /** Transform station response (summary or detail) to Webcam. */
 export const parseStationResponse = (item: StationDetailResponse | StationSummaryResponse, apiBaseUrl?: string): Webcam => {
   const baseItem = item as StationDetailResponse;
   return {
     ...item,
     currentImage: apiBaseUrl ? resolveApiMediaUrl(baseItem.currentImage, apiBaseUrl) : (baseItem.currentImage ?? null),
-    lastUpdate: baseItem.lastUpdate ? new Date(baseItem.lastUpdate) : null,
-    nextUpdate: baseItem.nextUpdate ? new Date(baseItem.nextUpdate) : null,
+    lastUpdate: baseItem.lastUpdate ? parseApiTimestamp(baseItem.lastUpdate) : null,
+    nextUpdate: baseItem.nextUpdate ? parseApiTimestamp(baseItem.nextUpdate) : null,
   };
 };
 
@@ -161,13 +166,13 @@ export const parseTimestampResponse = <T extends { timestamp: string }, U extend
   item: T
 ): U => ({
   ...item,
-  timestamp: new Date(item.timestamp),
+  timestamp: parseApiTimestamp(item.timestamp),
 } as U);
 
 export const parseTimelineItemResponse = (item: TimelineItemResponse, apiBaseUrl: string): TimelineImage => ({
   ...item,
   url: resolveApiMediaUrl(item.url, apiBaseUrl) ?? item.url,
-  timestamp: new Date(item.timestamp),
+  timestamp: parseApiTimestamp(item.timestamp),
 });
 
 export const fetchJson = async <T,>(url: string, options: FetchJsonOptions = {}): Promise<T | null> => {

@@ -152,20 +152,21 @@ class TestChartDataSource:
         source = ChartDataSource(
             id="temperature",
             label="Temperature",
-            metrics=["temperature"],
             icon="thermometer",
             color="hsl(var(--chart-1))",
         )
         assert source.id == "temperature"
-        assert source.metrics == ["temperature"]
+        assert source.label == "Temperature"
+        assert source.icon == "thermometer"
+        assert source.color == "hsl(var(--chart-1))"
 
-    def test_chart_data_source_requires_metrics(self):
-        """Test ChartDataSource rejects empty metrics."""
-        with pytest.raises(ValueError, match="at least 1 item"):
-            ChartDataSource(
-                id="temperature",
-                label="Temperature",
-                metrics=[],
-                icon="thermometer",
-                color="hsl(var(--chart-1))",
-            )
+    def test_chart_data_source_strips_whitespace(self):
+        """Test ChartDataSource trims whitespace from text fields."""
+        source = ChartDataSource(
+            id=" temperature ",
+            label=" Temperature ",
+            icon=" thermometer ",
+            color=" hsl(var(--chart-1)) ",
+        )
+        assert source.id == "temperature"
+        assert source.label == "Temperature"

@@ -90,7 +90,6 @@ class ChartDataSource(BaseModel):
 
     id: str = Field(min_length=1)
     label: str = Field(min_length=1)
-    metrics: list[str] = Field(default_factory=list, min_length=1)
     icon: str = Field(min_length=1)
     color: str = Field(min_length=1)
 
@@ -98,11 +97,3 @@ class ChartDataSource(BaseModel):
     @classmethod
     def validate_chart_text_field(cls, value: str) -> str:
         return value.strip()
-
-    @field_validator("metrics")
-    @classmethod
-    def validate_metrics_field(cls, value: list[str]) -> list[str]:
-        cleaned = [item.strip() for item in value if item.strip()]
-        if not cleaned:
-            raise ValueError("At least one metric is required.")
-        return cleaned
