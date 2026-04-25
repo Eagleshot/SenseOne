@@ -60,7 +60,13 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_times_order(self) -> "AppConfig":
-        """Validate that camera start time is before stop time."""
+        """Validate that camera start time is before stop time.
+
+        Skipped when use_sunrise_sunset is enabled, since the device ignores
+        start/stop times in that mode and the stored values may be stale.
+        """
+        if self.use_sunrise_sunset:
+            return self
         if self.camera_start_time >= self.camera_stop_time:
             raise ValueError(
                 f"Camera start time ({self.camera_start_time}) must be earlier than stop time ({self.camera_stop_time})"

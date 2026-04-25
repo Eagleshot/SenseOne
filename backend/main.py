@@ -9,7 +9,6 @@ configuration, and uploads.
 
 import logging
 import os
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,10 +20,6 @@ from auth import AUTH_ENABLED
 
 # Import route modules
 from routes import system, auth, stations, uploads, stations_images_weather
-
-# Environment configuration
-BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_CAMERA_ID = (os.getenv("APP_DEFAULT_CAMERA_ID") or "default").strip() or "default"
 
 # Parse CORS origins
 def parse_cors_origins() -> list[str]:
@@ -120,18 +115,3 @@ app.include_router(auth.router)
 app.include_router(stations.router)
 app.include_router(uploads.router)
 app.include_router(stations_images_weather.router)
-
-
-# Application entry point
-if __name__ == "__main__":
-    import uvicorn
-    from auth import parse_positive_int_env
-
-    port = parse_positive_int_env("PORT", 3000)
-    host = os.getenv("HOST", "0.0.0.0")
-    
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-    )

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { extractErrorDetail } from "@/lib/apiClient";
+
 import { fetchJson, isAbortError, LoginResponse, MeResponse } from "./appContextUtils";
 
 type AuthResult = {
@@ -60,13 +62,15 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
       });
 
       if (!response.ok) {
-        let message = "Invalid username or password.";
+        const fallback =
+          response.status === 429
+            ? "Too many login attempts. Try again later."
+            : "Invalid username or password.";
+        let message = fallback;
 
         try {
-          const payload = (await response.json()) as { detail?: string };
-          if (payload.detail) {
-            message = payload.detail;
-          }
+          const payload = await response.json();
+          message = extractErrorDetail(payload, fallback);
         } catch {
           // Keep the fallback message when the response body is not JSON.
         }

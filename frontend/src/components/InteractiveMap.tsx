@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 
 import { useApp } from '@/contexts/useApp';
 import { formatLocationWithFlag } from '@/lib/location';
+import { OPEN_FULLSCREEN_MAP_EVENT } from '@/lib/mapEvents';
 import { cn } from '@/lib/utils';
 
 const mapTileLayers = {
@@ -29,12 +30,21 @@ const mapTileLayers = {
   },
 } as const;
 
-const ActiveMarkerCenter: React.FC<{ lat: number; lng: number }> = ({ lat, lng }) => {
+type ActiveMarkerCenterProps = {
+  webcamId: string;
+  lat: number;
+  lng: number;
+};
+
+const ActiveMarkerCenter: React.FC<ActiveMarkerCenterProps> = ({ webcamId, lat, lng }) => {
   const map = useMap();
 
+  // Only re-center when the active camera changes — not on every coordinate
+  // update — so a manual pan isn't snapped back when station data refreshes.
   useEffect(() => {
     map.setView([lat, lng], map.getZoom(), { animate: true });
-  }, [map, lat, lng]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, webcamId]);
 
   return null;
 };
@@ -86,7 +96,11 @@ const MapCanvas: React.FC<MapCanvasProps> = ({ fullscreen = false }) => {
         <InvalidateMapSize enabled={fullscreen} />
         <ZoomControl position="topright" />
         <TileLayer key={`${mapStyle}-${isDarkMode ? 'dark' : 'light'}`} attribution={tileLayer.attribution} url={tileLayer.url} />
-        <ActiveMarkerCenter lat={activeWebcam.coordinates.lat} lng={activeWebcam.coordinates.lng} />
+        <ActiveMarkerCenter
+          webcamId={activeWebcam.id}
+          lat={activeWebcam.coordinates.lat}
+          lng={activeWebcam.coordinates.lng}
+        />
 
         {webcamList.map((webcam) => {
           const isActive = webcam.id === activeWebcam.id;
@@ -146,6 +160,13 @@ const MapCanvas: React.FC<MapCanvasProps> = ({ fullscreen = false }) => {
 export const InteractiveMap: React.FC = () => {
   const { activeWebcam, mapStyle, setMapStyle } = useApp();
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const openFullscreenMap = () => setIsFullscreen(true);
+
+    window.addEventListener(OPEN_FULLSCREEN_MAP_EVENT, openFullscreenMap);
+    return () => window.removeEventListener(OPEN_FULLSCREEN_MAP_EVENT, openFullscreenMap);
+  }, []);
 
   const googleMapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(
     `${activeWebcam.coordinates.lat},${activeWebcam.coordinates.lng}`

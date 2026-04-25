@@ -1,6 +1,6 @@
 """Station metadata and configuration routes."""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from models import AppConfig, ChartDataSource
 from auth import get_current_username
@@ -13,11 +13,20 @@ from camera import (
     history_from_camera_db,
     chart_data_sources_from_camera_db,
 )
-from config import read_camera_config, write_camera_config, get_data_dir
+from config import camera_dir, read_camera_config, write_camera_config, get_data_dir
 from routes import ValidStationId
 
 
 router = APIRouter(prefix="/stations", tags=["Stations"])
+
+
+def _require_station_exists(station_id: str) -> None:
+    """Raise 404 if no directory has been created for this station."""
+    if not camera_dir(get_data_dir(), station_id).exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unknown station id.",
+        )
 
 
 @router.get(
@@ -67,8 +76,12 @@ def get_station_history(
     station_id: ValidStationId,
     hours: int = Query(24, ge=1, le=168),
 ) -> list[dict]:
-    """Return sensor history for a station."""
-    return history_from_camera_db(get_data_dir(), station_id, hours) or []
+    """Return sensor history for a station, or 404 if the station has no DB."""
+    rows = history_from_camera_db(get_data_dir(), station_id, hours)
+    if rows is None:
+        _require_station_exists(station_id)
+        return []
+    return rows
 
 
 @router.get(
@@ -78,8 +91,12 @@ def get_station_history(
     description="Return the selectable chart data sources configured for a station.",
 )
 def get_station_chart_data_sources(station_id: ValidStationId) -> list[ChartDataSource]:
-    """Return chart data sources for a station."""
-    return chart_data_sources_from_camera_db(get_data_dir(), station_id) or []
+    """Return chart data sources for a station, or 404 if the station has no DB."""
+    sources = chart_data_sources_from_camera_db(get_data_dir(), station_id)
+    if sources is None:
+        _require_station_exists(station_id)
+        return []
+    return sources
 
 
 @router.get(

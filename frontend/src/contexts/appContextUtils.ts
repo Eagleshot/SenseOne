@@ -1,5 +1,8 @@
 import { SensorData, Webcam } from "@/data/types";
+import { fetchJson, isAbortError } from "@/lib/apiClient";
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
+
+export { fetchJson, isAbortError };
 
 type WebcamCoordinatesResponse = {
   lat: number;
@@ -77,10 +80,6 @@ export type TimelineImage = {
 
 export const DESCRIPTION_MAX_LENGTH = 500;
 
-type FetchJsonOptions = RequestInit & {
-  throwOnHttpError?: boolean;
-};
-
 export const FALLBACK_WEBCAM: Webcam = {
   id: "",
   name: LOADING_LABEL,
@@ -108,9 +107,6 @@ export const FALLBACK_STATION_SCHEDULE_CONFIG: StationScheduleConfig = {
 
 export const selectActiveWebcam = (webcams: Webcam[], activeWebcamId: string) =>
   webcams.find((webcam) => webcam.id === activeWebcamId) ?? webcams[0] ?? FALLBACK_WEBCAM;
-
-export const isAbortError = (error: unknown): boolean =>
-  error instanceof DOMException && error.name === "AbortError";
 
 export const resolveApiMediaUrl = (url: string | null | undefined, apiBaseUrl: string): string | null => {
   if (!url) return null;
@@ -174,18 +170,3 @@ export const parseTimelineItemResponse = (item: TimelineItemResponse, apiBaseUrl
   url: resolveApiMediaUrl(item.url, apiBaseUrl) ?? item.url,
   timestamp: parseApiTimestamp(item.timestamp),
 });
-
-export const fetchJson = async <T,>(url: string, options: FetchJsonOptions = {}): Promise<T | null> => {
-  const { throwOnHttpError = true, ...requestInit } = options;
-  const response = await fetch(url, requestInit);
-
-  if (!response.ok) {
-    if (throwOnHttpError) {
-      throw new Error(`Request failed: ${response.status}`);
-    }
-
-    return null;
-  }
-
-  return (await response.json()) as T;
-};

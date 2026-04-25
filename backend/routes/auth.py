@@ -5,17 +5,25 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from models import LoginRequest, AuthResponse, MeResponse
 from auth import (
-    get_current_username,
-    ensure_auth_configured,
-    create_session,
-    verify_credentials,
-    resolve_session_token,
     AUTH_SESSIONS,
     bearer_scheme,
+    check_login_throttle,
+    clear_login_failures,
+    create_session,
+    ensure_auth_configured,
+    get_current_username,
+    record_login_failure,
+    resolve_session_token,
+    verify_credentials,
 )
 from constants import AUTH_COOKIE_NAME, AUTH_COOKIE_SECURE, AUTH_COOKIE_SAMESITE
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP for throttling buckets."""
+    return request.client.host if request.client else "unknown"
 
 
 @router.post(
@@ -24,16 +32,22 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
     summary="Create Session",
     description="Authenticate with username and password and create a session cookie.",
 )
-def login(payload: LoginRequest, response: Response) -> AuthResponse:
+def login(payload: LoginRequest, request: Request, response: Response) -> AuthResponse:
     """Authenticate user and create session."""
     ensure_auth_configured()
 
     username = payload.username.strip()
-    is_valid = verify_credentials(username, payload.password)
-    
-    if not is_valid:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password.")
+    client_ip = _client_ip(request)
+    check_login_throttle(client_ip, username)
 
+    if not verify_credentials(username, payload.password):
+        record_login_failure(client_ip, username)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password.",
+        )
+
+    clear_login_failures(client_ip, username)
     token, expires_in = create_session(username)
     response.set_cookie(
         key=AUTH_COOKIE_NAME,

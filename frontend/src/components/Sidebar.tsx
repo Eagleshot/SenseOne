@@ -25,6 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { useApp } from "@/contexts/useApp";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { formatLocationWithFlag } from "@/lib/location";
+import { OPEN_FULLSCREEN_MAP_EVENT } from "@/lib/mapEvents";
 import { cn } from "@/lib/utils";
 
 export const Sidebar: React.FC = () => {
@@ -96,6 +97,10 @@ export const Sidebar: React.FC = () => {
     await logout();
     setLoginPassword("");
     setLoginError(null);
+  };
+
+  const handleOpenFullscreenMap = () => {
+    window.dispatchEvent(new Event(OPEN_FULLSCREEN_MAP_EVENT));
   };
 
   return (
@@ -195,16 +200,15 @@ export const Sidebar: React.FC = () => {
         <div className="mx-4 mb-3 h-px bg-sidebar-border/80" />
 
         <div className="px-4 pb-4">
-            <Button
-              asChild
-              variant="outline"
-              size="sm"
-              className={cn("w-full justify-center gap-2", sidebarActionButtonClass)}
-            >
-            <a href="#map">
-              Go to Map
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleOpenFullscreenMap}
+            className={cn("w-full justify-center gap-2", sidebarActionButtonClass)}
+          >
+            Open Map
+            <ExternalLink className="h-3.5 w-3.5" />
           </Button>
         </div>
 

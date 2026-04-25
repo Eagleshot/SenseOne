@@ -76,6 +76,8 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   const stationScheduleRef = useRef<StationScheduleConfig>(FALLBACK_STATION_SCHEDULE_CONFIG);
   const stationConfigRequestIdRef = useRef(0);
   const stationConfigSaveIdRef = useRef(0);
+  const cameraDataRequestIdRef = useRef(0);
+  const cameraDataAbortRef = useRef<AbortController | null>(null);
 
   const resetTimelineState = useCallback(() => {
     setHistoricalData([]);
@@ -365,50 +367,58 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     };
   }, [activeWebcam.id, apiBaseUrl, applyStationConfig, isAuthenticated, resetStationConfigState]);
 
-  const fetchActiveCameraData = useCallback(
-    async (options: { signal?: AbortSignal } = {}) => {
-      const cameraId = activeWebcam.id;
-      if (!cameraId) {
-        resetTimelineState();
-        return;
+  const fetchActiveCameraData = useCallback(async () => {
+    const cameraId = activeStationIdRef.current;
+    if (!cameraId) {
+      resetTimelineState();
+      return;
+    }
+
+    cameraDataAbortRef.current?.abort();
+    const controller = new AbortController();
+    cameraDataAbortRef.current = controller;
+    const requestId = cameraDataRequestIdRef.current + 1;
+    cameraDataRequestIdRef.current = requestId;
+
+    const stationPath = `${apiBaseUrl}/stations/${encodeURIComponent(cameraId)}`;
+    const detailUrl = stationPath;
+    const historyUrl = `${stationPath}/history?hours=24`;
+    const timelineUrl = `${stationPath}/timeline?count=48`;
+    const { signal } = controller;
+
+    const isStale = () =>
+      requestId !== cameraDataRequestIdRef.current ||
+      cameraId !== activeStationIdRef.current ||
+      signal.aborted;
+
+    try {
+      const [detailResponse, historyResponse, timelineResponse] = await Promise.all([
+        fetchJson<StationDetailResponse>(detailUrl, { signal, throwOnHttpError: false }),
+        fetchJson<SensorDataResponse[]>(historyUrl, { signal, throwOnHttpError: false }),
+        fetchJson<TimelineItemResponse[]>(timelineUrl, { signal, throwOnHttpError: false }),
+      ]);
+
+      if (isStale()) return;
+
+      if (detailResponse) {
+        const parsedDetail = parseStationResponse(detailResponse, apiBaseUrl);
+        setActiveWebcamState((currentValue) =>
+          currentValue.id === cameraId ? { ...currentValue, ...parsedDetail } : currentValue
+        );
       }
 
-      const stationPath = `${apiBaseUrl}/stations/${encodeURIComponent(cameraId)}`;
-      const detailUrl = stationPath;
-      const historyUrl = `${stationPath}/history?hours=24`;
-      const timelineUrl = `${stationPath}/timeline?count=48`;
-      const { signal } = options;
-
-      try {
-        const [detailResponse, historyResponse, timelineResponse] = await Promise.all([
-          fetchJson<StationDetailResponse>(detailUrl, { signal, throwOnHttpError: false }),
-          fetchJson<SensorDataResponse[]>(historyUrl, { signal, throwOnHttpError: false }),
-          fetchJson<TimelineItemResponse[]>(timelineUrl, { signal, throwOnHttpError: false }),
-        ]);
-
-        if (signal?.aborted) return;
-
-        if (detailResponse) {
-          const parsedDetail = parseStationResponse(detailResponse, apiBaseUrl);
-          setActiveWebcamState((currentValue) =>
-            currentValue.id === cameraId ? { ...currentValue, ...parsedDetail } : currentValue
-          );
-        }
-
-        const nextTimeline = timelineResponse
-          ? timelineResponse.map((item) => parseTimelineItemResponse(item, apiBaseUrl))
-          : [];
-        setHistoricalData(historyResponse ? historyResponse.map(parseTimestampResponse) : []);
-        setImageTimeline(nextTimeline);
-        setCurrentImageIndexState(Math.max(nextTimeline.length - 1, 0));
-        setIsPlayingState(false);
-      } catch (error) {
-        if (isAbortError(error)) return;
-        resetTimelineState();
-      }
-    },
-    [activeWebcam.id, apiBaseUrl, resetTimelineState]
-  );
+      const nextTimeline = timelineResponse
+        ? timelineResponse.map((item) => parseTimelineItemResponse(item, apiBaseUrl))
+        : [];
+      setHistoricalData(historyResponse ? historyResponse.map(parseTimestampResponse) : []);
+      setImageTimeline(nextTimeline);
+      setCurrentImageIndexState(Math.max(nextTimeline.length - 1, 0));
+      setIsPlayingState(false);
+    } catch (error) {
+      if (isAbortError(error) || isStale()) return;
+      resetTimelineState();
+    }
+  }, [apiBaseUrl, resetTimelineState]);
 
   useEffect(() => {
     if (!activeWebcam.id) {
@@ -416,11 +426,11 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       return;
     }
 
-    const controller = new AbortController();
-    void fetchActiveCameraData({ signal: controller.signal });
+    void fetchActiveCameraData();
 
     return () => {
-      controller.abort();
+      cameraDataAbortRef.current?.abort();
+      cameraDataAbortRef.current = null;
     };
   }, [activeWebcam.id, fetchActiveCameraData, resetTimelineState]);
 
@@ -466,9 +476,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     imageTimeline,
     currentImageIndex,
     setCurrentImageIndex: (index) => setCurrentImageIndexState(index),
-    refreshImageTimeline: async () => {
-      await fetchActiveCameraData();
-    },
+    refreshImageTimeline: fetchActiveCameraData,
     isPlaying,
     setIsPlaying: (playing) => setIsPlayingState(playing),
     timezones,

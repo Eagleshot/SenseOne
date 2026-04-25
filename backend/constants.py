@@ -6,7 +6,6 @@ import re
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/jpeg",
-    "image/jpg",
     "image/png",
     "image/webp",
 }

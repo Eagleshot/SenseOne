@@ -82,17 +82,17 @@ class TestConfigValidation:
 class TestConfigYAML:
     """Test YAML generation."""
 
-    def test_config_yaml_generated(self, sample_camera_id, sample_config):
+    def test_config_yaml_generated(self, sample_config):
         """Test that YAML can be generated from config."""
         from config import camera_config_yaml_for_values
-        yaml = camera_config_yaml_for_values(sample_camera_id, sample_config)
+        yaml = camera_config_yaml_for_values(sample_config)
         assert isinstance(yaml, str)
         assert "title" in yaml
         assert "camera_start_time" in yaml
 
     def test_camera_config_yaml_default(self, sample_camera_id):
         """Test default config YAML generation."""
-        yaml_str = camera_config_yaml_for_values(sample_camera_id, default_camera_config(sample_camera_id))
+        yaml_str = camera_config_yaml_for_values(default_camera_config(sample_camera_id))
         assert isinstance(yaml_str, str)
         assert "camera_start_time" in yaml_str
         assert "camera_stop_time" in yaml_str

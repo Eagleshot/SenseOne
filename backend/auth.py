@@ -3,9 +3,12 @@
 import time
 import secrets
 import os
+import threading
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from constants import AUTH_COOKIE_NAME
 
 
 def parse_positive_int_env(name: str, default: int) -> int:
@@ -33,9 +36,15 @@ if AUTH_ENABLED and len(AUTH_PASSWORD) < 12:
 
 AUTH_TOKEN_TTL_SECONDS = 43200
 
-# In-memory session storage (should be replaced with Redis or database in production)
+# In-memory session storage. For multi-replica deploys, swap for Redis or signed JWTs.
 AUTH_SESSIONS: dict[str, tuple[str, float]] = {}
 bearer_scheme = HTTPBearer(auto_error=False)
+
+# Login throttling: track recent failures per IP and per username.
+LOGIN_FAILURE_WINDOW_SECONDS = 900  # 15 min rolling window
+LOGIN_FAILURE_LIMIT = 10
+_login_failures: dict[str, list[float]] = {}
+_login_failures_lock = threading.Lock()
 
 
 def ensure_auth_configured() -> None:
@@ -69,8 +78,6 @@ def resolve_session_token(
     credentials: HTTPAuthorizationCredentials | None,
 ) -> str | None:
     """Resolve session token from cookies or headers."""
-    from constants import AUTH_COOKIE_NAME
-    
     cookie_token = request.cookies.get(AUTH_COOKIE_NAME)
     if cookie_token:
         return cookie_token
@@ -104,5 +111,51 @@ def get_current_username(
 
 
 def verify_credentials(username: str, password: str) -> bool:
-    """Verify username and password against configured credentials."""
-    return secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(password, AUTH_PASSWORD)
+    """Verify username and password using constant-time comparison.
+
+    Both comparisons run regardless of length or username match so timing
+    cannot reveal which field was wrong.
+    """
+    user_ok = secrets.compare_digest(username.encode("utf-8"), AUTH_USERNAME.encode("utf-8"))
+    pwd_ok = secrets.compare_digest(password.encode("utf-8"), AUTH_PASSWORD.encode("utf-8"))
+    return user_ok and pwd_ok
+
+
+def _prune_login_failures(now: float) -> None:
+    """Drop login-failure entries older than the rolling window."""
+    cutoff = now - LOGIN_FAILURE_WINDOW_SECONDS
+    for key in list(_login_failures.keys()):
+        kept = [ts for ts in _login_failures[key] if ts > cutoff]
+        if kept:
+            _login_failures[key] = kept
+        else:
+            _login_failures.pop(key, None)
+
+
+def check_login_throttle(client_ip: str, username: str) -> None:
+    """Raise 429 if too many recent failures from this IP or username."""
+    now = time.time()
+    with _login_failures_lock:
+        _prune_login_failures(now)
+        for key in (f"ip:{client_ip}", f"user:{username}"):
+            if len(_login_failures.get(key, ())) >= LOGIN_FAILURE_LIMIT:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many login attempts. Try again later.",
+                )
+
+
+def record_login_failure(client_ip: str, username: str) -> None:
+    """Record a failed login attempt for throttling."""
+    now = time.time()
+    with _login_failures_lock:
+        _prune_login_failures(now)
+        for key in (f"ip:{client_ip}", f"user:{username}"):
+            _login_failures.setdefault(key, []).append(now)
+
+
+def clear_login_failures(client_ip: str, username: str) -> None:
+    """Clear recorded failures after a successful login."""
+    with _login_failures_lock:
+        _login_failures.pop(f"ip:{client_ip}", None)
+        _login_failures.pop(f"user:{username}", None)

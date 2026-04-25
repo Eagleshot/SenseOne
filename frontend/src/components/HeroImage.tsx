@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   ArrowLeftRight,
+  Download,
   ImageOff,
   Images,
   Loader2,
@@ -38,14 +39,13 @@ export const HeroImage: React.FC = () => {
     refreshImageTimeline,
   } = useApp();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [isCompareOpen, setIsCompareOpen] = useState(false);
   const [compareValue, setCompareValue] = useState(50);
   const [compareIndex, setCompareIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
-  const [isImageUnavailable, setIsImageUnavailable] = useState(false);
-  const [displayImageUrl, setDisplayImageUrl] = useState('');
-  const displayImageUrlRef = useRef('');
+  const [hasLoadError, setHasLoadError] = useState(false);
   const compareRef = useRef<HTMLDivElement | null>(null);
   const scrubRef = useRef<HTMLDivElement | null>(null);
 
@@ -53,10 +53,10 @@ export const HeroImage: React.FC = () => {
   const currentImage = imageTimeline[currentImageIndex];
   const isLatest = hasTimeline && currentImageIndex === imageTimeline.length - 1;
   const latestIndex = Math.max(imageTimeline.length - 1, 0);
-  const currentImageUrl = currentImage?.url || activeWebcam.currentImage;
+  const currentImageUrl = currentImage?.url || activeWebcam.currentImage || '';
   const compareImage = imageTimeline[compareIndex];
-  const compareImageUrl = compareImage?.url || activeWebcam.currentImage;
-  const hasDisplayImage = Boolean(displayImageUrl) && !isImageUnavailable;
+  const compareImageUrl = compareImage?.url || activeWebcam.currentImage || '';
+  const hasDisplayImage = Boolean(currentImageUrl) && !hasLoadError;
 
   useEffect(() => {
     if (!hasTimeline) {
@@ -68,33 +68,10 @@ export const HeroImage: React.FC = () => {
     }
   }, [compareIndex, hasTimeline, imageTimeline.length]);
 
+  // Reset the error flag whenever the current image URL changes; the new
+  // src will retry, and onError will set the flag again if it really fails.
   useEffect(() => {
-    if (!currentImageUrl) {
-      setDisplayImageUrl('');
-      displayImageUrlRef.current = '';
-      setIsImageUnavailable(true);
-      return;
-    }
-
-    let cancelled = false;
-    const preload = new Image();
-    preload.onload = () => {
-      if (cancelled) return;
-      displayImageUrlRef.current = currentImageUrl;
-      setDisplayImageUrl(currentImageUrl);
-      setIsImageUnavailable(false);
-    };
-    preload.onerror = () => {
-      if (cancelled) return;
-      if (!displayImageUrlRef.current) {
-        setIsImageUnavailable(true);
-      }
-    };
-    preload.src = currentImageUrl;
-
-    return () => {
-      cancelled = true;
-    };
+    setHasLoadError(false);
   }, [currentImageUrl]);
 
   const updateCompareValue = (clientX: number) => {
@@ -168,6 +145,34 @@ export const HeroImage: React.FC = () => {
     }
   };
 
+  const handleDownload = async () => {
+    if (!currentImageUrl) return;
+    setIsDownloading(true);
+    try {
+      const response = await fetch(currentImageUrl);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      const rawName = currentImageUrl.split('/').pop()?.split('?')[0] ?? '';
+      let urlFilename = '';
+      try {
+        urlFilename = decodeURIComponent(rawName);
+      } catch {
+        urlFilename = rawName;
+      }
+      link.download = urlFilename || `${activeWebcam.name}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      // silently ignore download errors
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const handleJumpToLatest = () => {
     setCurrentImageIndex(latestIndex);
     setIsPlaying(false);
@@ -209,10 +214,10 @@ export const HeroImage: React.FC = () => {
         <div className="aspect-video relative group">
             {hasDisplayImage ? (
               <img
-                src={displayImageUrl}
+                src={currentImageUrl}
                 alt={`${activeWebcam.name} webcam view`}
                 className="w-full h-full object-cover"
-                onError={() => setIsImageUnavailable(true)}
+                onError={() => setHasLoadError(true)}
             />
           ) : (
             <div className="absolute inset-0 overflow-hidden bg-[radial-gradient(circle_at_20%_20%,hsl(var(--primary)/0.22),transparent_45%),radial-gradient(circle_at_80%_0%,hsl(var(--accent)/0.18),transparent_45%),hsl(var(--background))]">
@@ -261,7 +266,7 @@ export const HeroImage: React.FC = () => {
             contentClassName="flex items-center justify-center bg-black/90"
           >
             {hasDisplayImage ? (
-              <img src={displayImageUrl} alt={`${activeWebcam.name} webcam view`} className="h-full w-full object-contain bg-black" />
+              <img src={currentImageUrl} alt={`${activeWebcam.name} webcam view`} className="h-full w-full object-contain bg-black" />
             ) : (
               <div className="mx-4 max-w-md text-center">
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-white/10">
@@ -438,6 +443,19 @@ export const HeroImage: React.FC = () => {
               </div>
             </DialogContent>
           </Dialog>
+
+          {hasDisplayImage && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDownload}
+              disabled={isDownloading}
+              className={actionButtonClass}
+            >
+              <Download className={cn("w-4 h-4", isDownloading && "animate-pulse")} />
+              Download
+            </Button>
+          )}
         </div>
       </div>
     </div>

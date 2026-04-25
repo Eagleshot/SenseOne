@@ -5,8 +5,10 @@ import { Thermometer, Droplets, Wind, Gauge, Eye, Sunrise, Sunset, Navigation, C
 import { formatDistanceToNow } from "date-fns";
 
 import { useApp } from "@/contexts/useApp";
+import { isAbortError, stationUrl } from "@/lib/apiClient";
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 import { cn } from "@/lib/utils";
+import { baseWeatherTheme, resolveWeatherTheme } from "@/lib/weatherThemes";
 
 type WeatherState = {
   temperature: number;
@@ -66,14 +68,131 @@ const formatTimeLabelWithOffset = makeOffsetFormatter({ hour: "2-digit", minute:
 const formatDateKeyWithOffset = makeOffsetFormatter({ year: "numeric", month: "2-digit", day: "2-digit" });
 const formatDayLabelWithOffset = makeOffsetFormatter({ weekday: "short" });
 
+const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+type CurrentWeatherResponse = {
+  main?: { temp?: number; feels_like?: number; humidity?: number; pressure?: number };
+  wind?: { speed?: number; deg?: number };
+  visibility?: number;
+  sys?: { sunrise?: number; sunset?: number };
+  weather?: { description?: string; main?: string; icon?: string }[];
+  dt?: number;
+  timezone?: number;
+  name?: string;
+};
+
+const parseCurrentWeather = (data: CurrentWeatherResponse): WeatherState | null => {
+  const temp = data.main?.temp;
+  const feelsLike = data.main?.feels_like;
+  const humidity = data.main?.humidity;
+  const pressure = data.main?.pressure;
+  const windSpeed = data.wind?.speed;
+  const sunrise = data.sys?.sunrise;
+  const sunset = data.sys?.sunset;
+  const dt = data.dt;
+
+  if (
+    !isFiniteNumber(temp) ||
+    !isFiniteNumber(feelsLike) ||
+    !isFiniteNumber(humidity) ||
+    !isFiniteNumber(pressure) ||
+    !isFiniteNumber(windSpeed) ||
+    !isFiniteNumber(sunrise) ||
+    !isFiniteNumber(sunset) ||
+    !isFiniteNumber(dt)
+  ) {
+    return null;
+  }
+
+  const sunriseDate = new Date(sunrise * 1000);
+  const sunsetDate = new Date(sunset * 1000);
+  const daylightMinutes = Math.max(0, Math.round((sunset - sunrise) / 60));
+  const iconCode = data.weather?.[0]?.icon;
+  const timezoneOffsetSeconds = isFiniteNumber(data.timezone) ? data.timezone : 0;
+  const isNight = dt < sunrise || dt > sunset;
+
+  return {
+    temperature: Math.round(temp * 10) / 10,
+    feelsLike: Math.round(feelsLike * 10) / 10,
+    humidity,
+    pressure,
+    visibilityKm: isFiniteNumber(data.visibility)
+      ? Math.round((data.visibility / 1000) * 10) / 10
+      : undefined,
+    windSpeedKmh: Math.round(windSpeed * 3.6 * 10) / 10,
+    windDirection: data.wind?.deg ?? 0,
+    sunrise: formatTimeLabelWithOffset(sunriseDate, timezoneOffsetSeconds),
+    sunset: formatTimeLabelWithOffset(sunsetDate, timezoneOffsetSeconds),
+    description: data.weather?.[0]?.description,
+    main: data.weather?.[0]?.main,
+    iconCode,
+    iconUrl: iconCode ? `https://openweathermap.org/img/wn/${iconCode}@4x.png` : undefined,
+    cityName: data.name,
+    updatedAt: new Date(dt * 1000),
+    daylightMinutes,
+    isNight,
+    timezoneOffsetSeconds,
+  };
+};
+
+const parseForecast = (forecastData: ForecastResponse, fallbackOffsetSeconds: number): ForecastDay[] => {
+  const offsetSeconds = isFiniteNumber(forecastData.city?.timezone)
+    ? forecastData.city!.timezone!
+    : fallbackOffsetSeconds;
+  const todayKey = formatDateKeyWithOffset(new Date(), offsetSeconds);
+  const buckets = new Map<
+    string,
+    { date: Date; min: number; max: number; iconCounts: Map<string, number> }
+  >();
+
+  forecastData.list?.forEach((item) => {
+    const date = new Date(item.dt * 1000);
+    const key = formatDateKeyWithOffset(date, offsetSeconds);
+    const tempMin = isFiniteNumber(item.main?.temp_min) ? item.main!.temp_min! : item.main?.temp;
+    const tempMax = isFiniteNumber(item.main?.temp_max) ? item.main!.temp_max! : item.main?.temp;
+    if (!isFiniteNumber(tempMin) || !isFiniteNumber(tempMax)) return;
+
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        date,
+        min: tempMin,
+        max: tempMax,
+        iconCounts: new Map(),
+      });
+    }
+
+    const bucket = buckets.get(key)!;
+    bucket.min = Math.min(bucket.min, tempMin);
+    bucket.max = Math.max(bucket.max, tempMax);
+
+    const icon = item.weather?.[0]?.icon;
+    if (icon) {
+      bucket.iconCounts.set(icon, (bucket.iconCounts.get(icon) ?? 0) + 1);
+    }
+  });
+
+  const sorted = Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b));
+  return sorted.map(([key, bucket], index) => {
+    const icon = Array.from(bucket.iconCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+    return {
+      dateKey: key,
+      label:
+        key === todayKey && index === 0
+          ? "Today"
+          : formatDayLabelWithOffset(bucket.date, offsetSeconds),
+      iconUrl: icon ? `https://openweathermap.org/img/wn/${icon}@2x.png` : undefined,
+      tempMin: Math.round(bucket.min),
+      tempMax: Math.round(bucket.max),
+    };
+  });
+};
+
 export const WeatherDetail: React.FC = () => {
-  const { activeWebcam } = useApp();
+  const { activeWebcam, isDarkMode } = useApp();
   const [weather, setWeather] = useState<WeatherState | null>(null);
   const [forecast, setForecast] = useState<ForecastDay[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isForecastLoading, setIsForecastLoading] = useState(true);
-
-  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api";
 
   useEffect(() => {
     if (!activeWebcam.id) {
@@ -87,12 +206,15 @@ export const WeatherDetail: React.FC = () => {
     const controller = new AbortController();
 
     const fetchWeather = async () => {
+      // Skip polling while the tab is hidden to avoid wasting OpenWeather quota.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
       setIsLoading(true);
       setIsForecastLoading(true);
       try {
-        const stationPath = `${apiBaseUrl}/stations/${encodeURIComponent(activeWebcam.id)}`;
-        const currentUrl = `${stationPath}/weather/current`;
-        const forecastUrl = `${stationPath}/weather/forecast`;
+        const currentUrl = stationUrl(activeWebcam.id, "/weather/current");
+        const forecastUrl = stationUrl(activeWebcam.id, "/weather/forecast");
 
         const [currentResponse, forecastResponse] = await Promise.all([
           fetch(currentUrl, { signal: controller.signal }),
@@ -106,118 +228,52 @@ export const WeatherDetail: React.FC = () => {
         const data = await currentResponse.json();
         if (!isMounted) return;
 
-        const sunriseDate = new Date(data.sys.sunrise * 1000);
-        const sunsetDate = new Date(data.sys.sunset * 1000);
-        const daylightMinutes = Math.max(0, Math.round((data.sys.sunset - data.sys.sunrise) / 60));
-        const iconCode = data.weather?.[0]?.icon;
-        const timezoneOffsetSeconds = typeof data.timezone === "number" ? data.timezone : 0;
-        const isNight =
-          typeof data.dt === "number" && typeof data.sys?.sunrise === "number" && typeof data.sys?.sunset === "number"
-            ? data.dt < data.sys.sunrise || data.dt > data.sys.sunset
-            : iconCode?.endsWith("n") ?? false;
-
-        const nextWeather: WeatherState = {
-          temperature: Math.round(data.main.temp * 10) / 10,
-          feelsLike: Math.round(data.main.feels_like * 10) / 10,
-          humidity: data.main.humidity,
-          pressure: data.main.pressure,
-          visibilityKm:
-            typeof data.visibility === "number" ? Math.round((data.visibility / 1000) * 10) / 10 : undefined,
-          windSpeedKmh: Math.round(data.wind.speed * 3.6 * 10) / 10,
-          windDirection: data.wind.deg ?? 0,
-          sunrise: formatTimeLabelWithOffset(sunriseDate, timezoneOffsetSeconds),
-          sunset: formatTimeLabelWithOffset(sunsetDate, timezoneOffsetSeconds),
-          description: data.weather?.[0]?.description,
-          main: data.weather?.[0]?.main,
-          iconCode,
-          iconUrl: iconCode ? `https://openweathermap.org/img/wn/${iconCode}@4x.png` : undefined,
-          cityName: data.name,
-          updatedAt: new Date(data.dt * 1000),
-          daylightMinutes,
-          isNight,
-          timezoneOffsetSeconds,
-        };
+        const nextWeather = parseCurrentWeather(data);
+        if (!nextWeather) {
+          if (isMounted) {
+            setWeather(null);
+            setForecast([]);
+          }
+          return;
+        }
 
         setWeather(nextWeather);
 
         if (forecastResponse.ok) {
           const forecastData = (await forecastResponse.json()) as ForecastResponse;
-          const offsetSeconds =
-            typeof forecastData.city?.timezone === "number" ? forecastData.city.timezone : timezoneOffsetSeconds;
-          const todayKey = formatDateKeyWithOffset(new Date(), offsetSeconds);
-          const buckets = new Map<
-            string,
-            { date: Date; min: number; max: number; iconCounts: Map<string, number> }
-          >();
-
-          forecastData.list?.forEach((item) => {
-            const date = new Date(item.dt * 1000);
-            const key = formatDateKeyWithOffset(date, offsetSeconds);
-            const tempMin = typeof item.main?.temp_min === "number" ? item.main.temp_min : item.main?.temp;
-            const tempMax = typeof item.main?.temp_max === "number" ? item.main.temp_max : item.main?.temp;
-            if (typeof tempMin !== "number" || typeof tempMax !== "number") return;
-
-            if (!buckets.has(key)) {
-              buckets.set(key, {
-                date,
-                min: tempMin,
-                max: tempMax,
-                iconCounts: new Map(),
-              });
-            }
-
-            const bucket = buckets.get(key)!;
-            bucket.min = Math.min(bucket.min, tempMin);
-            bucket.max = Math.max(bucket.max, tempMax);
-
-            const icon = item.weather?.[0]?.icon;
-            if (icon) {
-              bucket.iconCounts.set(icon, (bucket.iconCounts.get(icon) ?? 0) + 1);
-            }
-          });
-
-          const sorted = Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b));
-          const nextForecast = sorted.map(([key, bucket], index) => {
-            const icon = Array.from(bucket.iconCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
-            return {
-              dateKey: key,
-              label:
-                key === todayKey && index === 0
-                  ? "Today"
-                  : formatDayLabelWithOffset(bucket.date, offsetSeconds),
-              iconUrl: icon ? `https://openweathermap.org/img/wn/${icon}@2x.png` : undefined,
-              tempMin: Math.round(bucket.min),
-              tempMax: Math.round(bucket.max),
-            };
-          });
-
-          setForecast(nextForecast);
-        } else {
-          if (isMounted) {
-            setForecast([]);
-          }
+          if (!isMounted) return;
+          setForecast(parseForecast(forecastData, nextWeather.timezoneOffsetSeconds ?? 0));
+        } else if (isMounted) {
+          setForecast([]);
         }
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if (isAbortError(err)) return;
         if (isMounted) {
           setWeather(null);
           setForecast([]);
         }
       } finally {
-        if (isMounted) setIsLoading(false);
-        if (isMounted) setIsForecastLoading(false);
+        if (isMounted) {
+          setIsLoading(false);
+          setIsForecastLoading(false);
+        }
       }
     };
 
     fetchWeather();
     const interval = setInterval(fetchWeather, 5 * 60 * 1000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") fetchWeather();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
       isMounted = false;
       controller.abort();
       clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [activeWebcam.id, apiBaseUrl]);
+  }, [activeWebcam.id]);
 
   const updatedLabel = useMemo(() => {
     if (isLoading) return LOADING_LABEL;
@@ -242,9 +298,18 @@ export const WeatherDetail: React.FC = () => {
     isLoading || !weather
       ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
       : formatTimeLabelWithOffset(weather.updatedAt, weather.timezoneOffsetSeconds ?? 0);
-  const temperatureLabel = isLoading || !weather ? (isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL) : `${weather.temperature} \u00B0C`;
-  const feelsLikeLabel = isLoading || !weather ? (isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL) : `${weather.feelsLike} \u00B0C`;
-  const windLabel = isLoading || !weather ? (isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL) : `${weather.windSpeedKmh} km/h`;
+  const temperatureLabel =
+    isLoading || !weather
+      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
+      : `${weather.temperature} \u00B0C`;
+  const feelsLikeLabel =
+    isLoading || !weather
+      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
+      : `${weather.feelsLike} \u00B0C`;
+  const windLabel =
+    isLoading || !weather
+      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
+      : `${weather.windSpeedKmh} km/h`;
   const windDirection = isLoading || !weather ? 0 : weather.windDirection;
   const windCardinal = useMemo(() => {
     if (isLoading) return LOADING_LABEL;
@@ -252,94 +317,33 @@ export const WeatherDetail: React.FC = () => {
     const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
     return dirs[Math.round(weather.windDirection / 45) % 8];
   }, [isLoading, weather]);
-  const humidityLabel = isLoading || !weather ? (isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL) : `${weather.humidity}%`;
-  const pressureLabel = isLoading || !weather ? (isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL) : `${weather.pressure} hPa`;
+  const humidityLabel =
+    isLoading || !weather
+      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
+      : `${weather.humidity}%`;
+  const pressureLabel =
+    isLoading || !weather
+      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
+      : `${weather.pressure} hPa`;
   const visibilityLabel =
     isLoading || !weather
       ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
       : weather.visibilityKm === undefined
         ? UNAVAILABLE_LABEL
         : `${weather.visibilityKm} km`;
-  const sunriseLabel = isLoading || !weather ? (isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL) : weather.sunrise;
-  const sunsetLabel = isLoading || !weather ? (isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL) : weather.sunset;
+  const sunriseLabel =
+    isLoading || !weather
+      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
+      : weather.sunrise;
+  const sunsetLabel =
+    isLoading || !weather
+      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
+      : weather.sunset;
   const showWeatherPlaceholder = !isLoading && !weather;
-  const weatherTheme = useMemo(() => {
-    const baseTheme = {
-      container:
-        "border border-border/70 bg-secondary/90 text-foreground shadow-[0_18px_45px_rgba(0,0,0,0.336)] dark:border-transparent dark:bg-card dark:shadow-[0_24px_60px_rgba(0,0,0,0.54)]",
-      overlay:
-        "bg-[radial-gradient(circle_at_top,_hsl(var(--primary)/0.18),_transparent_55%)] dark:bg-[radial-gradient(circle_at_top,_hsl(var(--foreground)/0.08),_transparent_55%)]",
-      surface:
-        "bg-[hsl(var(--sidebar-background))] shadow-[inset_0_0_0_1px_hsl(var(--border)/0.6)]",
-      card:
-        "bg-[hsl(var(--sidebar-background))] shadow-[inset_0_0_0_1px_hsl(var(--border)/0.5)]",
-      mutedText: "text-muted-foreground",
-      foregroundText: "text-foreground",
-      divider: "bg-[hsl(var(--muted-foreground))]/60",
-      iconMuted: "text-muted-foreground",
-      placeholder: "bg-muted/60 dark:bg-muted/50",
-      linkHover: "hover:text-foreground",
-    };
-
-    if (!weather) return baseTheme;
-
-    const main = weather.main?.toLowerCase() ?? "";
-    const isNight = weather.isNight ?? false;
-    const isFoggy = ["mist", "fog", "haze", "smoke", "dust", "sand", "ash"].includes(main);
-    const isThunder = main === "thunderstorm" || main === "tornado" || main === "squall";
-    const isSnow = main === "snow";
-    const isClear = main === "clear";
-
-    if (isNight || isFoggy || isThunder) {
-      return {
-        container:
-          "border border-white/10 bg-slate-950/90 text-white shadow-[0_24px_60px_rgba(0,0,0,0.6)]",
-        overlay: "bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.08),_transparent_55%)]",
-        surface: "bg-white/10 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)]",
-        card: "bg-white/10 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)]",
-        mutedText: "text-white/70",
-        foregroundText: "text-white",
-        divider: "bg-white/20",
-        iconMuted: "text-white/70",
-        placeholder: "bg-white/10",
-        linkHover: "hover:text-white",
-      };
-    }
-
-    if (isSnow) {
-      return {
-        container:
-          "border border-border/70 bg-white text-slate-900 shadow-[0_18px_45px_rgba(0,0,0,0.18)]",
-        overlay: "bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.9),_transparent_60%)]",
-        surface: "bg-white/80 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.08)]",
-        card: "bg-white/80 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.08)]",
-        mutedText: "text-slate-500",
-        foregroundText: "text-slate-900",
-        divider: "bg-slate-300/70",
-        iconMuted: "text-slate-500",
-        placeholder: "bg-slate-200/70",
-        linkHover: "hover:text-slate-900",
-      };
-    }
-
-    if (isClear) {
-      return {
-        container:
-          "border border-sky-400/25 bg-[#0b1d34] text-white shadow-[0_24px_60px_rgba(2,6,23,0.6)]",
-        overlay: "bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.35),_transparent_60%)]",
-        surface: "bg-sky-500/10 shadow-[inset_0_0_0_1px_rgba(125,211,252,0.18)]",
-        card: "bg-sky-500/10 shadow-[inset_0_0_0_1px_rgba(125,211,252,0.18)]",
-        mutedText: "text-sky-100/70",
-        foregroundText: "text-white",
-        divider: "bg-sky-100/20",
-        iconMuted: "text-sky-100/70",
-        placeholder: "bg-sky-500/15",
-        linkHover: "hover:text-white",
-      };
-    }
-
-    return baseTheme;
-  }, [weather]);
+  const weatherTheme = useMemo(
+    () => (weather ? resolveWeatherTheme(weather.main, isDarkMode || (weather.isNight ?? false)) : baseWeatherTheme),
+    [weather, isDarkMode],
+  );
 
   return (
     <motion.div
@@ -350,6 +354,10 @@ export const WeatherDetail: React.FC = () => {
     >
       <div className={cn("pointer-events-none absolute inset-0", weatherTheme.overlay)} />
       <div className="relative p-6 sm:p-8 space-y-6">
+        <div className={cn("flex items-center justify-end text-sm", weatherTheme.mutedText)}>
+          <span>{updatedLabel}</span>
+        </div>
+
         {showWeatherPlaceholder ? (
           <div className="min-h-[24rem] overflow-hidden rounded-[24px] bg-[radial-gradient(circle_at_20%_20%,hsl(var(--primary)/0.18),transparent_42%),radial-gradient(circle_at_80%_0%,hsl(var(--accent)/0.14),transparent_44%),hsl(var(--background))]">
             <div className="pointer-events-none absolute left-8 top-10 h-32 w-32 rounded-full border border-border/40 bg-background/30 blur-2xl" />
@@ -368,15 +376,15 @@ export const WeatherDetail: React.FC = () => {
           </div>
         ) : (
           <>
-            <div className={cn("flex items-center justify-end text-sm", weatherTheme.mutedText)}>
-              <span>{updatedLabel}</span>
-            </div>
-
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
               <div className="flex items-center gap-4">
                 <div className="flex items-center justify-center drop-shadow-[0_14px_24px_rgba(0,0,0,0.6)]">
                   {weather?.iconUrl ? (
-                    <img src={weather.iconUrl} alt={descriptionLabel} className="h-[150px] w-[150px]" />
+                    <img
+                      src={weather.iconUrl}
+                      alt={descriptionLabel}
+                      className={cn("h-[150px] w-[150px]", weatherTheme.iconImage)}
+                    />
                   ) : (
                     <Thermometer className={cn("h-[75px] w-[75px]", weatherTheme.iconMuted)} />
                   )}

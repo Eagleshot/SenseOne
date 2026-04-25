@@ -71,6 +71,9 @@ def _build_timeline_items(items: list[tuple[str, Path]], camera_id: str, count: 
         )
     if not timeline_items:
         return []
+    # If at least one filename has an embedded YYYYMMDD_HHmmZ timestamp, prefer
+    # that authoritative source and drop entries that fell back to mtime —
+    # mtimes can be wrong after copies/restores and would scramble the order.
     if any(item[1] for item in timeline_items):
         timeline_items = [item for item in timeline_items if item[1]]
     timeline_items.sort(key=lambda item: item[0])

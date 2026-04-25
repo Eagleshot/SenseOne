@@ -52,22 +52,36 @@ def get_station_image(
 
 
 async def fetch_openweather(endpoint: str, lat: float, lon: float, units: str = "metric") -> dict:
-    """Fetch data from OpenWeather API."""
+    """Fetch data from OpenWeather API.
+
+    Upstream non-2xx responses are surfaced as 502 (bad gateway) so the client
+    cannot mistake them for problems with this service. The underlying status
+    is logged for diagnostics.
+    """
+    import logging
+
     api_key = os.getenv("OPENWEATHER_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="Missing OPENWEATHER_API_KEY.")
-    
+
     url = f"https://api.openweathermap.org/data/2.5/{endpoint}"
     params = {"lat": lat, "lon": lon, "units": units, "appid": api_key}
-    
+
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(url, params=params)
-        if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail="OpenWeather request failed.")
-        return response.json()
     except httpx.RequestError as exc:
-        raise HTTPException(status_code=500, detail="OpenWeather request failed.") from exc
+        logging.warning("OpenWeather request error: %s", exc)
+        raise HTTPException(status_code=502, detail="OpenWeather request failed.") from exc
+
+    if response.status_code >= 400:
+        logging.warning(
+            "OpenWeather upstream returned %s for %s",
+            response.status_code,
+            endpoint,
+        )
+        raise HTTPException(status_code=502, detail="OpenWeather request failed.")
+    return response.json()
 
 
 def camera_coordinates_for_weather(base_dir: Path, camera_id: str) -> tuple[float, float]:
