@@ -5,7 +5,6 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 
 from auth import hash_secret, verify_secret
 from config import get_data_dir
@@ -20,13 +19,8 @@ class User:
     created_at: str
 
 
-def users_db_path() -> Path:
-    """Path to the users SQLite database."""
-    return get_data_dir() / USERS_DB_FILENAME
-
-
 def _connect() -> sqlite3.Connection:
-    path = users_db_path()
+    path = get_data_dir() / USERS_DB_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row

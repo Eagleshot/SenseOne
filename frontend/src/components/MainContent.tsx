@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { DESCRIPTION_MAX_LENGTH } from "@/contexts/appContextUtils";
 
 import { HeroImage } from "./HeroImage";
-import { useApp } from "@/contexts/useApp";
+import { useApp } from "@/contexts/AppContext";
 
 const WeatherDetail = lazy(() => import("./WeatherDetail").then((module) => ({ default: module.WeatherDetail })));
 const SensorHistoryPanel = lazy(() =>
@@ -33,7 +33,7 @@ export const MainContent: React.FC = () => {
     descriptionError,
     isStationConfigLoading,
   } = useApp();
-  const [cameraIdCopied, setCameraIdCopied] = useState(false);
+  const [stationIdCopied, setStationIdCopied] = useState(false);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
 
   const hasDescriptionChanges = descriptionDraft !== description;
@@ -61,15 +61,15 @@ export const MainContent: React.FC = () => {
     setIsEditingDescription(false);
   }, [activeWebcam.id]);
 
-  const handleCopyCameraId = async () => {
+  const handleCopyStationId = async () => {
     if (!activeWebcam.id) return;
 
     try {
       await navigator.clipboard.writeText(activeWebcam.id);
-      setCameraIdCopied(true);
-      window.setTimeout(() => setCameraIdCopied(false), 1500);
+      setStationIdCopied(true);
+      window.setTimeout(() => setStationIdCopied(false), 1500);
     } catch {
-      setCameraIdCopied(false);
+      setStationIdCopied(false);
     }
   };
 
@@ -183,22 +183,22 @@ export const MainContent: React.FC = () => {
               >
                 Eagleshot
               </a>{" "}
-              in Switzerland 🇨🇭
+              in Switzerland ðŸ‡¨ðŸ‡­
             </p>
             <div className="flex items-center justify-center gap-2 md:justify-end">
               {activeWebcam.id && (
                 <>
-                  <p>{`Camera ID: ${activeWebcam.id}`}</p>
+                  <p>{`Station ID: ${activeWebcam.id}`}</p>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => void handleCopyCameraId()}
+                    onClick={() => void handleCopyStationId()}
                     className="btn-inline-muted gap-1 text-xs underline underline-offset-4"
-                    aria-label={`Copy camera ID ${activeWebcam.id}`}
+                    aria-label={`Copy station ID ${activeWebcam.id}`}
                   >
                     <Copy className="h-3 w-3" />
-                    {cameraIdCopied ? "Copied" : "Copy"}
+                    {stationIdCopied ? "Copied" : "Copy"}
                   </Button>
                 </>
               )}
@@ -209,3 +209,4 @@ export const MainContent: React.FC = () => {
     </div>
   );
 };
+

@@ -44,3 +44,4 @@ describe("weather api parsing", () => {
     expect(forecast[0]).toMatchObject({ tempMin: 1, tempMax: 8 });
   });
 });
+

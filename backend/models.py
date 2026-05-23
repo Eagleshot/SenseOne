@@ -16,22 +16,22 @@ def to_camel(value: str) -> str:
 class ApiModel(BaseModel):
     """Base model for public API schemas."""
 
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
 
 class AppConfig(ApiModel):
-    """Persisted configuration document for a camera station.
+    """Persisted configuration document for a station.
 
     Schedule fields drive when the device captures images. When
     `useSunriseSunset` is true, the device computes start/stop from the
     station's lat/lon and the stored start/stop values are ignored
     operationally (but kept in the document so the UI can show them).
     """
-    camera_start_time: str = Field(
+    station_start_time: str = Field(
         default="06:00",
         description="Earliest time of day the device may capture, in HH:MM 24-hour format.",
     )
-    camera_stop_time: str = Field(
+    station_stop_time: str = Field(
         default="20:00",
         description="Latest time of day the device may capture, in HH:MM 24-hour format.",
     )
@@ -76,7 +76,7 @@ class AppConfig(ApiModel):
         description="ISO 8601 timestamp the device is expected to check in next, if known.",
     )
 
-    @field_validator("camera_start_time", "camera_stop_time")
+    @field_validator("station_start_time", "station_stop_time")
     @classmethod
     def validate_time_field(cls, value: str) -> str:
         candidate = value.strip()
@@ -101,16 +101,16 @@ class AppConfig(ApiModel):
 
     @model_validator(mode="after")
     def validate_times_order(self) -> "AppConfig":
-        """Validate that camera start time is before stop time.
+        """Validate that station start time is before stop time.
 
         Skipped when use_sunrise_sunset is enabled, since the device ignores
         start/stop times in that mode and the stored values may be stale.
         """
         if self.use_sunrise_sunset:
             return self
-        if self.camera_start_time >= self.camera_stop_time:
+        if self.station_start_time >= self.station_stop_time:
             raise ValueError(
-                f"Camera start time ({self.camera_start_time}) must be earlier than stop time ({self.camera_stop_time})"
+                f"Station start time ({self.station_start_time}) must be earlier than stop time ({self.station_stop_time})"
             )
         return self
 
@@ -204,22 +204,28 @@ class ImageUploadResponse(ApiModel):
     url: str = Field(description="URL where the just-uploaded image can be fetched.")
 
 
-class SensorHistoryResponse(ApiModel):
-    """One sensor-history row (units in metric)."""
-    timestamp: str = Field(description="ISO 8601 reading timestamp, UTC.")
+class _SensorFields(ApiModel):
+    """Shared sensor measurement fields (metric units)."""
+
     temperature: float = Field(description="Air temperature in degrees Celsius.")
-    humidity: int = Field(description="Relative humidity in percent (0-100).")
-    pressure: int = Field(description="Atmospheric pressure in hPa.")
-    battery: int = Field(description="Battery level in percent (0-100).")
-    wind_speed: float = Field(description="Wind speed in m/s.")
-    wind_direction: int = Field(description="Wind direction in degrees, 0=N clockwise.")
-    visibility: float = Field(description="Visibility in km.")
-    uv_index: int = Field(description="UV index (0+).")
+    humidity: int = Field(ge=0, le=100, description="Relative humidity in percent (0-100).")
+    pressure: int = Field(gt=0, description="Atmospheric pressure in hPa.")
+    battery: int = Field(ge=0, le=100, description="Battery level in percent (0-100).")
+    wind_speed: float = Field(ge=0, description="Wind speed in m/s.")
+    wind_direction: int = Field(ge=0, le=360, description="Wind direction in degrees, 0=N clockwise.")
+    visibility: float = Field(ge=0, description="Visibility in km.")
+    uv_index: int = Field(ge=0, description="UV index (0+).")
     dew_point: float = Field(description="Dew point in degrees Celsius.")
     feels_like: float = Field(description="Apparent ('feels like') temperature in degrees Celsius.")
 
 
-class SensorReadingRequest(ApiModel):
+class SensorHistoryResponse(_SensorFields):
+    """One sensor-history row (units in metric)."""
+
+    timestamp: str = Field(description="ISO 8601 reading timestamp, UTC.")
+
+
+class SensorReadingRequest(_SensorFields):
     """One sensor reading submitted by a device. Same units as SensorHistoryResponse."""
 
     timestamp: str | None = Field(
@@ -228,30 +234,6 @@ class SensorReadingRequest(ApiModel):
             "Optional ISO 8601 timestamp. When omitted, the server stamps the "
             "row with the current UTC time on receipt."
         ),
-    )
-    temperature: float = Field(description="Air temperature in degrees Celsius.")
-    humidity: int = Field(ge=0, le=100, description="Relative humidity in percent (0-100).")
-    pressure: int = Field(gt=0, description="Atmospheric pressure in hPa.")
-    battery: int = Field(ge=0, le=100, description="Battery level in percent (0-100).")
-    wind_speed: float = Field(
-        ge=0,
-        description="Wind speed in m/s.",
-    )
-    wind_direction: int = Field(
-        ge=0,
-        le=360,
-        description="Wind direction in degrees, 0=N clockwise.",
-    )
-    visibility: float = Field(ge=0, description="Visibility in km.")
-    uv_index: int = Field(
-        ge=0,
-        description="UV index (0+).",
-    )
-    dew_point: float = Field(
-        description="Dew point in degrees Celsius.",
-    )
-    feels_like: float = Field(
-        description="Apparent ('feels like') temperature in degrees Celsius.",
     )
 
     @field_validator("timestamp")

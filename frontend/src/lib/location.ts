@@ -293,3 +293,4 @@ export const formatLocationWithFlag = (
   const city = parts.slice(0, -1).join(', ');
   return `${city}, ${fallbackCountry} ${flag}`;
 };
+

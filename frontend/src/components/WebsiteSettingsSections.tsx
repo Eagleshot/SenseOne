@@ -18,10 +18,10 @@ type ScheduleSettingsSectionProps = {
   scheduleControlsDisabled: boolean;
   draftUseSunriseSunset: boolean;
   setDraftUseSunriseSunset: (value: boolean) => void;
-  draftCameraStartTime: string;
-  setDraftCameraStartTime: (value: string) => void;
-  draftCameraStopTime: string;
-  setDraftCameraStopTime: (value: string) => void;
+  draftStationStartTime: string;
+  setDraftStationStartTime: (value: string) => void;
+  draftStationStopTime: string;
+  setDraftStationStopTime: (value: string) => void;
   intervalSelection: string;
   handleIntervalSelect: (value: string) => void;
   customIntervalInput: string;
@@ -41,10 +41,10 @@ export const ScheduleSettingsSection = ({
   scheduleControlsDisabled,
   draftUseSunriseSunset,
   setDraftUseSunriseSunset,
-  draftCameraStartTime,
-  setDraftCameraStartTime,
-  draftCameraStopTime,
-  setDraftCameraStopTime,
+  draftStationStartTime,
+  setDraftStationStartTime,
+  draftStationStopTime,
+  setDraftStationStopTime,
   intervalSelection,
   handleIntervalSelect,
   customIntervalInput,
@@ -56,7 +56,7 @@ export const ScheduleSettingsSection = ({
   handleSaveSchedule,
   isButtonDisabled,
 }: ScheduleSettingsSectionProps) => (
-  <AccordionItem value="camera-schedule" className="rounded-xl border border-border bg-transparent">
+  <AccordionItem value="station-schedule" className="rounded-xl border border-border bg-transparent">
     <AccordionTrigger className="px-4 text-sm font-semibold text-foreground hover:no-underline">
       Schedule
     </AccordionTrigger>
@@ -92,9 +92,9 @@ export const ScheduleSettingsSection = ({
             <label className="text-xs text-muted-foreground">Start time</label>
             <Input
               type="time"
-              value={draftCameraStartTime}
+              value={draftStationStartTime}
               onChange={(event) => {
-                setDraftCameraStartTime(event.target.value);
+                setDraftStationStartTime(event.target.value);
                 clearScheduleError();
               }}
               disabled={scheduleControlsDisabled || draftUseSunriseSunset}
@@ -105,9 +105,9 @@ export const ScheduleSettingsSection = ({
             <label className="text-xs text-muted-foreground">Stop time</label>
             <Input
               type="time"
-              value={draftCameraStopTime}
+              value={draftStationStopTime}
               onChange={(event) => {
-                setDraftCameraStopTime(event.target.value);
+                setDraftStationStopTime(event.target.value);
                 clearScheduleError();
               }}
               disabled={scheduleControlsDisabled || draftUseSunriseSunset}
@@ -304,3 +304,4 @@ export const ThemeBrandingSection = ({
     </AccordionContent>
   </AccordionItem>
 );
+

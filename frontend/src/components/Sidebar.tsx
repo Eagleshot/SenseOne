@@ -23,7 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-import { useApp } from "@/contexts/useApp";
+import { useApp } from "@/contexts/AppContext";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { formatLocationWithFlag } from "@/lib/location";
 import { OPEN_FULLSCREEN_MAP_EVENT } from "@/lib/mapEvents";
@@ -374,3 +374,4 @@ export const Sidebar: React.FC = () => {
     </>
   );
 };
+

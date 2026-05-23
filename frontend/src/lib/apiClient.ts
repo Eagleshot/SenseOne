@@ -60,3 +60,4 @@ export const extractErrorDetail = (
   }
   return fallback;
 };
+

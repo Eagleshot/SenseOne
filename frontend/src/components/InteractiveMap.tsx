@@ -7,7 +7,7 @@ import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap, ZoomControl } f
 import { FullscreenDialog } from '@/components/FullscreenDialog';
 import { Button } from '@/components/ui/button';
 
-import { useApp } from '@/contexts/useApp';
+import { useApp } from '@/contexts/AppContext';
 import { formatLocationWithFlag } from '@/lib/location';
 import { OPEN_FULLSCREEN_MAP_EVENT } from '@/lib/mapEvents';
 import { cn } from '@/lib/utils';
@@ -39,8 +39,8 @@ type ActiveMarkerCenterProps = {
 const ActiveMarkerCenter: React.FC<ActiveMarkerCenterProps> = ({ webcamId, lat, lng }) => {
   const map = useMap();
 
-  // Only re-center when the active camera changes — not on every coordinate
-  // update — so a manual pan isn't snapped back when station data refreshes.
+  // Only re-center when the active station changes â€” not on every coordinate
+  // update â€” so a manual pan isn't snapped back when station data refreshes.
   useEffect(() => {
     map.setView([lat, lng], map.getZoom(), { animate: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -318,4 +318,5 @@ export const InteractiveMap: React.FC = () => {
     </motion.div>
   );
 };
+
 

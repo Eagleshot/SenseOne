@@ -5,7 +5,7 @@ import { SensorHistoryPanel } from "@/components/SensorHistoryPanel";
 
 const mockUseApp = vi.fn();
 
-vi.mock("@/contexts/useApp", () => ({
+vi.mock("@/contexts/AppContext", () => ({
   useApp: () => mockUseApp(),
 }));
 
@@ -33,3 +33,4 @@ describe("SensorHistoryPanel", () => {
     expect(screen.getByRole("button", { name: /add chart/i })).toBeEnabled();
   });
 });
+

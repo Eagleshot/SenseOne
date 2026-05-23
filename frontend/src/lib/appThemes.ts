@@ -149,3 +149,4 @@ export const isColorThemeKey = (value: string | null): value is ColorThemeKey =>
 export const applyColorTheme = (theme: ColorThemeKey) => {
   applyThemeVars(colorThemePresets[theme].vars);
 };
+

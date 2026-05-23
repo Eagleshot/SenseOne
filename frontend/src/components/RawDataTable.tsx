@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 import { cn } from "@/lib/utils";
 import { TEMPERATURE_UNIT } from "@/lib/units";
-import { useApp } from "@/contexts/useApp";
+import { useApp } from "@/contexts/AppContext";
 import type { SensorData } from "@/data/types";
 import {
   buildSensorCsv,
@@ -220,4 +220,5 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
     </Collapsible>
   );
 };
+
 

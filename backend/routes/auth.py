@@ -14,15 +14,11 @@ from auth import (
     get_current_user,
     record_login_failure,
     resolve_session_token,
-    verify_credentials,
 )
 from constants import AUTH_COOKIE_NAME, AUTH_COOKIE_SECURE, AUTH_COOKIE_SAMESITE
+from users import authenticate_user
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
-
-
-def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
 
 
 @router.post(
@@ -42,10 +38,10 @@ def login(payload: LoginRequest, request: Request, response: Response) -> AuthRe
     ensure_auth_configured()
 
     username = payload.username.strip()
-    client_ip = _client_ip(request)
+    client_ip = request.client.host if request.client else "unknown"
     check_login_throttle(client_ip, username)
 
-    user = verify_credentials(username, payload.password)
+    user = authenticate_user(username, payload.password)
     if user is None:
         record_login_failure(client_ip, username)
         raise HTTPException(

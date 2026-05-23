@@ -135,3 +135,4 @@ describe("historyFilters", () => {
     expect((range.to?.getTime() ?? 0) - (range.from?.getTime() ?? 0)).toBeGreaterThanOrEqual(23 * 60 * 60 * 1000);
   });
 });
+

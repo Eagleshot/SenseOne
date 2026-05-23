@@ -40,3 +40,4 @@ export const normalizeCaptureInterval = (value: string) => {
   const error = validateCaptureInterval(value);
   return error ? null : String(Number(value));
 };
+

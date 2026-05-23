@@ -154,9 +154,9 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def generate_historical_data(hours: int = 24, webcam_id: str | None = None) -> list[dict[str, Any]]:
-    camera_id = webcam_id or "default"
-    seed = int(hashlib.sha256(camera_id.encode("utf-8")).hexdigest()[:16], 16)
+def generate_historical_data(hours: int = 24, station_id: str | None = None) -> list[dict[str, Any]]:
+    station_id = station_id or "default"
+    seed = int(hashlib.sha256(station_id.encode("utf-8")).hexdigest()[:16], 16)
     rng = random.Random(seed)
     temp_offset = ((seed % 1000) - 500) / 50
     humidity_offset = ((seed // 7) % 20) - 10

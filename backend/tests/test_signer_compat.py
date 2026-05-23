@@ -1,4 +1,4 @@
-"""Verify the OpenMV (MicroPython) signer matches the CPython reference.
+﻿"""Verify the OpenMV (MicroPython) signer matches the CPython reference.
 
 If these implementations ever diverge, device-signed requests will be rejected
 by the server. Loading both modules into CPython and comparing outputs on
@@ -58,7 +58,7 @@ def test_signatures_match_for_sensor_reading(signers):
 
 
 def test_hmac_implementation_matches_stdlib(signers):
-    """The MicroPython port reimplements HMAC inline — verify it matches CPython's hmac."""
+    """The MicroPython port reimplements HMAC inline â€” verify it matches CPython's hmac."""
     import hmac
     import hashlib
 
@@ -67,3 +67,5 @@ def test_hmac_implementation_matches_stdlib(signers):
     msg = b"sample message"
     expected = hmac.new(key, msg, hashlib.sha256).digest()
     assert mpy.hmac_sha256(key, msg) == expected
+
+

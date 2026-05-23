@@ -201,3 +201,4 @@ export const fetchStationWeather = async (
     forecast: parseForecast(forecastData, weather.timezoneOffsetSeconds ?? 0),
   };
 };
+

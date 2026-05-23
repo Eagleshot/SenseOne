@@ -1,10 +1,15 @@
 """Station metadata and configuration routes."""
 
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, Query
 
+from constants import DEFAULT_ONLINE_THRESHOLD_MINUTES, NEXT_ONLINE_STATUS_BUFFER_MINUTES
 from models import (
     AppConfig,
     SensorHistoryResponse,
+    StationCoordinates,
     StationDetailResponse,
     StationDeviceSecretResponse,
     StationSummaryResponse,
@@ -15,17 +20,11 @@ from auth import (
     get_current_user,
     get_optional_current_user,
 )
-from station_repository import (
-    image_captures,
-    list_station_ids,
-    sensor_history,
-    station_detail,
-    station_summary,
-)
 from config import (
     get_data_dir,
-    read_camera_config,
-    write_camera_config,
+    read_station_config,
+    station_db_path,
+    write_station_config,
 )
 from routes import ValidStationId
 from station_access import (
@@ -33,9 +32,72 @@ from station_access import (
     require_station_edit,
     require_station_view,
 )
+from station_db import history_from_db, image_captures_from_db, latest_battery_from_db
+from utils import humanize_station_id, iso_utc, parse_iso_timestamp, sanitize_station_id
 
 
 router = APIRouter(prefix="/stations", tags=["Stations"])
+
+
+def list_station_ids(base_dir: Path) -> list[str]:
+    """Get ordered list of station IDs from the data directory."""
+    if not base_dir.exists():
+        return []
+
+    seen: set[str] = set()
+    station_ids: list[str] = []
+    for child in sorted(base_dir.iterdir(), key=lambda path: path.name):
+        if not child.is_dir():
+            continue
+        station_id = sanitize_station_id(child.name)
+        if station_id not in seen:
+            station_ids.append(station_id)
+            seen.add(station_id)
+    return station_ids
+
+
+def _is_station_online(base_dir: Path, station_id: str, config: AppConfig) -> bool:
+    """Return online status, skipping the DB when next_online is authoritative."""
+    now = datetime.now(timezone.utc)
+    next_online_at = parse_iso_timestamp(config.next_online)
+    if next_online_at is not None:
+        return now <= next_online_at + timedelta(minutes=NEXT_ONLINE_STATUS_BUFFER_MINUTES)
+
+    captures = image_captures_from_db(station_db_path(base_dir, station_id), station_id, count=1)
+    if not captures:
+        return False
+    captured_at = parse_iso_timestamp(captures[-1]["timestamp"])
+    if captured_at is None:
+        return False
+    threshold_minutes = max(config.capture_interval_minutes * 2, DEFAULT_ONLINE_THRESHOLD_MINUTES)
+    return (now - captured_at).total_seconds() <= threshold_minutes * 60
+
+
+def station_status(
+    base_dir: Path,
+    station_id: str,
+    config: AppConfig,
+) -> tuple[bool, str | None, str | None, str | None]:
+    """Get the current online/image status for a station."""
+    latest = None
+    captures = image_captures_from_db(station_db_path(base_dir, station_id), station_id, count=1)
+    if captures:
+        timestamp = parse_iso_timestamp(captures[-1]["timestamp"])
+        if timestamp is not None:
+            latest = (timestamp, captures[-1]["url"])
+
+    current_image = latest[1] if latest else None
+    last_update = None
+    next_update = None
+    now = datetime.now(timezone.utc)
+
+    if latest:
+        captured_at, _ = latest
+        last_update = iso_utc(captured_at)
+        next_update = iso_utc(captured_at + timedelta(minutes=config.capture_interval_minutes))
+
+    is_online = _is_station_online(base_dir, station_id, config)
+    return is_online, current_image, config.last_online or last_update, config.next_online or next_update
 
 
 @router.get(
@@ -48,10 +110,26 @@ router = APIRouter(prefix="/stations", tags=["Stations"])
         "also see private stations they own."
     ),
 )
-def list_stations(user=Depends(get_optional_current_user)) -> list[dict]:
+def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummaryResponse]:
     data_dir = get_data_dir()
     visible = [station_id for station_id in list_station_ids(data_dir) if can_view_station(station_id, user)]
-    return [station_summary(data_dir, station_id) for station_id in visible]
+    stations = []
+    for station_id in visible:
+        config = read_station_config(data_dir, station_id)
+        is_online = _is_station_online(data_dir, station_id, config)
+        stations.append(
+            StationSummaryResponse(
+                id=station_id,
+                name=config.title or humanize_station_id(station_id),
+                location=config.location,
+                country=config.country,
+                country_emoji=config.country_emoji,
+                coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
+                is_public=config.is_public,
+                is_online=is_online,
+            )
+        )
+    return stations
 
 
 @router.post(
@@ -87,9 +165,26 @@ def rotate_station_device_secret(
 def get_station(
     station_id: ValidStationId,
     user=Depends(get_optional_current_user),
-) -> dict:
+) -> StationDetailResponse:
     require_station_view(station_id, user)
-    return station_detail(get_data_dir(), station_id)
+    data_dir = get_data_dir()
+    config = read_station_config(data_dir, station_id)
+    is_online, current_image, last_update, next_update = station_status(data_dir, station_id, config)
+    return StationDetailResponse(
+        id=station_id,
+        name=config.title or humanize_station_id(station_id),
+        location=config.location,
+        country=config.country,
+        country_emoji=config.country_emoji,
+        coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
+        is_public=config.is_public,
+        is_online=is_online,
+        description=config.description,
+        battery=latest_battery_from_db(station_db_path(data_dir, station_id), station_id),
+        current_image=current_image,
+        last_update=last_update,
+        next_update=next_update,
+    )
 
 
 @router.get(
@@ -105,9 +200,11 @@ def get_station_image_captures(
     station_id: ValidStationId,
     count: int = Query(48, ge=1, le=240, description="Maximum number of captures to return."),
     user=Depends(get_optional_current_user),
-) -> list[dict]:
+) -> list[TimelineItemResponse]:
     require_station_view(station_id, user)
-    return image_captures(get_data_dir(), station_id, count) or []
+    data_dir = get_data_dir()
+    rows = image_captures_from_db(station_db_path(data_dir, station_id), station_id, count)
+    return [TimelineItemResponse(**row) for row in rows]
 
 
 @router.get(
@@ -124,9 +221,11 @@ def get_station_sensor_readings(
     station_id: ValidStationId,
     hours: int = Query(24, ge=1, le=168, description="Lookback window in hours."),
     user=Depends(get_optional_current_user),
-) -> list[dict]:
+) -> list[SensorHistoryResponse]:
     require_station_view(station_id, user)
-    return sensor_history(get_data_dir(), station_id, hours) or []
+    data_dir = get_data_dir()
+    rows = history_from_db(station_db_path(data_dir, station_id), station_id, hours)
+    return [SensorHistoryResponse(**row) for row in rows]
 
 
 @router.get(
@@ -143,7 +242,7 @@ def get_station_config(
     user=Depends(get_current_user),
 ) -> AppConfig:
     require_station_edit(station_id, user)
-    return read_camera_config(get_data_dir(), station_id)
+    return read_station_config(get_data_dir(), station_id)
 
 
 @router.put(
@@ -153,7 +252,7 @@ def get_station_config(
     description=(
         "Replace the persisted configuration document for one station. "
         "Owner or admin only. Returns 422 if validation fails (e.g. "
-        "`cameraStartTime` not earlier than `cameraStopTime`)."
+        "`stationStartTime` not earlier than `stationStopTime`)."
     ),
 )
 def update_station_config(
@@ -162,5 +261,5 @@ def update_station_config(
     user=Depends(get_current_user),
 ) -> AppConfig:
     require_station_edit(station_id, user)
-    write_camera_config(get_data_dir(), station_id, payload)
+    write_station_config(get_data_dir(), station_id, payload)
     return payload

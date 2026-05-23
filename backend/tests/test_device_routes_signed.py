@@ -1,4 +1,4 @@
-"""End-to-end tests for the HMAC-signed device routes.
+﻿"""End-to-end tests for the HMAC-signed device routes.
 
 Builds a minimal FastAPI app with just the two device routers, then drives
 them through TestClient using the reference client signer. The point is to
@@ -56,12 +56,12 @@ def _build_app() -> FastAPI:
 
 
 @pytest.fixture
-def signed_client(setup_camera_dir, monkeypatch):
-    data_dir, camera_id = setup_camera_dir
+def signed_client(setup_station_dir, monkeypatch):
+    data_dir, station_id = setup_station_dir
     monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
-    secret_b64 = provision_device_hmac_secret(camera_id)
+    secret_b64 = provision_device_hmac_secret(station_id)
     client = TestClient(_build_app())
-    return client, camera_id, secret_b64
+    return client, station_id, secret_b64
 
 
 def _post_signed(
@@ -85,10 +85,10 @@ def _post_signed(
 
 
 def test_signed_image_upload_succeeds(signed_client):
-    client, camera_id, secret_b64 = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{camera_id}/images"
+    client, station_id, secret_b64 = signed_client
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
     response = _post_signed(
-        client, secret_b64, camera_id, path, _JPEG_BODY,
+        client, secret_b64, station_id, path, _JPEG_BODY,
         extra_headers={"Content-Type": "image/jpeg", "X-Filename": "capture.jpg"},
     )
     assert response.status_code == 201, response.text
@@ -98,18 +98,18 @@ def test_signed_image_upload_succeeds(signed_client):
 
 
 def test_image_upload_without_signature_is_rejected(signed_client):
-    client, camera_id, _ = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{camera_id}/images"
+    client, station_id, _ = signed_client
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
     response = client.post(path, content=_JPEG_BODY, headers={"Content-Type": "image/jpeg"})
     assert response.status_code == 401
 
 
 def test_image_upload_with_wrong_secret_is_rejected(signed_client):
-    client, camera_id, _ = signed_client
+    client, station_id, _ = signed_client
     bogus_secret = generate_device_hmac_secret_b64()
-    path = f"{DEVICE_API_PREFIX}/stations/{camera_id}/images"
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
     response = _post_signed(
-        client, bogus_secret, camera_id, path, _JPEG_BODY,
+        client, bogus_secret, station_id, path, _JPEG_BODY,
         extra_headers={"Content-Type": "image/jpeg"},
     )
     assert response.status_code == 401
@@ -117,12 +117,12 @@ def test_image_upload_with_wrong_secret_is_rejected(signed_client):
 
 def test_signed_sensor_reading_succeeds(signed_client):
     """Verifies dep-ordering: the HMAC dep consumes the body, then Pydantic still parses it."""
-    client, camera_id, secret_b64 = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{camera_id}/sensor-readings"
+    client, station_id, secret_b64 = signed_client
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
     import json
     body = json.dumps(_SENSOR_PAYLOAD).encode("utf-8")
     response = _post_signed(
-        client, secret_b64, camera_id, path, body,
+        client, secret_b64, station_id, path, body,
         extra_headers={"Content-Type": "application/json"},
     )
     assert response.status_code == 201, response.text
@@ -132,8 +132,8 @@ def test_signed_sensor_reading_succeeds(signed_client):
 
 
 def test_sensor_reading_without_signature_is_rejected(signed_client):
-    client, camera_id, _ = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{camera_id}/sensor-readings"
+    client, station_id, _ = signed_client
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
     import json
     response = client.post(
         path,
@@ -144,14 +144,14 @@ def test_sensor_reading_without_signature_is_rejected(signed_client):
 
 
 def test_sensor_reading_with_tampered_body_is_rejected(signed_client):
-    """Sign one payload, send a different one — signature should fail."""
-    client, camera_id, secret_b64 = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{camera_id}/sensor-readings"
+    """Sign one payload, send a different one â€” signature should fail."""
+    client, station_id, secret_b64 = signed_client
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
     import json
     signed_body = json.dumps(_SENSOR_PAYLOAD).encode("utf-8")
     tampered = json.dumps({**_SENSOR_PAYLOAD, "battery": 1}).encode("utf-8")
     headers = eagleshot_signing.sign_request(
-        station_id=camera_id,
+        station_id=station_id,
         secret_b64=secret_b64,
         method="POST",
         path=path,
@@ -160,3 +160,5 @@ def test_sensor_reading_with_tampered_body_is_rejected(signed_client):
     headers["Content-Type"] = "application/json"
     response = client.post(path, content=tampered, headers=headers)
     assert response.status_code == 401
+
+

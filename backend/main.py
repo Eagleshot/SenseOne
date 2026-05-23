@@ -51,12 +51,6 @@ def add_security_headers_middleware(app: FastAPI) -> None:
         return response
 
 
-def _is_https_optional_path(path: str) -> bool:
-    if path in HTTP_ALLOWED_EXACT_PATHS:
-        return True
-    return any(path.startswith(prefix) for prefix in HTTP_ALLOWED_PATH_PREFIXES)
-
-
 def add_https_enforcement_middleware(app: FastAPI) -> None:
     """Reject plain-HTTP requests for routes that carry user credentials."""
     enabled = (os.getenv("APP_REQUIRE_HTTPS") or "").strip().lower() in ("1", "true", "yes")
@@ -69,7 +63,12 @@ def add_https_enforcement_middleware(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def enforce_https(request: Request, call_next):
-        if request.url.scheme == "https" or _is_https_optional_path(request.url.path):
+        path = request.url.path
+        if (
+            request.url.scheme == "https"
+            or path in HTTP_ALLOWED_EXACT_PATHS
+            or any(path.startswith(prefix) for prefix in HTTP_ALLOWED_PATH_PREFIXES)
+        ):
             return await call_next(request)
         return JSONResponse(
             status_code=status.HTTP_426_UPGRADE_REQUIRED,

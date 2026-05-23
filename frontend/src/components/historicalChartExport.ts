@@ -101,3 +101,4 @@ export const exportChartAsImage = async (
     URL.revokeObjectURL(svgUrl);
   }
 };
+

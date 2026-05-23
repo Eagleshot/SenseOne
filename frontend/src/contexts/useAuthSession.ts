@@ -70,3 +70,4 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
     logout,
   };
 };
+

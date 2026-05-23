@@ -50,3 +50,4 @@ describe("appContextUtils timestamp parsing", () => {
     expect(timelineItem.url).toBe("/api/v1/stations/station-1/images/example.png");
   });
 });
+

@@ -6,7 +6,7 @@ import { HistoricalCharts } from "@/components/HistoricalCharts";
 
 const mockUseApp = vi.fn();
 
-vi.mock("@/contexts/useApp", () => ({
+vi.mock("@/contexts/AppContext", () => ({
   useApp: () => mockUseApp(),
 }));
 
@@ -131,3 +131,4 @@ describe("HistoricalCharts", () => {
     expect(screen.getByRole("heading", { name: /temperature \+ humidity/i })).toBeInTheDocument();
   });
 });
+

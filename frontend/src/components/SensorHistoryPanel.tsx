@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 
-import { useApp } from "@/contexts/useApp";
+import { useApp } from "@/contexts/AppContext";
 import { createDefaultHistoryDateRange, filterHistoricalData } from "@/lib/historyFilters";
 import { HistoricalCharts } from "./HistoricalCharts";
 import { RawDataTable } from "./RawDataTable";
@@ -115,3 +115,4 @@ export const SensorHistoryPanel: React.FC = () => {
     </motion.div>
   );
 };
+

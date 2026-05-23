@@ -5,7 +5,7 @@ import { Thermometer, Droplets, Wind, Gauge, Eye, Sunrise, Sunset, Navigation, C
 import { formatDistanceToNow } from "date-fns";
 
 import { fetchStationWeather, formatTimeLabelWithOffset, type ForecastDay, type WeatherState } from "@/api/weather";
-import { useApp } from "@/contexts/useApp";
+import { useApp } from "@/contexts/AppContext";
 import { apiBaseUrl, isAbortError } from "@/lib/apiClient";
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 import { cn } from "@/lib/utils";
@@ -305,3 +305,4 @@ export const WeatherDetail: React.FC = () => {
     </motion.div>
   );
 };
+

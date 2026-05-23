@@ -10,3 +10,4 @@ export type MetricType =
   | "feelsLike";
 
 export type ChartIconKey = "line" | "thermometer" | "battery" | "humidity" | "wind" | "gauge" | "activity" | "eye";
+

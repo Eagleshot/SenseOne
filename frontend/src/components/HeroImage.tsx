@@ -22,7 +22,7 @@ import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
 import { StatusSummary } from '@/components/StatusSummary';
 import { QuickInfoCards } from '@/components/QuickInfoCards';
 
-import { useApp } from '@/contexts/useApp';
+import { useApp } from '@/contexts/AppContext';
 import { formatDateTimeLabel } from '@/lib/datetime';
 import { cn } from '@/lib/utils';
 import { formatLocationWithFlag } from '@/lib/location';
@@ -230,7 +230,7 @@ export const HeroImage: React.FC = () => {
                   </div>
                   <p className="text-lg font-semibold text-foreground">No pictures available</p>
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    Try refreshing later or switch to another camera.
+                    Try refreshing later or switch to another station.
                   </p>
                   <Button
                     variant="ghost"
@@ -274,7 +274,7 @@ export const HeroImage: React.FC = () => {
                 </div>
                 <p className="text-lg font-semibold text-white">No pictures available</p>
                 <p className="mt-2 text-sm leading-relaxed text-white/75">
-                  Try another camera or check back soon.
+                  Try another station or check back soon.
                 </p>
               </div>
             )}
@@ -461,3 +461,4 @@ export const HeroImage: React.FC = () => {
     </div>
   );
 };
+

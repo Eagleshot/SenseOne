@@ -101,14 +101,6 @@ def canonical_signing_string(
     )).encode("ascii")
 
 
-def compute_signature_hex(secret: bytes, message: bytes) -> str:
-    return hmac.new(secret, message, hashlib.sha256).hexdigest()
-
-
-def _nonce_db_path() -> Path:
-    return get_data_dir() / NONCE_DB_FILENAME
-
-
 def _ensure_nonce_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as connection:
@@ -130,7 +122,7 @@ def _ensure_nonce_db(db_path: Path) -> None:
 
 def _register_nonce(station_id: str, nonce: str, now: float) -> bool:
     """Insert (station_id, nonce). Returns True if fresh, False on replay."""
-    db_path = _nonce_db_path()
+    db_path = get_data_dir() / NONCE_DB_FILENAME
     _ensure_nonce_db(db_path)
     cutoff = now - NONCE_RETENTION_SECONDS
     with sqlite3.connect(db_path) as connection:
@@ -159,8 +151,7 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
 
     Returns the raw request body on success. Raises HTTPException(401) on any
     failure. The body is read into memory once here; route handlers should
-    use the returned bytes (or request.state.verified_body) rather than
-    re-streaming the request.
+    use the returned bytes rather than re-streaming the request.
     """
     require_station_exists(station_id)
 
@@ -220,7 +211,7 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
         path=request.url.path,
         body_sha256_hex=body_sha256_hex,
     )
-    expected_sig_hex = compute_signature_hex(secret, canonical)
+    expected_sig_hex = hmac.new(secret, canonical, hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(expected_sig_hex, provided_sig_hex):
         _reject("Signature mismatch.")
@@ -228,5 +219,4 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
     if not _register_nonce(station_id, nonce, now):
         _reject("Nonce already used.")
 
-    request.state.verified_body = body
     return body

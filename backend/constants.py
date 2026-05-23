@@ -6,8 +6,8 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/png",
     "image/webp",
 }
-CAMERA_DB_FILENAME = "camera.db"
-CAMERA_CONFIG_FILENAME = "config.yaml"
+STATION_DB_FILENAME = "station.db"
+STATION_CONFIG_FILENAME = "config.yaml"
 
 AUTH_COOKIE_NAME = "eagleshot_session"
 AUTH_COOKIE_SECURE = True

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from auth import get_optional_current_user
-from config import read_camera_config, get_data_dir
+from config import read_station_config, get_data_dir
 from station_access import require_station_view
 from utils import media_type_from_path, sanitize_filename
 from routes import ValidStationId
@@ -76,15 +76,15 @@ async def fetch_openweather(endpoint: str, lat: float, lon: float, units: str = 
     return response.json()
 
 
-def camera_coordinates_for_weather(base_dir: Path, camera_id: str) -> tuple[float, float]:
+def station_coordinates_for_weather(base_dir: Path, station_id: str) -> tuple[float, float]:
     """Get coordinates for weather API calls."""
-    config = read_camera_config(base_dir, camera_id)
+    config = read_station_config(base_dir, station_id)
     lat = config.lat
     lon = config.lon
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-        raise HTTPException(status_code=400, detail="Camera coordinates are invalid.")
+        raise HTTPException(status_code=400, detail="Station coordinates are invalid.")
     if lat == 0 and lon == 0:
-        raise HTTPException(status_code=400, detail="Camera coordinates are not configured.")
+        raise HTTPException(status_code=400, detail="Station coordinates are not configured.")
     return lat, lon
 
 
@@ -103,7 +103,7 @@ async def get_station_current_weather(
     user=Depends(get_optional_current_user),
 ) -> dict:
     require_station_view(station_id, user)
-    lat, lon = camera_coordinates_for_weather(get_data_dir(), station_id)
+    lat, lon = station_coordinates_for_weather(get_data_dir(), station_id)
     return await fetch_openweather("weather", lat, lon, "metric")
 
 
@@ -121,5 +121,5 @@ async def get_station_weather_forecast(
     user=Depends(get_optional_current_user),
 ) -> dict:
     require_station_view(station_id, user)
-    lat, lon = camera_coordinates_for_weather(get_data_dir(), station_id)
+    lat, lon = station_coordinates_for_weather(get_data_dir(), station_id)
     return await fetch_openweather("forecast", lat, lon, "metric")

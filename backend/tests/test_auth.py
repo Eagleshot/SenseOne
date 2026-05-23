@@ -1,4 +1,4 @@
-"""Tests for authentication."""
+﻿"""Tests for authentication."""
 
 import time
 
@@ -80,3 +80,5 @@ def test_session_storage_is_mutable():
     assert "test_token" in AUTH_SESSIONS
     AUTH_SESSIONS.pop("test_token")
     assert "test_token" not in AUTH_SESSIONS
+
+

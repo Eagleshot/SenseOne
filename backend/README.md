@@ -8,24 +8,24 @@ From `backend/`:
 python .\seed\seed_mock_data.py
 ```
 
-This creates per-camera folders in `backend/data/<camera_id>/` with:
+This creates per-station folders in `backend/data/<station_id>/` with:
 
 - `images/` mock assets
 - `config.yaml` including schedule and metadata (`title`, `lat`, `lon`, `alt`, `location`, `country`, `country_emoji`)
-- `camera.db` containing image capture and sensor reading rows
+- `station.db` containing image capture and sensor reading rows
 
-Use `--camera-id`, `--count`, and `--overwrite` to control generated sample data:
+Use `--station-id`, `--count`, and `--overwrite` to control generated sample data:
 
 ```powershell
-python .\seed\seed_mock_data.py --camera-id matterhorn-01 --count 24 --overwrite
+python .\seed\seed_mock_data.py --station-id matterhorn-01 --count 24 --overwrite
 ```
 
 This backend is a single FastAPI server that:
 
 - serves the frontend API routes used by the Vite app with session-cookie auth
 - accepts HMAC-signed device uploads on `POST /v1/device/stations/{station_id}/images` and `POST /v1/device/stations/{station_id}/sensor-readings` — see [Device auth (HMAC)](#device-auth-hmac)
-- saves uploaded files into `backend/data/<camera>/images/`, where each camera has its own folder
-- creates a `config.yaml` and `camera.db` per camera directory on first write
+- saves uploaded files into `backend/data/<station>/images/`, where each station has its own folder
+- creates a `config.yaml` and `station.db` per station directory on first write
 - can optionally expose weather and auth features through the shared project root `.env`
 
 ## 1) Prerequisites
@@ -39,6 +39,17 @@ Optional for the shared frontend/backend `.env`:
 - `VITE_API_BASE_URL` for the frontend
 - `APP_AUTH_USERNAME`, `APP_AUTH_PASSWORD`, and `OPENWEATHER_API_KEY` for the backend
 - `APP_REQUIRE_HTTPS=true` to reject plain-HTTP requests for user-auth routes (device routes stay HTTP-allowed since their auth is HMAC-signed)
+
+## Migrating old local data
+
+This version uses station-named config and SQLite storage. If an existing data
+directory still has `camera_start_time`, `camera_stop_time`, `camera.db`, or a
+`camera_images` table, run the one-time migration before starting the backend:
+
+```powershell
+python .\migrations\rename_camera_to_station.py --dry-run
+python .\migrations\rename_camera_to_station.py
+```
 
 ## 2) Open the backend folder
 
@@ -218,4 +229,4 @@ Open:
 - `426 Upgrade Required`:
   - `APP_REQUIRE_HTTPS=true` is set but the request reached the server over plain HTTP — fix the reverse proxy / `--proxy-headers` setup, or scope the env flag to production only
 - File not where expected:
-  - uploaded files are written to `backend/data/<camera>/images/`
+  - uploaded files are written to `backend/data/<station>/images/`

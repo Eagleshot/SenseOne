@@ -1,4 +1,4 @@
-"""Tests for HTTPS enforcement middleware and the server-time endpoint."""
+﻿"""Tests for HTTPS enforcement middleware and the server-time endpoint."""
 
 from fastapi.testclient import TestClient
 
@@ -26,7 +26,7 @@ def test_server_time_endpoint_returns_unix_seconds(tmp_data_dir, monkeypatch):
 
 def test_https_enforcement_disabled_allows_plain_http_login(tmp_data_dir, monkeypatch):
     client = _client(tmp_data_dir, monkeypatch, require_https=False)
-    # No user configured, so login returns 401 — but the request reaches the
+    # No user configured, so login returns 401 â€” but the request reaches the
     # auth route rather than being short-circuited by the HTTPS middleware.
     response = client.post(
         "/v1/auth/login",
@@ -45,9 +45,9 @@ def test_https_enforcement_blocks_user_routes_over_http(tmp_data_dir, monkeypatc
     assert "HTTPS" in response.json()["detail"]
 
 
-def test_https_enforcement_allows_device_routes_over_http(tmp_data_dir, monkeypatch, setup_camera_dir):
+def test_https_enforcement_allows_device_routes_over_http(tmp_data_dir, monkeypatch, setup_station_dir):
     """Signed device requests must still work over HTTP even with enforcement on."""
-    data_dir, station_id = setup_camera_dir
+    data_dir, station_id = setup_station_dir
     monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
     secret_b64 = provision_device_hmac_secret(station_id)
 
@@ -87,5 +87,7 @@ def test_https_enforcement_passes_when_scheme_is_https(tmp_data_dir, monkeypatch
         "/v1/auth/login",
         json={"username": "nobody", "password": "nobody"},
     )
-    # 401/503/etc — anything but 426 means the middleware let it through.
+    # 401/503/etc â€” anything but 426 means the middleware let it through.
     assert response.status_code != 426
+
+

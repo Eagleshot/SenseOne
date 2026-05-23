@@ -30,8 +30,8 @@ export type StationDetailResponse = StationSummaryResponse & {
 };
 
 export type StationConfigResponse = {
-  cameraStartTime: string;
-  cameraStopTime: string;
+  stationStartTime: string;
+  stationStopTime: string;
   useSunriseSunset: boolean;
   captureIntervalMinutes: number;
   title: string;
@@ -48,8 +48,8 @@ export type StationConfigResponse = {
 };
 
 export type StationScheduleConfig = {
-  cameraStartTime: string;
-  cameraStopTime: string;
+  stationStartTime: string;
+  stationStopTime: string;
   useSunriseSunset: boolean;
   captureInterval: string;
 };
@@ -89,8 +89,8 @@ export const UNAVAILABLE_WEBCAM: Webcam = {
 };
 
 export const FALLBACK_STATION_SCHEDULE_CONFIG: StationScheduleConfig = {
-  cameraStartTime: "06:00",
-  cameraStopTime: "20:00",
+  stationStartTime: "06:00",
+  stationStopTime: "20:00",
   useSunriseSunset: false,
   captureInterval: "30",
 };
@@ -129,8 +129,8 @@ export const parseStationResponse = (
 };
 
 export const parseStationConfigResponse = (item: StationConfigResponse): StationScheduleConfig => ({
-  cameraStartTime: item.cameraStartTime,
-  cameraStopTime: item.cameraStopTime,
+  stationStartTime: item.stationStartTime,
+  stationStopTime: item.stationStopTime,
   useSunriseSunset: item.useSunriseSunset,
   captureInterval: String(item.captureIntervalMinutes),
 });
@@ -144,8 +144,8 @@ export const createStationConfigRequest = (
 });
 
 export const createStationScheduleUpdate = (schedule: StationScheduleConfig): Partial<StationConfigResponse> => ({
-  cameraStartTime: schedule.cameraStartTime,
-  cameraStopTime: schedule.cameraStopTime,
+  stationStartTime: schedule.stationStartTime,
+  stationStopTime: schedule.stationStopTime,
   useSunriseSunset: schedule.useSunriseSunset,
   captureIntervalMinutes: Number(schedule.captureInterval),
 });
@@ -212,3 +212,4 @@ export const getStationImageCaptures = (baseUrl: string, stationId: string, coun
     signal,
     throwOnHttpError: false,
   });
+

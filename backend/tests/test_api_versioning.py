@@ -1,4 +1,4 @@
-"""Tests for v1 API routing and public wire schemas."""
+﻿"""Tests for v1 API routing and public wire schemas."""
 
 import importlib.util
 import sys
@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from main import create_app
 from auth import AUTH_SESSIONS, create_session
-from config import ensure_camera_dir, write_camera_config
+from config import ensure_station_dir, write_station_config
 from models import AppConfig
 from station_hmac import provision_device_hmac_secret
 from users import create_user
@@ -46,8 +46,8 @@ def _auth_headers() -> dict[str, str]:
 
 
 def _station(tmp_data_dir, station_id: str = "station-1") -> str:
-    ensure_camera_dir(tmp_data_dir, station_id)
-    write_camera_config(
+    ensure_station_dir(tmp_data_dir, station_id)
+    write_station_config(
         tmp_data_dir,
         station_id,
         AppConfig(
@@ -103,21 +103,21 @@ def test_v1_station_config_accepts_and_returns_camel_case(tmp_data_dir, monkeypa
     get_response = client.get(f"/v1/stations/{station_id}/config", headers=headers)
     assert get_response.status_code == 200
     config = get_response.json()
-    assert config["cameraStartTime"] == "06:00"
+    assert config["stationStartTime"] == "06:00"
     assert config["captureIntervalMinutes"] == 30
     assert config["isPublic"] is True
-    assert "camera_start_time" not in config
+    assert "station_start_time" not in config
     assert "is_public" not in config
 
-    config["cameraStartTime"] = "07:00"
-    config["cameraStopTime"] = "19:00"
+    config["stationStartTime"] = "07:00"
+    config["stationStopTime"] = "19:00"
     config["isPublic"] = False
     put_response = client.put(f"/v1/stations/{station_id}/config", json=config, headers=headers)
 
     assert put_response.status_code == 200
     updated = put_response.json()
-    assert updated["cameraStartTime"] == "07:00"
-    assert updated["cameraStopTime"] == "19:00"
+    assert updated["stationStartTime"] == "07:00"
+    assert updated["stationStopTime"] == "19:00"
     assert updated["isPublic"] is False
 
 
@@ -312,7 +312,9 @@ def test_openapi_lists_frontend_and_device_paths(tmp_data_dir, monkeypatch):
     assert "/v1/stations/{station_id}/chart-data-sources" not in paths
     assert "/v1/stations/{station_id}/rotate-key" not in paths
     assert "/v1/upload" not in paths
-    assert "/v1/upload/{camera_id}" not in paths
+    assert "/v1/upload/{station_id}" not in paths
     assert "/v1/sensors/{station_id}/readings" not in paths
-    assert "/upload/{camera_id}" not in paths
+    assert "/upload/{station_id}" not in paths
     assert "/sensors/{station_id}/readings" not in paths
+
+

@@ -1,4 +1,4 @@
-"""Camera configuration management."""
+"""Station configuration management."""
 
 import logging
 import os
@@ -7,27 +7,13 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from constants import CAMERA_CONFIG_FILENAME, CAMERA_DB_FILENAME
+from constants import STATION_CONFIG_FILENAME, STATION_DB_FILENAME
 from models import AppConfig
 
 
-CONFIG_FIELDS = (
-    "title",
-    "description",
-    "lat",
-    "lon",
-    "alt",
-    "location",
-    "country",
-    "country_emoji",
-    "is_public",
-    "last_online",
-    "next_online",
-    "camera_start_time",
-    "camera_stop_time",
-    "use_sunrise_sunset",
-    "capture_interval_minutes",
-)
+CONFIG_FIELDS = tuple(AppConfig.model_fields.keys())
+
+_UNSET: object = object()
 
 META_OWNER_KEY = "_owner"
 META_DEVICE_HMAC_SECRET_KEY = "_device_hmac_secret_b64"
@@ -40,101 +26,75 @@ def get_data_dir() -> Path:
     return Path(os.getenv("APP_DATA_DIR") or (base_dir / "data")).resolve()
 
 
-def default_camera_config(camera_id: str) -> AppConfig:
-    """Get default configuration for a camera."""
-    return AppConfig()
+def station_db_path(base_dir: Path, station_id: str) -> Path:
+    """Get the database file path for a station."""
+    return base_dir / station_id / STATION_DB_FILENAME
 
 
-def camera_config_yaml_for_values(values: AppConfig) -> str:
-    """Serialize AppConfig values to YAML."""
-    payload = {field: getattr(values, field) for field in CONFIG_FIELDS}
-    return yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
-
-
-def camera_dir(base_dir: Path, camera_id: str) -> Path:
-    """Get the directory path for a camera."""
-    return base_dir / camera_id
-
-
-def camera_db_path(base_dir: Path, camera_id: str) -> Path:
-    """Get the database file path for a camera."""
-    return camera_dir(base_dir, camera_id) / CAMERA_DB_FILENAME
-
-
-def camera_config_path(base_dir: Path, camera_id: str) -> Path:
-    """Get the configuration file path for a camera."""
-    return camera_dir(base_dir, camera_id) / CAMERA_CONFIG_FILENAME
-
-
-def read_camera_config(base_dir: Path, camera_id: str) -> AppConfig:
-    """Read camera configuration from file. On read or parse failure, falls back to defaults."""
-    config_path = camera_config_path(base_dir, camera_id)
-    if not config_path.exists():
-        ensure_camera_dir(base_dir, camera_id)
-        return default_camera_config(camera_id)
-
-    try:
-        text = config_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        logging.error("Failed to read camera config for %s: %s", camera_id, exc)
-        return default_camera_config(camera_id)
-
-    try:
-        parsed = yaml.safe_load(text) or {}
-    except yaml.YAMLError as exc:
-        logging.error("Failed to parse camera config for %s: %s", camera_id, exc)
-        return default_camera_config(camera_id)
-
-    if not isinstance(parsed, dict):
-        logging.error("Camera config for %s is not a mapping; using defaults.", camera_id)
-        return default_camera_config(camera_id)
-
-    defaults = default_camera_config(camera_id).model_dump()
-    defaults.update({k: v for k, v in parsed.items() if k in CONFIG_FIELDS})
-    try:
-        return AppConfig(**defaults)
-    except ValidationError as exc:
-        logging.error("Camera config for %s failed validation: %s", camera_id, exc)
-        return default_camera_config(camera_id)
-
-
-def _read_raw_yaml(base_dir: Path, camera_id: str) -> dict:
-    """Read the raw YAML mapping for a camera, returning {} on any error."""
-    config_path = camera_config_path(base_dir, camera_id)
+def _read_config_doc(base_dir: Path, station_id: str) -> dict:
+    """Read the raw station config document, returning {} on any error."""
+    config_path = base_dir / station_id / STATION_CONFIG_FILENAME
     if not config_path.exists():
         return {}
     try:
         parsed = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
+    except (OSError, yaml.YAMLError) as exc:
+        logging.error("Failed to read station config for %s: %s", station_id, exc)
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    if not isinstance(parsed, dict):
+        logging.error("Station config for %s is not a mapping; using defaults.", station_id)
+        return {}
+    return parsed
 
 
-def write_camera_config(base_dir: Path, camera_id: str, values: AppConfig) -> None:
-    """Write camera configuration to file, preserving server-managed meta fields."""
-    ensure_camera_dir(base_dir, camera_id)
-    existing = _read_raw_yaml(base_dir, camera_id)
-    payload = {field: getattr(values, field) for field in CONFIG_FIELDS}
-    for meta_key in META_FIELDS:
-        if meta_key in existing:
-            payload[meta_key] = existing[meta_key]
-    camera_config_path(base_dir, camera_id).write_text(
-        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+def _write_config_doc(base_dir: Path, station_id: str, document: dict) -> None:
+    """Write the raw station config document."""
+    station_root = base_dir / station_id
+    station_root.mkdir(parents=True, exist_ok=True)
+    (station_root / STATION_CONFIG_FILENAME).write_text(
+        yaml.safe_dump(document, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
     )
 
 
-def read_station_owner(base_dir: Path, camera_id: str) -> str | None:
+def read_station_config(base_dir: Path, station_id: str) -> AppConfig:
+    """Read station configuration from file. On read or parse failure, falls back to defaults."""
+    if not (base_dir / station_id / STATION_CONFIG_FILENAME).exists():
+        ensure_station_dir(base_dir, station_id)
+        return AppConfig()
+
+    defaults = AppConfig().model_dump()
+    raw = _read_config_doc(base_dir, station_id)
+    defaults.update({k: v for k, v in raw.items() if k in CONFIG_FIELDS})
+    try:
+        return AppConfig(**defaults)
+    except ValidationError as exc:
+        logging.error("Station config for %s failed validation: %s", station_id, exc)
+        return AppConfig()
+
+
+def write_station_config(base_dir: Path, station_id: str, values: AppConfig) -> None:
+    """Write station configuration to file, preserving server-managed meta fields."""
+    ensure_station_dir(base_dir, station_id)
+    existing = _read_config_doc(base_dir, station_id)
+    payload = {field: getattr(values, field) for field in CONFIG_FIELDS}
+    for meta_key in META_FIELDS:
+        if meta_key in existing:
+            payload[meta_key] = existing[meta_key]
+    _write_config_doc(base_dir, station_id, payload)
+
+
+def read_station_owner(base_dir: Path, station_id: str) -> str | None:
     """Return the username that owns this station, or None if unowned."""
-    value = _read_raw_yaml(base_dir, camera_id).get(META_OWNER_KEY)
+    value = _read_config_doc(base_dir, station_id).get(META_OWNER_KEY)
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
 
 
-def read_station_device_hmac_secret_b64(base_dir: Path, camera_id: str) -> str | None:
+def read_station_device_hmac_secret_b64(base_dir: Path, station_id: str) -> str | None:
     """Return the base64url-encoded device HMAC secret for this station, or None."""
-    value = _read_raw_yaml(base_dir, camera_id).get(META_DEVICE_HMAC_SECRET_KEY)
+    value = _read_config_doc(base_dir, station_id).get(META_DEVICE_HMAC_SECRET_KEY)
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
@@ -142,46 +102,46 @@ def read_station_device_hmac_secret_b64(base_dir: Path, camera_id: str) -> str |
 
 def write_station_meta(
     base_dir: Path,
-    camera_id: str,
+    station_id: str,
     *,
-    owner: str | None = ...,
-    device_hmac_secret_b64: str | None = ...,
+    owner: str | None = _UNSET,
+    device_hmac_secret_b64: str | None = _UNSET,
 ) -> None:
     """Update server-managed meta fields without touching user-editable config."""
-    ensure_camera_dir(base_dir, camera_id)
-    existing = _read_raw_yaml(base_dir, camera_id)
+    ensure_station_dir(base_dir, station_id)
+    existing = _read_config_doc(base_dir, station_id)
     if not existing:
-        existing = {field: getattr(default_camera_config(camera_id), field) for field in CONFIG_FIELDS}
-    if owner is not ...:
+        existing = {field: getattr(AppConfig(), field) for field in CONFIG_FIELDS}
+    if owner is not _UNSET:
         if owner is None:
             existing.pop(META_OWNER_KEY, None)
         else:
             existing[META_OWNER_KEY] = owner
-    if device_hmac_secret_b64 is not ...:
+    if device_hmac_secret_b64 is not _UNSET:
         if device_hmac_secret_b64 is None:
             existing.pop(META_DEVICE_HMAC_SECRET_KEY, None)
         else:
             existing[META_DEVICE_HMAC_SECRET_KEY] = device_hmac_secret_b64
-    camera_config_path(base_dir, camera_id).write_text(
-        yaml.safe_dump(existing, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    _write_config_doc(base_dir, station_id, existing)
 
 
-def ensure_camera_dir(base_dir: Path, camera_id: str) -> None:
-    """Ensure camera directory and database exist."""
+def ensure_station_dir(base_dir: Path, station_id: str) -> None:
+    """Ensure station directory and database exist."""
     from station_db import ensure_station_db
 
-    camera_root = camera_dir(base_dir, camera_id)
-    images_dir = camera_root / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
+    station_root = base_dir / station_id
+    (station_root / "images").mkdir(parents=True, exist_ok=True)
 
-    config_file = camera_config_path(base_dir, camera_id)
+    config_file = station_root / STATION_CONFIG_FILENAME
     if not config_file.exists():
+        defaults = AppConfig()
         config_file.write_text(
-            camera_config_yaml_for_values(default_camera_config(camera_id)),
+            yaml.safe_dump(
+                {field: getattr(defaults, field) for field in CONFIG_FIELDS},
+                sort_keys=False,
+                allow_unicode=True,
+            ),
             encoding="utf-8",
         )
 
-    db_path = camera_db_path(base_dir, camera_id)
-    ensure_station_db(db_path)
+    ensure_station_db(station_db_path(base_dir, station_id))

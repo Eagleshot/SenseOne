@@ -65,3 +65,4 @@ export const logoutUser = (apiBaseUrl: string) =>
     method: "POST",
     credentials: "include",
   });
+

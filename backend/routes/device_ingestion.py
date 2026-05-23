@@ -7,12 +7,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from config import camera_db_path, camera_dir, get_data_dir
+from config import get_data_dir, station_db_path
 from constants import ALLOWED_IMAGE_EXTENSIONS
 from models import ImageUploadResponse, SensorHistoryResponse, SensorReadingRequest
 from routes import ValidStationId
 from station_access import require_station_exists
-from station_db import append_camera_image, append_sensor_reading
+from station_db import append_sensor_reading, append_station_image
 from station_hmac import verify_station_signature
 from utils import is_supported_image_upload, iso_utc, media_type_from_path, sanitize_filename
 
@@ -33,23 +33,8 @@ MAX_UPLOAD_BYTES = _parse_max_upload_bytes()
 router = APIRouter(prefix="/stations", tags=["Device"])
 
 
-def _reject_oversize_content_length(request: Request) -> None:
-    content_length = request.headers.get("content-length")
-    if not content_length:
-        return
-    try:
-        content_length_value = int(content_length)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Content-Length header.") from exc
-    if content_length_value > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Upload too large. Maximum is {MAX_UPLOAD_BYTES} bytes.",
-        )
-
-
 def store_uploaded_image(
-    camera_id: str,
+    station_id: str,
     filename: str,
     body: bytes,
     content_type: str | None,
@@ -70,9 +55,9 @@ def store_uploaded_image(
         )
 
     data_dir = get_data_dir()
-    require_station_exists(camera_id)
+    require_station_exists(station_id)
 
-    images_dir = camera_dir(data_dir, camera_id) / "images"
+    images_dir = data_dir / station_id / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
     stored_filename = f"{int(time.time() * 1000)}-{filename}"
     file_path = images_dir / stored_filename
@@ -91,14 +76,14 @@ def store_uploaded_image(
         raise
 
     captured_at = datetime.now(timezone.utc).isoformat()
-    append_camera_image(
-        camera_db_path(data_dir, camera_id),
+    append_station_image(
+        station_db_path(data_dir, station_id),
         filename=stored_filename,
         content_type=detected_media_type,
         size_bytes=len(body),
         captured_at=captured_at,
     )
-    return stored_filename, f"/stations/{camera_id}/images/{stored_filename}"
+    return stored_filename, f"/stations/{station_id}/images/{stored_filename}"
 
 
 @router.post(
@@ -113,10 +98,21 @@ async def upload_station_image(
     request: Request,
     x_filename: str | None = Header(default=None, description="Optional filename suggestion."),
 ) -> ImageUploadResponse:
-    _reject_oversize_content_length(request)
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            content_length_value = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Content-Length header.") from exc
+        if content_length_value > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Upload too large. Maximum is {MAX_UPLOAD_BYTES} bytes.",
+            )
+
     body = await verify_station_signature(station_id, request)
     stored_filename, image_url = store_uploaded_image(
-        camera_id=station_id,
+        station_id=station_id,
         filename=sanitize_filename(x_filename or "default.jpg"),
         body=body,
         content_type=request.headers.get("content-type"),
@@ -139,9 +135,6 @@ async def create_sensor_reading(
 ) -> SensorHistoryResponse:
     await verify_station_signature(station_id, request)
     timestamp = payload.timestamp or iso_utc(datetime.now(timezone.utc))
-    append_sensor_reading(
-        camera_db_path(get_data_dir(), station_id),
-        timestamp=timestamp,
-        **payload.model_dump(exclude={"timestamp"}),
-    )
-    return SensorHistoryResponse(timestamp=timestamp, **payload.model_dump(exclude={"timestamp"}))
+    fields = payload.model_dump(exclude={"timestamp"})
+    append_sensor_reading(station_db_path(get_data_dir(), station_id), timestamp, fields)
+    return SensorHistoryResponse(timestamp=timestamp, **fields)

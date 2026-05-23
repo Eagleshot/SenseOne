@@ -37,3 +37,4 @@ export const FullscreenDialog: FC<FullscreenDialogProps> = ({
     </DialogContent>
   </Dialog>
 );
+

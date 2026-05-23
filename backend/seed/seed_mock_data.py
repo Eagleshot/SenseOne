@@ -17,8 +17,8 @@ except ImportError:
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = BACKEND_DIR / "data"
-CAMERA_DB_FILENAME = "camera.db"
-CAMERA_CONFIG_FILENAME = "config.yaml"
+STATION_DB_FILENAME = "station.db"
+STATION_CONFIG_FILENAME = "config.yaml"
 SAMPLE_IMAGE_FILES = ["image0.png", "image1.png", "image2.png"]
 SAMPLE_IMAGE_URLS = {
     "image0.png": "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?fm=png&fit=crop&w=1024&h=576&q=80",
@@ -31,18 +31,18 @@ SAMPLE_PNG_BYTES = base64.b64decode(
 SENSOR_HISTORY_HOURS = 168
 
 
-def _sanitize_camera_id(raw_name: str) -> str:
+def _sanitize_station_id(raw_name: str) -> str:
     if not raw_name:
-        return "camera"
+        return "station"
     import re
 
     cleaned = re.sub(r"[^a-zA-Z0-9._-]", "-", raw_name.strip())
     cleaned = cleaned.strip("._-")
-    return cleaned or "camera"
+    return cleaned or "station"
 
 
-def _camera_dir(data_dir: Path, camera_id: str) -> Path:
-    return data_dir / _sanitize_camera_id(camera_id)
+def _station_dir(data_dir: Path, station_id: str) -> Path:
+    return data_dir / _sanitize_station_id(station_id)
 
 
 def _yaml_string(value: str) -> str:
@@ -68,16 +68,16 @@ def _parse_iso_utc(value: str | None) -> datetime | None:
         return None
 
 
-def _camera_seed(camera_id: str) -> dict[str, object]:
-    normalized = _sanitize_camera_id(camera_id)
+def _station_seed(station_id: str) -> dict[str, object]:
+    normalized = _sanitize_station_id(station_id)
     for item in WEBCAM_SEED:
-        if _sanitize_camera_id(str(item.get("id") or "")) == normalized:
+        if _sanitize_station_id(str(item.get("id") or "")) == normalized:
             return item
     return {}
 
 
-def _camera_config_yaml(camera_id: str) -> str:
-    seed = _camera_seed(camera_id)
+def _station_config_yaml(station_id: str) -> str:
+    seed = _station_seed(station_id)
     coordinates = seed.get("coordinates") or {}
     now = datetime.now(timezone.utc)
     last_online = None
@@ -97,8 +97,8 @@ def _camera_config_yaml(camera_id: str) -> str:
             f"country_emoji: {_yaml_string(str(seed.get('countryEmoji') or ''))}",
             f"last_online: {_yaml_optional_string(_iso_utc(last_online) if last_online else None)}",
             f"next_online: {_yaml_optional_string(_iso_utc(next_online) if next_online else None)}",
-            f"camera_start_time: {_yaml_string('06:00')}",
-            f"camera_stop_time: {_yaml_string('20:00')}",
+            f"station_start_time: {_yaml_string('06:00')}",
+            f"station_stop_time: {_yaml_string('20:00')}",
             "use_sunrise_sunset: false",
             "capture_interval_minutes: 30",
             "",
@@ -106,11 +106,11 @@ def _camera_config_yaml(camera_id: str) -> str:
     )
 
 
-def _ensure_camera_schema(db_path: Path) -> None:
+def _ensure_station_schema(db_path: Path) -> None:
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             """
-            CREATE TABLE IF NOT EXISTS camera_images (
+            CREATE TABLE IF NOT EXISTS station_images (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 filename TEXT NOT NULL,
                 content_type TEXT,
@@ -120,7 +120,7 @@ def _ensure_camera_schema(db_path: Path) -> None:
             """
         )
         connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_camera_images_created_at ON camera_images(created_at)"
+            "CREATE INDEX IF NOT EXISTS idx_station_images_created_at ON station_images(created_at)"
         )
         connection.execute(
             """
@@ -177,22 +177,22 @@ def _ensure_seed_images(images_dir: Path, overwrite: bool) -> None:
             source_file.write_bytes(SAMPLE_PNG_BYTES)
 
 
-def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) -> None:
-    camera_root = _camera_dir(data_dir, camera_id)
-    images_dir = camera_root / "images"
+def _seed_station(data_dir: Path, station_id: str, count: int, overwrite: bool) -> None:
+    station_root = _station_dir(data_dir, station_id)
+    images_dir = station_root / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    config_file = camera_root / CAMERA_CONFIG_FILENAME
+    config_file = station_root / STATION_CONFIG_FILENAME
     if not config_file.exists() or overwrite:
-        config_file.write_text(_camera_config_yaml(camera_id), encoding="utf-8")
+        config_file.write_text(_station_config_yaml(station_id), encoding="utf-8")
 
-    db_path = camera_root / CAMERA_DB_FILENAME
-    _ensure_camera_schema(db_path)
+    db_path = station_root / STATION_DB_FILENAME
+    _ensure_station_schema(db_path)
     _ensure_seed_images(images_dir, overwrite)
 
     if overwrite:
         with sqlite3.connect(db_path) as connection:
-            connection.execute("DELETE FROM camera_images")
+            connection.execute("DELETE FROM station_images")
             connection.execute("DELETE FROM sensor_history")
             connection.commit()
 
@@ -210,7 +210,7 @@ def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) ->
             row["dewPoint"],
             row["feelsLike"],
         )
-        for row in generate_historical_data(SENSOR_HISTORY_HOURS, webcam_id=camera_id)
+        for row in generate_historical_data(SENSOR_HISTORY_HOURS, station_id=station_id)
     ]
     with sqlite3.connect(db_path) as connection:
         refresh_history = overwrite
@@ -271,7 +271,7 @@ def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) ->
 
         connection.executemany(
             """
-            INSERT INTO camera_images (filename, content_type, size_bytes, created_at)
+            INSERT INTO station_images (filename, content_type, size_bytes, created_at)
             VALUES (?, ?, ?, ?)
             """,
             rows,
@@ -280,20 +280,20 @@ def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) ->
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Create sample per-camera folders, config, and mock timeline DB rows.")
+    parser = argparse.ArgumentParser(description="Create sample per-station folders, config, and mock timeline DB rows.")
     parser.add_argument(
         "--data-dir",
         type=Path,
         default=DEFAULT_DATA_DIR,
-        help="Directory to create camera folders under (default: ./data).",
+        help="Directory to create station folders under (default: ./data).",
     )
-    parser.add_argument("--count", type=int, default=16, help="How many timeline images per camera (default: 16).")
-    parser.add_argument("--overwrite", action="store_true", help="Clear existing camera timeline rows and replace with mock data.")
+    parser.add_argument("--count", type=int, default=16, help="How many timeline images per station (default: 16).")
+    parser.add_argument("--overwrite", action="store_true", help="Clear existing station timeline rows and replace with mock data.")
     parser.add_argument(
-        "--camera-id",
+        "--station-id",
         action="append",
         default=[],
-        help="Seed only specific camera IDs (can be repeated). Defaults to all seeds.",
+        help="Seed only specific station IDs (can be repeated). Defaults to all seeds.",
     )
     return parser.parse_args()
 
@@ -303,15 +303,15 @@ def main() -> None:
     data_dir = args.data_dir.resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    camera_ids = args.camera_id or [item["id"] for item in WEBCAM_SEED]
-    if not camera_ids:
-        raise RuntimeError("No camera IDs resolved from WEBCAM_SEED.")
+    station_ids = args.station_id or [item["id"] for item in WEBCAM_SEED]
+    if not station_ids:
+        raise RuntimeError("No station IDs resolved from WEBCAM_SEED.")
 
-    for camera_id in camera_ids:
-        normalized = _sanitize_camera_id(camera_id)
-        _seed_camera(data_dir, normalized, args.count, args.overwrite)
+    for station_id in station_ids:
+        normalized = _sanitize_station_id(station_id)
+        _seed_station(data_dir, normalized, args.count, args.overwrite)
 
-    print(f"Seeded {len(camera_ids)} camera folders into {data_dir}")
+    print(f"Seeded {len(station_ids)} station folders into {data_dir}")
 
 
 if __name__ == "__main__":

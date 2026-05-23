@@ -14,23 +14,16 @@ _EXTENSION_TO_MEDIA_TYPE: dict[str, str] = {
 }
 
 
-def _sanitize_string(value: str, allowed_pattern: str, replacement: str = "_", strip_chars: str = "", fallback: str = "") -> str:
-    """Generic string sanitization using regex pattern."""
-    cleaned = re.sub(allowed_pattern, replacement, value.strip())
-    if strip_chars:
-        cleaned = cleaned.strip(strip_chars)
-    return cleaned or fallback
-
-
 def sanitize_filename(raw_name: str) -> str:
     """Sanitize a filename to prevent path traversal attacks."""
-    return _sanitize_string(raw_name, r"[^a-zA-Z0-9.\-_]", "_", fallback="default.jpg")
+    return re.sub(r"[^a-zA-Z0-9.\-_]", "_", raw_name.strip()) or "default.jpg"
 
 
-def sanitize_camera_id(raw_name: str | None = None, default: str = "default") -> str:
-    """Sanitize a camera ID."""
+def sanitize_station_id(raw_name: str | None = None, default: str = "default") -> str:
+    """Sanitize a station ID."""
     raw = (raw_name or default).strip()
-    return _sanitize_string(raw, r"[^a-zA-Z0-9._-]", "-", "._-", default)
+    return re.sub(r"[^a-zA-Z0-9._-]", "-", raw).strip("._-") or default
+
 
 def normalize_content_type(raw_content_type: str | None) -> str | None:
     """Normalize a content-type header value."""
@@ -84,15 +77,16 @@ def is_supported_image_upload(filename: str, content_type: str | None) -> bool:
     """Check if an image file is supported for upload."""
     extension = Path(filename).suffix.lower()
     extension_ok = extension in ALLOWED_IMAGE_EXTENSIONS
-    
+
     normalized_ct = normalize_content_type(content_type)
     if normalized_ct and not normalized_ct.startswith("image/"):
         return False
     if normalized_ct and normalized_ct not in ALLOWED_IMAGE_CONTENT_TYPES:
         return False
-    
+
     return extension_ok or not extension
 
-def humanize_camera_id(camera_id: str) -> str:
-    """Convert a camera ID to a human-readable form."""
-    return re.sub(r"[-_.]+", " ", camera_id).strip().title() or camera_id
+
+def humanize_station_id(station_id: str) -> str:
+    """Convert a station ID to a human-readable form."""
+    return re.sub(r"[-_.]+", " ", station_id).strip().title() or station_id

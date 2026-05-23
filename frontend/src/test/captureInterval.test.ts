@@ -38,3 +38,4 @@ describe("captureInterval", () => {
     expect(normalizeCaptureInterval(" 45 ")).toBe("45");
   });
 });
+

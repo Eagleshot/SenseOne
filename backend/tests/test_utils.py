@@ -1,14 +1,14 @@
-"""Tests for utility functions."""
+﻿"""Tests for utility functions."""
 
 from datetime import datetime, timezone
 
 from utils import (
     sanitize_filename,
-    sanitize_camera_id,
+    sanitize_station_id,
     normalize_content_type,
     parse_iso_timestamp,
     iso_utc,
-    humanize_camera_id,
+    humanize_station_id,
     is_supported_image_upload,
 )
 
@@ -31,22 +31,22 @@ class TestFilenameHandling:
         assert sanitize_filename("...") == "..."
 
 
-class TestCameraIdHandling:
-    """Test camera ID handling."""
+class TestStationIdHandling:
+    """Test station ID handling."""
 
-    def test_sanitize_camera_id_removes_special_chars(self):
-        assert sanitize_camera_id("test@camera!") == "test-camera"
+    def test_sanitize_station_id_removes_special_chars(self):
+        assert sanitize_station_id("test@station!") == "test-station"
 
-    def test_sanitize_camera_id_normalizes_separators(self):
+    def test_sanitize_station_id_normalizes_separators(self):
         # Strips leading/trailing separators
-        assert sanitize_camera_id("-test-") == "test"
+        assert sanitize_station_id("-test-") == "test"
 
-    def test_sanitize_camera_id_uses_default(self):
-        assert sanitize_camera_id(None) == "default"
-        assert sanitize_camera_id("") == "default"
+    def test_sanitize_station_id_uses_default(self):
+        assert sanitize_station_id(None) == "default"
+        assert sanitize_station_id("") == "default"
 
-    def test_sanitize_camera_id_uses_provided(self):
-        assert sanitize_camera_id("my-camera") == "my-camera"
+    def test_sanitize_station_id_uses_provided(self):
+        assert sanitize_station_id("my-station") == "my-station"
 
 
 class TestContentTypeHandling:
@@ -90,14 +90,14 @@ class TestTimestampParsing:
 class TestHumanization:
     """Test humanization of IDs."""
 
-    def test_humanize_camera_id(self):
-        assert humanize_camera_id("test-camera") == "Test Camera"
-        assert humanize_camera_id("test_camera_1") == "Test Camera 1"
-        assert humanize_camera_id("test.camera.two") == "Test Camera Two"
+    def test_humanize_station_id(self):
+        assert humanize_station_id("test-station") == "Test Station"
+        assert humanize_station_id("test_station_1") == "Test Station 1"
+        assert humanize_station_id("test.station.two") == "Test Station Two"
 
     def test_humanize_empty_string(self):
         # Should return empty string if result is empty
-        assert humanize_camera_id("---") == "---"
+        assert humanize_station_id("---") == "---"
 
 
 class TestImageValidation:
@@ -125,3 +125,5 @@ class TestImageValidation:
         # Based on actual logic: returns extension_supported or extension == ""
         # Since extension == "", result is True
         assert is_supported_image_upload("", None) is True
+
+

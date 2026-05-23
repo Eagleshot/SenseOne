@@ -5,7 +5,7 @@ import { QuickInfoCards } from "@/components/QuickInfoCards";
 
 const mockUseApp = vi.fn();
 
-vi.mock("@/contexts/useApp", () => ({
+vi.mock("@/contexts/AppContext", () => ({
   useApp: () => mockUseApp(),
 }));
 
@@ -60,3 +60,4 @@ describe("QuickInfoCards", () => {
     expect(screen.getByText("Loading...")).toBeInTheDocument();
   });
 });
+

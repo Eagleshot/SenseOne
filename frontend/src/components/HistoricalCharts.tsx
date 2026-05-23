@@ -33,7 +33,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { formatDateTimeLabel, formatTimeLabel } from "@/lib/datetime";
 import { TEMPERATURE_UNIT } from "@/lib/units";
-import { useApp } from "@/contexts/useApp";
+import { useApp } from "@/contexts/AppContext";
 import type { SensorData } from "@/data/types";
 import { exportChartAsImage } from "./historicalChartExport";
 import type { ChartIconKey, MetricType } from "./historicalChartUtils";
@@ -373,7 +373,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
                           ? draft.metrics.map((m) => metricConfig[m].label).join(", ")
                           : "Select metrics..."}
                       </span>
-                      <span className="ml-2 opacity-50">▼</span>
+                      <span className="ml-2 opacity-50">â–¼</span>
                     </button>
                     {metricsDropdownOpen && (
                       <div className="absolute z-50 mt-1 w-full rounded-md border border-input bg-popover shadow-md">
@@ -679,3 +679,4 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({
     </div>
   );
 };
+

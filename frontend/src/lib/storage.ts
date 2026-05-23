@@ -54,3 +54,4 @@ export const setStoredOptionalString = (key: string, value: string | null) => {
 export const removeStoredValue = (key: string) => {
   writeStoredValue(key, null);
 };
+

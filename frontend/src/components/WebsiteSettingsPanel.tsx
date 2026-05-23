@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { Settings } from "lucide-react";
 
 import { Accordion } from "@/components/ui/accordion";
-import { useApp } from "@/contexts/useApp";
+import { useApp } from "@/contexts/AppContext";
 import {
   CUSTOM_CAPTURE_INTERVAL_VALUE,
   getCaptureIntervalSelection,
@@ -24,10 +24,10 @@ export const WebsiteSettingsPanel: React.FC = () => {
     setColorTheme,
     brandLogoUrl,
     setBrandLogoUrl,
-    cameraStartTime,
-    setCameraStartTime,
-    cameraStopTime,
-    setCameraStopTime,
+    stationStartTime,
+    setStationStartTime,
+    stationStopTime,
+    setStationStopTime,
     useSunriseSunset,
     setUseSunriseSunset,
     captureInterval,
@@ -52,8 +52,8 @@ export const WebsiteSettingsPanel: React.FC = () => {
       : null
   );
 
-  const [draftCameraStartTime, setDraftCameraStartTime] = useState(cameraStartTime);
-  const [draftCameraStopTime, setDraftCameraStopTime] = useState(cameraStopTime);
+  const [draftStationStartTime, setDraftStationStartTime] = useState(stationStartTime);
+  const [draftStationStopTime, setDraftStationStopTime] = useState(stationStopTime);
   const [draftUseSunriseSunset, setDraftUseSunriseSunset] = useState(useSunriseSunset);
   const [draftCaptureInterval, setDraftCaptureInterval] = useState(captureInterval);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -70,12 +70,12 @@ export const WebsiteSettingsPanel: React.FC = () => {
   }, [captureInterval]);
 
   useEffect(() => {
-    setDraftCameraStartTime(cameraStartTime);
-    setDraftCameraStopTime(cameraStopTime);
+    setDraftStationStartTime(stationStartTime);
+    setDraftStationStopTime(stationStopTime);
     setDraftUseSunriseSunset(useSunriseSunset);
     setDraftCaptureInterval(captureInterval);
     setScheduleError(null);
-  }, [cameraStartTime, cameraStopTime, useSunriseSunset, captureInterval]);
+  }, [stationStartTime, stationStopTime, useSunriseSunset, captureInterval]);
 
   const scheduleControlsDisabled = isStationConfigLoading;
   const logoPreviewUrl = brandLogoUrl || "/logo.png";
@@ -109,8 +109,8 @@ export const WebsiteSettingsPanel: React.FC = () => {
   };
 
   const validateScheduleTimes = (): boolean => {
-    if (draftCameraStartTime >= draftCameraStopTime) {
-      setScheduleError(`Start time (${draftCameraStartTime}) must be earlier than stop time (${draftCameraStopTime})`);
+    if (draftStationStartTime >= draftStationStopTime) {
+      setScheduleError(`Start time (${draftStationStartTime}) must be earlier than stop time (${draftStationStopTime})`);
       return false;
     }
     setScheduleError(null);
@@ -119,15 +119,15 @@ export const WebsiteSettingsPanel: React.FC = () => {
 
   const handleSaveSchedule = () => {
     if (!validateScheduleTimes()) return;
-    setCameraStartTime(draftCameraStartTime);
-    setCameraStopTime(draftCameraStopTime);
+    setStationStartTime(draftStationStartTime);
+    setStationStopTime(draftStationStopTime);
     setUseSunriseSunset(draftUseSunriseSunset);
     setCaptureInterval(draftCaptureInterval);
   };
 
   const handleCancelScheduleEdit = () => {
-    setDraftCameraStartTime(cameraStartTime);
-    setDraftCameraStopTime(cameraStopTime);
+    setDraftStationStartTime(stationStartTime);
+    setDraftStationStopTime(stationStopTime);
     setDraftUseSunriseSunset(useSunriseSunset);
     setDraftCaptureInterval(captureInterval);
     setScheduleError(null);
@@ -162,8 +162,8 @@ export const WebsiteSettingsPanel: React.FC = () => {
   };
 
   const hasScheduleChanges =
-    draftCameraStartTime !== cameraStartTime ||
-    draftCameraStopTime !== cameraStopTime ||
+    draftStationStartTime !== stationStartTime ||
+    draftStationStopTime !== stationStopTime ||
     draftUseSunriseSunset !== useSunriseSunset ||
     draftCaptureInterval !== captureInterval;
 
@@ -190,10 +190,10 @@ export const WebsiteSettingsPanel: React.FC = () => {
             scheduleControlsDisabled={scheduleControlsDisabled}
             draftUseSunriseSunset={draftUseSunriseSunset}
             setDraftUseSunriseSunset={setDraftUseSunriseSunset}
-            draftCameraStartTime={draftCameraStartTime}
-            setDraftCameraStartTime={setDraftCameraStartTime}
-            draftCameraStopTime={draftCameraStopTime}
-            setDraftCameraStopTime={setDraftCameraStopTime}
+            draftStationStartTime={draftStationStartTime}
+            setDraftStationStartTime={setDraftStationStartTime}
+            draftStationStopTime={draftStationStopTime}
+            setDraftStationStopTime={setDraftStationStopTime}
             intervalSelection={intervalSelection}
             handleIntervalSelect={handleIntervalSelect}
             customIntervalInput={customIntervalInput}
@@ -230,3 +230,4 @@ export const WebsiteSettingsPanel: React.FC = () => {
     </motion.div>
   );
 };
+

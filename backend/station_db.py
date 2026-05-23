@@ -1,4 +1,4 @@
-"""SQLite persistence for station camera and sensor data."""
+"""SQLite persistence for station image and sensor data."""
 
 import logging
 import sqlite3
@@ -13,7 +13,7 @@ def ensure_station_db(db_path: Path) -> None:
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             """
-            CREATE TABLE IF NOT EXISTS camera_images (
+            CREATE TABLE IF NOT EXISTS station_images (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 filename TEXT NOT NULL,
                 content_type TEXT,
@@ -23,7 +23,7 @@ def ensure_station_db(db_path: Path) -> None:
             """
         )
         connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_camera_images_created_at ON camera_images(created_at)"
+            "CREATE INDEX IF NOT EXISTS idx_station_images_created_at ON station_images(created_at)"
         )
         connection.execute(
             """
@@ -46,10 +46,10 @@ def ensure_station_db(db_path: Path) -> None:
         connection.commit()
 
 
-def image_captures_from_db(db_path: Path, station_id: str, count: int) -> list[dict[str, str]] | None:
+def image_captures_from_db(db_path: Path, station_id: str, count: int) -> list[dict[str, str]]:
     """Return recent image capture rows from a station DB, oldest-to-newest."""
     if not db_path.exists():
-        return None
+        return []
 
     try:
         with sqlite3.connect(db_path) as connection:
@@ -57,18 +57,16 @@ def image_captures_from_db(db_path: Path, station_id: str, count: int) -> list[d
             rows = connection.execute(
                 """
                 SELECT filename, created_at
-                FROM camera_images
+                FROM station_images
                 ORDER BY created_at DESC
                 LIMIT ?
                 """,
                 (count,),
             ).fetchall()
     except sqlite3.Error as exc:
-        logging.warning("Failed to read camera timeline for %s: %s", station_id, exc)
-        return None
+        logging.warning("Failed to read station timeline for %s: %s", station_id, exc)
+        return []
 
-    if not rows:
-        return None
     return [
         {
             "timestamp": row["created_at"],
@@ -78,7 +76,7 @@ def image_captures_from_db(db_path: Path, station_id: str, count: int) -> list[d
     ]
 
 
-def append_camera_image(
+def append_station_image(
     db_path: Path,
     *,
     filename: str,
@@ -86,11 +84,11 @@ def append_camera_image(
     size_bytes: int,
     captured_at: str,
 ) -> None:
-    """Insert a stored camera image row."""
+    """Insert a stored station image row."""
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             """
-            INSERT INTO camera_images (filename, content_type, size_bytes, created_at)
+            INSERT INTO station_images (filename, content_type, size_bytes, created_at)
             VALUES (?, ?, ?, ?)
             """,
             (filename, content_type, size_bytes, captured_at),
@@ -98,61 +96,28 @@ def append_camera_image(
         connection.commit()
 
 
-def append_sensor_reading(
-    db_path: Path,
-    *,
-    timestamp: str,
-    temperature: float,
-    humidity: int,
-    pressure: int,
-    battery: int,
-    wind_speed: float,
-    wind_direction: int,
-    visibility: float,
-    uv_index: int,
-    dew_point: float,
-    feels_like: float,
-) -> None:
+def append_sensor_reading(db_path: Path, timestamp: str, fields: dict) -> None:
     """Insert a station sensor reading row."""
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             """
             INSERT INTO sensor_history (
-                timestamp,
-                temperature,
-                humidity,
-                pressure,
-                battery,
-                wind_speed,
-                wind_direction,
-                visibility,
-                uv_index,
-                dew_point,
-                feels_like
+                timestamp, temperature, humidity, pressure, battery,
+                wind_speed, wind_direction, visibility, uv_index, dew_point, feels_like
+            ) VALUES (
+                :timestamp, :temperature, :humidity, :pressure, :battery,
+                :wind_speed, :wind_direction, :visibility, :uv_index, :dew_point, :feels_like
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                timestamp,
-                temperature,
-                humidity,
-                pressure,
-                battery,
-                wind_speed,
-                wind_direction,
-                visibility,
-                uv_index,
-                dew_point,
-                feels_like,
-            ),
+            {"timestamp": timestamp, **fields},
         )
         connection.commit()
 
 
-def history_from_db(db_path: Path, station_id: str, hours: int) -> list[dict[str, object]] | None:
+def history_from_db(db_path: Path, station_id: str, hours: int) -> list[dict[str, object]]:
     """Load sensor history rows from a station DB."""
     if not db_path.exists():
-        return None
+        return []
 
     cutoff = iso_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
     try:
@@ -179,25 +144,10 @@ def history_from_db(db_path: Path, station_id: str, hours: int) -> list[dict[str
                 (cutoff,),
             ).fetchall()
     except sqlite3.Error as exc:
-        logging.warning("Failed to read camera history for %s: %s", station_id, exc)
-        return None
+        logging.warning("Failed to read station history for %s: %s", station_id, exc)
+        return []
 
-    return [
-        {
-            "timestamp": row["timestamp"],
-            "temperature": row["temperature"],
-            "humidity": row["humidity"],
-            "pressure": row["pressure"],
-            "battery": row["battery"],
-            "wind_speed": row["wind_speed"],
-            "wind_direction": row["wind_direction"],
-            "visibility": row["visibility"],
-            "uv_index": row["uv_index"],
-            "dew_point": row["dew_point"],
-            "feels_like": row["feels_like"],
-        }
-        for row in rows
-    ]
+    return [dict(row) for row in rows]
 
 
 def latest_battery_from_db(db_path: Path, station_id: str) -> int | None:
@@ -217,7 +167,7 @@ def latest_battery_from_db(db_path: Path, station_id: str) -> int | None:
                 """
             ).fetchone()
     except sqlite3.Error as exc:
-        logging.warning("Failed to read latest camera battery for %s: %s", station_id, exc)
+        logging.warning("Failed to read latest station battery for %s: %s", station_id, exc)
         return None
 
     return None if row is None else row["battery"]

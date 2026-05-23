@@ -38,10 +38,10 @@ export type WebcamDataState = {
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;
   timezones: typeof TIMEZONES;
-  cameraStartTime: string;
-  setCameraStartTime: (time: string) => void;
-  cameraStopTime: string;
-  setCameraStopTime: (time: string) => void;
+  stationStartTime: string;
+  setStationStartTime: (time: string) => void;
+  stationStopTime: string;
+  setStationStopTime: (time: string) => void;
   useSunriseSunset: boolean;
   setUseSunriseSunset: (value: boolean) => void;
   captureInterval: string;
@@ -79,8 +79,8 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   const stationScheduleRef = useRef<StationScheduleConfig>(FALLBACK_STATION_SCHEDULE_CONFIG);
   const stationConfigRequestIdRef = useRef(0);
   const stationConfigSaveIdRef = useRef(0);
-  const cameraDataRequestIdRef = useRef(0);
-  const cameraDataAbortRef = useRef<AbortController | null>(null);
+  const stationDataRequestIdRef = useRef(0);
+  const stationDataAbortRef = useRef<AbortController | null>(null);
 
   const resetTimelineState = useCallback(() => {
     setHistoricalData([]);
@@ -377,31 +377,31 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     };
   }, [activeWebcam.id, apiBaseUrl, applyStationConfig, isAuthenticated, resetStationConfigState]);
 
-  const fetchActiveCameraData = useCallback(async () => {
-    const cameraId = activeStationIdRef.current;
-    if (!cameraId) {
+  const fetchActiveStationData = useCallback(async () => {
+    const stationId = activeStationIdRef.current;
+    if (!stationId) {
       resetTimelineState();
       return;
     }
 
-    cameraDataAbortRef.current?.abort();
+    stationDataAbortRef.current?.abort();
     const controller = new AbortController();
-    cameraDataAbortRef.current = controller;
-    const requestId = cameraDataRequestIdRef.current + 1;
-    cameraDataRequestIdRef.current = requestId;
+    stationDataAbortRef.current = controller;
+    const requestId = stationDataRequestIdRef.current + 1;
+    stationDataRequestIdRef.current = requestId;
 
     const { signal } = controller;
 
     const isStale = () =>
-      requestId !== cameraDataRequestIdRef.current ||
-      cameraId !== activeStationIdRef.current ||
+      requestId !== stationDataRequestIdRef.current ||
+      stationId !== activeStationIdRef.current ||
       signal.aborted;
 
     try {
       const [detailResponse, historyResponse, timelineResponse] = await Promise.all([
-        getStationDetail(apiBaseUrl, cameraId, signal),
-        getStationSensorReadings(apiBaseUrl, cameraId, 24, signal),
-        getStationImageCaptures(apiBaseUrl, cameraId, 48, signal),
+        getStationDetail(apiBaseUrl, stationId, signal),
+        getStationSensorReadings(apiBaseUrl, stationId, 24, signal),
+        getStationImageCaptures(apiBaseUrl, stationId, 48, signal),
       ]);
 
       if (isStale()) return;
@@ -409,7 +409,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       if (detailResponse) {
         const parsedDetail = parseStationResponse(detailResponse, apiBaseUrl);
         setActiveWebcamState((currentValue) =>
-          currentValue.id === cameraId ? { ...currentValue, ...parsedDetail } : currentValue
+          currentValue.id === stationId ? { ...currentValue, ...parsedDetail } : currentValue
         );
       }
 
@@ -432,13 +432,13 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       return;
     }
 
-    void fetchActiveCameraData();
+    void fetchActiveStationData();
 
     return () => {
-      cameraDataAbortRef.current?.abort();
-      cameraDataAbortRef.current = null;
+      stationDataAbortRef.current?.abort();
+      stationDataAbortRef.current = null;
     };
-  }, [activeWebcam.id, fetchActiveCameraData, isAuthenticated, resetTimelineState]);
+  }, [activeWebcam.id, fetchActiveStationData, isAuthenticated, resetTimelineState]);
 
   useEffect(() => {
     const title = `${activeWebcam.name} | Eagleshot`;
@@ -482,17 +482,17 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     imageTimeline,
     currentImageIndex,
     setCurrentImageIndex: (index) => setCurrentImageIndexState(index),
-    refreshImageTimeline: fetchActiveCameraData,
+    refreshImageTimeline: fetchActiveStationData,
     isPlaying,
     setIsPlaying: (playing) => setIsPlayingState(playing),
     timezones,
-    cameraStartTime: stationSchedule.cameraStartTime,
-    setCameraStartTime: (time) => {
-      void updateStationSchedule((currentValue) => ({ ...currentValue, cameraStartTime: time }));
+    stationStartTime: stationSchedule.stationStartTime,
+    setStationStartTime: (time) => {
+      void updateStationSchedule((currentValue) => ({ ...currentValue, stationStartTime: time }));
     },
-    cameraStopTime: stationSchedule.cameraStopTime,
-    setCameraStopTime: (time) => {
-      void updateStationSchedule((currentValue) => ({ ...currentValue, cameraStopTime: time }));
+    stationStopTime: stationSchedule.stationStopTime,
+    setStationStopTime: (time) => {
+      void updateStationSchedule((currentValue) => ({ ...currentValue, stationStopTime: time }));
     },
     useSunriseSunset: stationSchedule.useSunriseSunset,
     setUseSunriseSunset: (value) => {
@@ -518,3 +518,4 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     setIsPublic,
   };
 };
+

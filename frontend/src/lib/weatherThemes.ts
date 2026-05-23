@@ -184,7 +184,7 @@ const ATMOSPHERE_CONDITIONS = new Set([
 export const resolveWeatherTheme = (main: string | undefined, isNight: boolean): WeatherTheme => {
   const condition = (main ?? "").toLowerCase();
 
-  // Thunderstorm — always dramatic regardless of time of day
+  // Thunderstorm â€” always dramatic regardless of time of day
   if (condition === "thunderstorm" || condition === "squall" || condition === "tornado") {
     return thunderstormTheme;
   }
@@ -198,3 +198,4 @@ export const resolveWeatherTheme = (main: string | undefined, isNight: boolean):
   }
   return isNight ? fallbackNightTheme : baseWeatherTheme;
 };
+

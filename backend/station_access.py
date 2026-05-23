@@ -2,17 +2,12 @@
 
 from fastapi import HTTPException, status
 
-from config import camera_dir, get_data_dir, read_camera_config, read_station_owner
-
-
-def station_exists(station_id: str) -> bool:
-    """Return True if a station directory exists."""
-    return camera_dir(get_data_dir(), station_id).exists()
+from config import get_data_dir, read_station_config, read_station_owner
 
 
 def require_station_exists(station_id: str) -> None:
     """Raise 404 if no directory has been created for this station."""
-    if not station_exists(station_id):
+    if not (get_data_dir() / station_id).exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Unknown station id.",
@@ -21,11 +16,11 @@ def require_station_exists(station_id: str) -> None:
 
 def can_view_station(station_id: str, user) -> bool:
     """A caller may view a station if it is public, owned by them, or they are admin."""
-    if not station_exists(station_id):
+    data_dir = get_data_dir()
+    if not (data_dir / station_id).exists():
         return False
 
-    data_dir = get_data_dir()
-    config = read_camera_config(data_dir, station_id)
+    config = read_station_config(data_dir, station_id)
     if config.is_public:
         return True
     if user is None:

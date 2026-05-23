@@ -73,3 +73,4 @@ export const buildSensorCsv = (data: SensorData[], timezone: string) => {
 };
 
 export const sensorCsvFilename = (date = new Date()) => `sensor-data-${format(date, "yyyy-MM-dd")}.csv`;
+

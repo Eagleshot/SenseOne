@@ -89,3 +89,4 @@ export const filterHistoricalData = ({ data, dateRange, timeFrom, timeTo, timezo
     return isMinuteWithinRange(minuteOfDay, fromMinutes, toMinutes);
   });
 };
+

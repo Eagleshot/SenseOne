@@ -23,3 +23,4 @@ export const useLatestAsyncRequest = () => {
 
   return { nextRequest, invalidate };
 };
+

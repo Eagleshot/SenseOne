@@ -58,3 +58,4 @@ export const formatCsvTimestamp = (timestamp: Date, timeZone?: string) => {
   const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`;
 };
+

@@ -32,3 +32,4 @@ export const useSidebarState = (): SidebarState => {
     setSidebarOpen: (open) => setIsSidebarOpen(open),
   };
 };
+

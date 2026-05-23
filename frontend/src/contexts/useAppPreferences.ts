@@ -47,7 +47,7 @@ export const useAppPreferences = (): AppPreferencesState => {
     if (isMapStyleKey(storedStyle)) {
       return storedStyle;
     }
-    // Migrate legacy keys (smoothBright/smoothDark → abstract) and persist
+    // Migrate legacy keys (smoothBright/smoothDark â†’ abstract) and persist
     // the migrated value so we don't repeat this on every load.
     if (storedStyle === "smoothBright" || storedStyle === "smoothDark") {
       setStoredString("mapStyle", "abstract");
@@ -91,3 +91,4 @@ export const useAppPreferences = (): AppPreferencesState => {
     setTimezone: (tz) => setTimezoneState(tz),
   };
 };
+

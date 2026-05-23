@@ -6,7 +6,7 @@ import { TEMPERATURE_UNIT } from "@/lib/units";
 
 const mockUseApp = vi.fn();
 
-vi.mock("@/contexts/useApp", () => ({
+vi.mock("@/contexts/AppContext", () => ({
   useApp: () => mockUseApp(),
 }));
 
@@ -79,3 +79,4 @@ describe("RawDataTable", () => {
     await expect(readBlobAsText(capturedBlob!)).resolves.toContain(`Temperature (${TEMPERATURE_UNIT})`);
   });
 });
+

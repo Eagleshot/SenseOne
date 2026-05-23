@@ -1,6 +1,6 @@
 import { Battery, Signal } from 'lucide-react';
 
-import { useApp } from '@/contexts/useApp';
+import { useApp } from '@/contexts/AppContext';
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from '@/lib/placeholders';
 import { cn } from '@/lib/utils';
 
@@ -84,3 +84,4 @@ export const QuickInfoCards: React.FC = () => {
     </div>
   );
 };
+

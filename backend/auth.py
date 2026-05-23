@@ -19,20 +19,6 @@ PBKDF2_SALT_BYTES = 16
 PBKDF2_HASH_BYTES = 32
 
 
-def parse_positive_int_env(name: str, default: int) -> int:
-    """Parse a positive integer environment variable."""
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return default
-    try:
-        parsed = int(raw_value)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be an integer.") from exc
-    if parsed <= 0:
-        raise RuntimeError(f"{name} must be greater than 0.")
-    return parsed
-
-
 _BOOTSTRAP_USERNAME = (os.getenv("APP_AUTH_USERNAME") or "").strip()
 _BOOTSTRAP_PASSWORD = (os.getenv("APP_AUTH_PASSWORD") or "").strip()
 if bool(_BOOTSTRAP_USERNAME) != bool(_BOOTSTRAP_PASSWORD):
@@ -95,6 +81,20 @@ def resolve_session_token(
     return None
 
 
+def _validate_session_token(token: str | None) -> str | None:
+    """Return the username for a valid unexpired session token, or None."""
+    if token is None:
+        return None
+    session = AUTH_SESSIONS.get(token)
+    if session is None:
+        return None
+    username, expires_at = session
+    if expires_at <= time.time():
+        AUTH_SESSIONS.pop(token, None)
+        return None
+    return username
+
+
 def get_current_username(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
@@ -102,20 +102,13 @@ def get_current_username(
     """Get the authenticated username from session."""
     ensure_auth_configured()
     prune_expired_sessions()
-
     token = resolve_session_token(request, credentials)
-    if token is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
-
-    session = AUTH_SESSIONS.get(token)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session.")
-
-    username, expires_at = session
-    if expires_at <= time.time():
-        AUTH_SESSIONS.pop(token, None)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session.")
-
+    username = _validate_session_token(token)
+    if username is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required." if token is None else "Invalid or expired session.",
+        )
     return username
 
 
@@ -141,23 +134,10 @@ def get_optional_current_user(
         return None
     prune_expired_sessions()
     token = resolve_session_token(request, credentials)
-    if not token:
-        return None
-    session = AUTH_SESSIONS.get(token)
-    if not session:
-        return None
-    username, expires_at = session
-    if expires_at <= time.time():
-        AUTH_SESSIONS.pop(token, None)
+    username = _validate_session_token(token)
+    if username is None:
         return None
     return get_user(username)
-
-
-def verify_credentials(username: str, password: str):
-    """Return the User if credentials are valid, else None."""
-    from users import authenticate_user
-
-    return authenticate_user(username, password)
 
 
 def _prune_login_failures(now: float) -> None:
