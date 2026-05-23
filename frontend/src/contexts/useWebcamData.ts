@@ -1,29 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { SensorData, TimezoneOption, Webcam } from "@/data/types";
-
+import { TIMEZONES } from "@/data/timezones";
+import { SensorData, Webcam } from "@/data/types";
 import {
+  createStationConfigRequest,
+  createStationScheduleUpdate,
   DESCRIPTION_MAX_LENGTH,
   FALLBACK_STATION_SCHEDULE_CONFIG,
-  createStationScheduleUpdate,
-  StationDetailResponse,
-  StationConfigResponse,
-  StationScheduleConfig,
-  StationSummaryResponse,
-  TimelineImage,
-  TimelineItemResponse,
-  SensorDataResponse,
-  createStationConfigRequest,
   FALLBACK_WEBCAM,
-  UNAVAILABLE_WEBCAM,
-  fetchJson,
-  isAbortError,
+  getStationConfig,
+  getStationDetail,
+  getStationImageCaptures,
+  getStationSensorReadings,
+  listStations,
   parseStationConfigResponse,
   parseStationResponse,
   parseTimestampResponse,
   parseTimelineItemResponse,
   selectActiveWebcam,
-} from "./appContextUtils";
+  StationConfigResponse,
+  StationScheduleConfig,
+  TimelineImage,
+  UNAVAILABLE_WEBCAM,
+  updateStationConfig,
+} from "@/api/stations";
+import { isAbortError } from "@/lib/apiClient";
 
 export type WebcamDataState = {
   activeWebcam: Webcam;
@@ -36,7 +37,7 @@ export type WebcamDataState = {
   refreshImageTimeline: () => Promise<void>;
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;
-  timezones: TimezoneOption[];
+  timezones: typeof TIMEZONES;
   cameraStartTime: string;
   setCameraStartTime: (time: string) => void;
   cameraStopTime: string;
@@ -54,6 +55,8 @@ export type WebcamDataState = {
   isStationConfigLoading: boolean;
   isStationConfigSaving: boolean;
   stationConfigError: string | null;
+  isPublic: boolean;
+  setIsPublic: (isPublic: boolean) => Promise<void>;
 };
 
 export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): WebcamDataState => {
@@ -63,7 +66,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   const [imageTimeline, setImageTimeline] = useState<TimelineImage[]>([]);
   const [currentImageIndex, setCurrentImageIndexState] = useState(0);
   const [isPlaying, setIsPlayingState] = useState(false);
-  const [timezones, setTimezones] = useState<TimezoneOption[]>([]);
+  const timezones = TIMEZONES;
   const [stationSchedule, setStationSchedule] = useState<StationScheduleConfig>(FALLBACK_STATION_SCHEDULE_CONFIG);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [isDescriptionSaving, setIsDescriptionSaving] = useState(false);
@@ -142,13 +145,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       options.onOptimistic?.();
 
       try {
-        const response = await fetchJson<StationConfigResponse>(`${apiBaseUrl}/stations/${encodeURIComponent(stationId)}/config`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(nextConfig),
-          credentials: "include",
-          throwOnHttpError: false,
-        });
+        const response = await updateStationConfig(apiBaseUrl, stationId, nextConfig);
 
         if (saveId !== stationConfigSaveIdRef.current || stationId !== activeStationIdRef.current) {
           return;
@@ -258,6 +255,34 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     return didSave;
   }, [descriptionDraft, isAuthenticated, persistStationConfig]);
 
+  const setIsPublic = useCallback(
+    async (isPublic: boolean) => {
+      const currentConfig = stationConfigRef.current;
+      if (!currentConfig || !activeStationIdRef.current || !isAuthenticated) {
+        return;
+      }
+      if (currentConfig.isPublic === isPublic) {
+        return;
+      }
+      const nextConfig = createStationConfigRequest(currentConfig, { isPublic });
+      const stationId = activeStationIdRef.current;
+      await persistStationConfig(nextConfig, {
+        previousConfig: currentConfig,
+        onSuccess: () => {
+          setWebcamList((list) =>
+            list.map((webcam) => (webcam.id === stationId ? { ...webcam, isPublic } : webcam))
+          );
+          setActiveWebcamState((current) =>
+            current.id === stationId ? { ...current, isPublic } : current
+          );
+        },
+        setGenericError: true,
+        genericErrorMessage: "Unable to update station visibility.",
+      });
+    },
+    [isAuthenticated, persistStationConfig]
+  );
+
   useEffect(() => {
     activeStationIdRef.current = activeWebcam.id;
   }, [activeWebcam.id]);
@@ -267,16 +292,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
 
     const loadPublicData = async () => {
       try {
-        const [webcamResponse, timezoneResponse] = await Promise.all([
-          fetchJson<StationSummaryResponse[]>(`${apiBaseUrl}/stations`, {
-            signal: controller.signal,
-            throwOnHttpError: false,
-          }),
-          fetchJson<TimezoneOption[]>(`${apiBaseUrl}/timezones`, {
-            signal: controller.signal,
-            throwOnHttpError: false,
-          }),
-        ]);
+        const webcamResponse = await listStations(apiBaseUrl, controller.signal);
 
         if (controller.signal.aborted) return;
 
@@ -285,13 +301,11 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
         setActiveWebcamState((currentValue) =>
           parsedWebcams.length > 0 ? selectActiveWebcam(parsedWebcams, currentValue.id) : UNAVAILABLE_WEBCAM
         );
-        setTimezones(timezoneResponse ?? []);
       } catch (error) {
         if (isAbortError(error)) return;
 
         setWebcamList([]);
         setActiveWebcamState(UNAVAILABLE_WEBCAM);
-        setTimezones([]);
       }
     };
 
@@ -300,7 +314,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     return () => {
       controller.abort();
     };
-  }, [apiBaseUrl]);
+  }, [apiBaseUrl, isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated || !activeWebcam.id) {
@@ -321,11 +335,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
 
     const loadStationConfig = async () => {
       try {
-        const response = await fetchJson<StationConfigResponse>(`${apiBaseUrl}/stations/${encodeURIComponent(stationId)}/config`, {
-          credentials: "include",
-          signal: controller.signal,
-          throwOnHttpError: false,
-        });
+        const response = await getStationConfig(apiBaseUrl, stationId, controller.signal);
 
         if (
           controller.signal.aborted ||
@@ -380,10 +390,6 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     const requestId = cameraDataRequestIdRef.current + 1;
     cameraDataRequestIdRef.current = requestId;
 
-    const stationPath = `${apiBaseUrl}/stations/${encodeURIComponent(cameraId)}`;
-    const detailUrl = stationPath;
-    const historyUrl = `${stationPath}/history?hours=24`;
-    const timelineUrl = `${stationPath}/timeline?count=48`;
     const { signal } = controller;
 
     const isStale = () =>
@@ -393,9 +399,9 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
 
     try {
       const [detailResponse, historyResponse, timelineResponse] = await Promise.all([
-        fetchJson<StationDetailResponse>(detailUrl, { signal, throwOnHttpError: false }),
-        fetchJson<SensorDataResponse[]>(historyUrl, { signal, throwOnHttpError: false }),
-        fetchJson<TimelineItemResponse[]>(timelineUrl, { signal, throwOnHttpError: false }),
+        getStationDetail(apiBaseUrl, cameraId, signal),
+        getStationSensorReadings(apiBaseUrl, cameraId, 24, signal),
+        getStationImageCaptures(apiBaseUrl, cameraId, 48, signal),
       ]);
 
       if (isStale()) return;
@@ -432,7 +438,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       cameraDataAbortRef.current?.abort();
       cameraDataAbortRef.current = null;
     };
-  }, [activeWebcam.id, fetchActiveCameraData, resetTimelineState]);
+  }, [activeWebcam.id, fetchActiveCameraData, isAuthenticated, resetTimelineState]);
 
   useEffect(() => {
     const title = `${activeWebcam.name} | Eagleshot`;
@@ -508,5 +514,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     isStationConfigLoading,
     isStationConfigSaving,
     stationConfigError,
+    isPublic: stationConfigRef.current?.isPublic ?? activeWebcam.isPublic ?? true,
+    setIsPublic,
   };
 };

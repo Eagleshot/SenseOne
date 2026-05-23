@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from constants import EMBEDDED_FILENAME_TIMESTAMP_PATTERN, ALLOWED_IMAGE_EXTENSIONS, ALLOWED_IMAGE_CONTENT_TYPES
+from constants import ALLOWED_IMAGE_EXTENSIONS, ALLOWED_IMAGE_CONTENT_TYPES
 
 _EXTENSION_TO_MEDIA_TYPE: dict[str, str] = {
     ".jpg": "image/jpeg",
@@ -57,17 +57,6 @@ def media_type_from_path(path: Path) -> str | None:
     return None
 
 
-def parse_embedded_timestamp(filename: str) -> datetime | None:
-    """Parse timestamp embedded in filename (YYYYMMDD_HHmmZ format)."""
-    match = EMBEDDED_FILENAME_TIMESTAMP_PATTERN.search(filename)
-    if not match:
-        return None
-    try:
-        return datetime.strptime(f"{match.group(1)}{match.group(2)}", "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
-
 def parse_iso_timestamp(value: str | None) -> datetime | None:
     """Parse an ISO 8601 timestamp string."""
     if not value:
@@ -103,14 +92,6 @@ def is_supported_image_upload(filename: str, content_type: str | None) -> bool:
         return False
     
     return extension_ok or not extension
-
-
-def to_yaml_value(value: str | None) -> str:
-    """Convert a value to YAML-safe string representation."""
-    if value is None:
-        return "null"
-    return json.dumps(value, ensure_ascii=False)
-
 
 def humanize_camera_id(camera_id: str) -> str:
     """Convert a camera ID to a human-readable form."""

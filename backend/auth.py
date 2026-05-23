@@ -1,5 +1,8 @@
 """Authentication and session management."""
 
+import base64
+import hashlib
+import hmac
 import time
 import secrets
 import os
@@ -9,6 +12,11 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from constants import AUTH_COOKIE_NAME
+
+PBKDF2_ALGO = "pbkdf2_sha256"
+PBKDF2_ITERATIONS = 600_000
+PBKDF2_SALT_BYTES = 16
+PBKDF2_HASH_BYTES = 32
 
 
 def parse_positive_int_env(name: str, default: int) -> int:
@@ -25,18 +33,17 @@ def parse_positive_int_env(name: str, default: int) -> int:
     return parsed
 
 
-AUTH_USERNAME = (os.getenv("APP_AUTH_USERNAME") or "").strip()
-AUTH_PASSWORD = (os.getenv("APP_AUTH_PASSWORD") or "").strip()
-if bool(AUTH_USERNAME) != bool(AUTH_PASSWORD):
+_BOOTSTRAP_USERNAME = (os.getenv("APP_AUTH_USERNAME") or "").strip()
+_BOOTSTRAP_PASSWORD = (os.getenv("APP_AUTH_PASSWORD") or "").strip()
+if bool(_BOOTSTRAP_USERNAME) != bool(_BOOTSTRAP_PASSWORD):
     raise RuntimeError("APP_AUTH_USERNAME and APP_AUTH_PASSWORD must either both be set or both be unset.")
-
-AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
-if AUTH_ENABLED and len(AUTH_PASSWORD) < 12:
+if _BOOTSTRAP_PASSWORD and len(_BOOTSTRAP_PASSWORD) < 12:
     raise RuntimeError("APP_AUTH_PASSWORD must be at least 12 characters.")
 
 AUTH_TOKEN_TTL_SECONDS = 43200
 
 # In-memory session storage. For multi-replica deploys, swap for Redis or signed JWTs.
+# Stored as token -> (username, expires_at).
 AUTH_SESSIONS: dict[str, tuple[str, float]] = {}
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -48,12 +55,14 @@ _login_failures_lock = threading.Lock()
 
 
 def ensure_auth_configured() -> None:
-    """Raise exception if authentication is not configured."""
-    if AUTH_ENABLED:
+    """Raise 503 if no users exist (i.e. nothing to authenticate against)."""
+    from users import has_any_user
+
+    if has_any_user():
         return
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Authentication is not configured.",
+        detail="Authentication is not configured. Bootstrap an admin user first.",
     )
 
 
@@ -110,15 +119,45 @@ def get_current_username(
     return username
 
 
-def verify_credentials(username: str, password: str) -> bool:
-    """Verify username and password using constant-time comparison.
+def get_current_user(username: str = Depends(get_current_username)):
+    """Resolve the User record for the authenticated session."""
+    from users import get_user
 
-    Both comparisons run regardless of length or username match so timing
-    cannot reveal which field was wrong.
-    """
-    user_ok = secrets.compare_digest(username.encode("utf-8"), AUTH_USERNAME.encode("utf-8"))
-    pwd_ok = secrets.compare_digest(password.encode("utf-8"), AUTH_PASSWORD.encode("utf-8"))
-    return user_ok and pwd_ok
+    user = get_user(username)
+    if user is None:
+        # The user was deleted while their session was still valid.
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists.")
+    return user
+
+
+def get_optional_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+):
+    """Like get_current_user, but returns None instead of raising when unauthenticated."""
+    from users import get_user, has_any_user
+
+    if not has_any_user():
+        return None
+    prune_expired_sessions()
+    token = resolve_session_token(request, credentials)
+    if not token:
+        return None
+    session = AUTH_SESSIONS.get(token)
+    if not session:
+        return None
+    username, expires_at = session
+    if expires_at <= time.time():
+        AUTH_SESSIONS.pop(token, None)
+        return None
+    return get_user(username)
+
+
+def verify_credentials(username: str, password: str):
+    """Return the User if credentials are valid, else None."""
+    from users import authenticate_user
+
+    return authenticate_user(username, password)
 
 
 def _prune_login_failures(now: float) -> None:
@@ -159,3 +198,51 @@ def clear_login_failures(client_ip: str, username: str) -> None:
     with _login_failures_lock:
         _login_failures.pop(f"ip:{client_ip}", None)
         _login_failures.pop(f"user:{username}", None)
+
+
+def hash_secret(secret: str) -> str:
+    """Hash a password or API key using PBKDF2-SHA256."""
+    salt = secrets.token_bytes(PBKDF2_SALT_BYTES)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        secret.encode("utf-8"),
+        salt,
+        PBKDF2_ITERATIONS,
+        dklen=PBKDF2_HASH_BYTES,
+    )
+    return "${algo}${iters}${salt}${hash}".format(
+        algo=PBKDF2_ALGO,
+        iters=PBKDF2_ITERATIONS,
+        salt=base64.urlsafe_b64encode(salt).decode("ascii").rstrip("="),
+        hash=base64.urlsafe_b64encode(digest).decode("ascii").rstrip("="),
+    )
+
+
+def _b64_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value + padding)
+
+
+def verify_secret(secret: str, stored: str | None) -> bool:
+    """Verify a secret against its stored hash. Constant-time comparison."""
+    if not stored:
+        return False
+    parts = stored.split("$")
+    if len(parts) != 5 or parts[0] != "" or parts[1] != PBKDF2_ALGO:
+        return False
+    try:
+        iterations = int(parts[2])
+        salt = _b64_decode(parts[3])
+        expected = _b64_decode(parts[4])
+    except (ValueError, base64.binascii.Error):
+        return False
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        secret.encode("utf-8"),
+        salt,
+        iterations,
+        dklen=len(expected),
+    )
+    return hmac.compare_digest(digest, expected)
+
+

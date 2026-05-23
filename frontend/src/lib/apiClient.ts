@@ -1,5 +1,5 @@
 export const apiBaseUrl: string =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api";
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api/v1";
 
 type FetchJsonOptions = RequestInit & {
   throwOnHttpError?: boolean;
@@ -60,6 +60,3 @@ export const extractErrorDetail = (
   }
   return fallback;
 };
-
-export const stationUrl = (stationId: string, suffix = ""): string =>
-  `${apiBaseUrl}/stations/${encodeURIComponent(stationId)}${suffix}`;

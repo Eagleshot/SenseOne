@@ -42,10 +42,11 @@ describe("appContextUtils timestamp parsing", () => {
         timestamp: "2026-04-21T20:06:51.864377Z",
         url: "/stations/station-1/images/example.png",
       },
-      "/api"
+      "/api/v1"
     );
 
     expect(historyRow.timestamp.toISOString()).toBe("2026-04-21T20:06:51.864Z");
     expect(timelineItem.timestamp.toISOString()).toBe("2026-04-21T20:06:51.864Z");
+    expect(timelineItem.url).toBe("/api/v1/stations/station-1/images/example.png");
   });
 });

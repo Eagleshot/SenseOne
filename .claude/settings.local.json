@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr *)",
+      "Bash(.venv/Scripts/python -m pytest backend/tests -x)",
+      "Bash(.venv/Scripts/python -m pytest backend/tests --tb=no -q)",
+      "Bash(npx tsc *)",
+      "Bash(.venv/Scripts/python -m pytest backend/tests --tb=short -q)",
+      "Bash(npx vite *)",
+      "Bash(npx vitest *)",
+      "Bash(.venv/Scripts/python -c \"import yaml; print\\('yaml OK', yaml.__version__\\)\")",
+      "Bash(python -c \"import ast, sys; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\), f\\) for f in ['main.py','auth.py','users.py','config.py','models.py','constants.py','routes/auth.py','routes/users.py','routes/stations.py','routes/stations_images_weather.py','routes/uploads.py']]; print\\('OK'\\)\")",
+      "Bash(APP_CORS_ORIGINS=\"http://localhost:5173\" APP_DATA_DIR=/tmp/test_data python -c \"import main; print\\('imports OK'\\); print\\([r.path for r in main.app.routes if hasattr\\(r, 'path'\\)]\\)\")",
+      "Bash(APP_CORS_ORIGINS=\"http://localhost:5173\" python -m pytest tests/ -x --tb=short)",
+      "Bash(APP_CORS_ORIGINS=\"http://localhost:5173\" python -m pytest tests/ --tb=short)",
+      "Bash(APP_CORS_ORIGINS=\"http://localhost:5173\" python -m pytest tests/test_camera.py::TestLatestCapture::test_latest_capture_no_images --tb=long)",
+      "Bash(python -m pytest tests/test_station_hmac.py -v)",
+      "Bash(python -m pytest tests/test_station_hmac.py tests/test_upload_contract.py tests/test_device_routes_signed.py -v)",
+      "Bash(python -m pytest --tb=short)"
+    ]
+  }
+}

@@ -13,4 +13,4 @@ COPY . ./
 
 EXPOSE 3000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["uvicorn", "main:create_app", "--factory", "--host", "0.0.0.0", "--port", "3000"]

@@ -10,13 +10,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
-    from .mock_data import CHART_DATA_SOURCE_SEED, WEBCAM_SEED, generate_historical_data
+    from .mock_data import WEBCAM_SEED, generate_historical_data
 except ImportError:
-    from mock_data import CHART_DATA_SOURCE_SEED, WEBCAM_SEED, generate_historical_data
+    from mock_data import WEBCAM_SEED, generate_historical_data
 
 
-BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_DATA_DIR = BASE_DIR / "data"
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_DATA_DIR = BACKEND_DIR / "data"
 CAMERA_DB_FILENAME = "camera.db"
 CAMERA_CONFIG_FILENAME = "config.yaml"
 SAMPLE_IMAGE_FILES = ["image0.png", "image1.png", "image2.png"]
@@ -95,7 +95,6 @@ def _camera_config_yaml(camera_id: str) -> str:
             f"location: {_yaml_string(str(seed.get('location') or ''))}",
             f"country: {_yaml_string(str(seed.get('country') or ''))}",
             f"country_emoji: {_yaml_string(str(seed.get('countryEmoji') or ''))}",
-            f"is_online: {'true' if seed.get('isOnline') is True else 'false' if seed.get('isOnline') is False else 'null'}",
             f"last_online: {_yaml_optional_string(_iso_utc(last_online) if last_online else None)}",
             f"next_online: {_yaml_optional_string(_iso_utc(next_online) if next_online else None)}",
             f"camera_start_time: {_yaml_string('06:00')}",
@@ -121,6 +120,9 @@ def _ensure_camera_schema(db_path: Path) -> None:
             """
         )
         connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_camera_images_created_at ON camera_images(created_at)"
+        )
+        connection.execute(
             """
             CREATE TABLE IF NOT EXISTS sensor_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,55 +140,6 @@ def _ensure_camera_schema(db_path: Path) -> None:
             )
             """
         )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chart_data_sources (
-                source_id TEXT PRIMARY KEY,
-                label TEXT NOT NULL,
-                icon_key TEXT NOT NULL,
-                color_value TEXT NOT NULL
-            )
-            """
-        )
-        chart_source_columns = [
-            row[1]
-            for row in connection.execute("PRAGMA table_info(chart_data_sources)").fetchall()
-        ]
-        expected_chart_source_columns = [
-            "source_id",
-            "label",
-            "icon_key",
-            "color_value",
-        ]
-        if chart_source_columns and chart_source_columns != expected_chart_source_columns:
-            connection.execute("ALTER TABLE chart_data_sources RENAME TO chart_data_sources_legacy")
-            connection.execute(
-                """
-                CREATE TABLE chart_data_sources (
-                    source_id TEXT PRIMARY KEY,
-                    label TEXT NOT NULL,
-                    icon_key TEXT NOT NULL,
-                    color_value TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                """
-                INSERT INTO chart_data_sources (
-                    source_id,
-                    label,
-                    icon_key,
-                    color_value
-                )
-                SELECT
-                    source_id,
-                    label,
-                    icon_key,
-                    color_value
-                FROM chart_data_sources_legacy
-                """
-            )
-            connection.execute("DROP TABLE chart_data_sources_legacy")
         connection.commit()
 
 
@@ -241,35 +194,6 @@ def _seed_camera(data_dir: Path, camera_id: str, count: int, overwrite: bool) ->
         with sqlite3.connect(db_path) as connection:
             connection.execute("DELETE FROM camera_images")
             connection.execute("DELETE FROM sensor_history")
-            connection.execute("DELETE FROM chart_data_sources")
-            connection.commit()
-
-    with sqlite3.connect(db_path) as connection:
-        if overwrite:
-            connection.execute("DELETE FROM chart_data_sources")
-
-        source_rows = [
-            (
-                source["id"],
-                source["label"],
-                source["icon"],
-                source["color"],
-            )
-            for source in CHART_DATA_SOURCE_SEED
-        ]
-        if source_rows:
-            connection.executemany(
-                """
-                INSERT OR REPLACE INTO chart_data_sources (
-                    source_id,
-                    label,
-                    icon_key,
-                    color_value
-                )
-                VALUES (?, ?, ?, ?)
-                """,
-                source_rows,
-            )
             connection.commit()
 
     sensor_rows = [

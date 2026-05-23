@@ -1,13 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { extractErrorDetail } from "@/lib/apiClient";
-
-import { fetchJson, isAbortError, LoginResponse, MeResponse } from "./appContextUtils";
-
-type AuthResult = {
-  success: boolean;
-  error?: string;
-};
+import { getCurrentUser, loginUser, logoutUser, type AuthResult } from "@/api/auth";
+import { isAbortError } from "@/lib/apiClient";
 
 export type AuthSessionState = {
   isAuthenticated: boolean;
@@ -27,11 +21,7 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
 
     const validateSession = async () => {
       try {
-        const payload = await fetchJson<MeResponse>(`${apiBaseUrl}/auth/me`, {
-          credentials: "include",
-          signal: controller.signal,
-          throwOnHttpError: false,
-        });
+        const payload = await getCurrentUser(apiBaseUrl, controller.signal);
 
         if (controller.signal.aborted) return;
         setAuthenticatedUsername(payload?.username ?? null);
@@ -53,46 +43,17 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
   }, [apiBaseUrl]);
 
   const login = async (username: string, password: string): Promise<AuthResult> => {
-    try {
-      const response = await fetch(`${apiBaseUrl}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        const fallback =
-          response.status === 429
-            ? "Too many login attempts. Try again later."
-            : "Invalid username or password.";
-        let message = fallback;
-
-        try {
-          const payload = await response.json();
-          message = extractErrorDetail(payload, fallback);
-        } catch {
-          // Keep the fallback message when the response body is not JSON.
-        }
-
-        return { success: false, error: message };
-      }
-
-      const payload = (await response.json()) as LoginResponse;
-      setAuthenticatedUsername(payload.username);
+    const result = await loginUser(apiBaseUrl, username, password);
+    if (result.success && result.username) {
+      setAuthenticatedUsername(result.username);
       setAuthReady(true);
-      return { success: true };
-    } catch {
-      return { success: false, error: "Unable to reach authentication service." };
     }
+    return result.success ? { success: true } : { success: false, error: result.error };
   };
 
   const logout = async (): Promise<void> => {
     try {
-      await fetch(`${apiBaseUrl}/auth/logout`, {
-        method: "POST",
-        credentials: "include",
-      });
+      await logoutUser(apiBaseUrl);
     } catch {
       // Best-effort logout; clear local auth state regardless.
     }

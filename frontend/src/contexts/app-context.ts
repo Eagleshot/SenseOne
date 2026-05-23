@@ -1,7 +1,8 @@
 import { createContext } from "react";
 
 import { MapStyleKey } from "@/contexts/useAppPreferences";
-import { SensorData, TimezoneOption, Webcam } from "@/data/types";
+import { TIMEZONES } from "@/data/timezones";
+import { SensorData, Webcam } from "@/data/types";
 import { ColorThemeKey } from "@/lib/appThemes";
 
 export interface AppContextType {
@@ -25,7 +26,7 @@ export interface AppContextType {
   // Timezone
   timezone: string;
   setTimezone: (tz: string) => void;
-  timezones: TimezoneOption[];
+  timezones: typeof TIMEZONES;
 
   // Sidebar
   isSidebarOpen: boolean;
@@ -70,6 +71,10 @@ export interface AppContextType {
   isStationConfigLoading: boolean;
   isStationConfigSaving: boolean;
   stationConfigError: string | null;
+
+  // Station visibility
+  isPublic: boolean;
+  setIsPublic: (isPublic: boolean) => Promise<void>;
 }
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);

@@ -32,7 +32,7 @@ npm run dev
 
 ## Backend setup (FastAPI)
 
-The backend is a single FastAPI service that powers the frontend APIs and the ESP32 image upload endpoint.
+The backend is a single FastAPI service with two API surfaces: session-cookie frontend APIs and HMAC-signed device APIs for image/sensor ingestion.
 
 ### 1) Create the root `.env`
 
@@ -40,7 +40,7 @@ Create a single `.env` in the project root for both frontend and backend setting
 
 ```env
 # Frontend
-VITE_API_BASE_URL=/api
+VITE_API_BASE_URL=/api/v1
 
 # Backend
 OPENWEATHER_API_KEY=your_api_key_here
@@ -51,10 +51,12 @@ APP_CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
 
 `VITE_API_BASE_URL` is read by the frontend from the root `.env`.
 `OPENWEATHER_API_KEY` is required for the weather endpoints.
-`APP_AUTH_USERNAME` and `APP_AUTH_PASSWORD` are required only if you want `/auth/*` and protected camera config/upload endpoints.
+`APP_AUTH_USERNAME` and `APP_AUTH_PASSWORD` are used for browser/admin sessions only; do not put them in firmware.
 `APP_AUTH_PASSWORD` must be at least 12 characters when auth is enabled.
 `APP_CORS_ORIGINS` is required and should list the exact allowed frontend origins.
 Brute-force protection, login throttling, and account lockout are not built into the application code.
+Devices sign `/v1/device/stations/{station_id}/images` and `/v1/device/stations/{station_id}/sensor-readings` with the per-station HMAC secret.
+Plain HTTP cannot hide payload contents from someone who can inspect the network, so use it only on a trusted LAN or put the device API behind HTTPS, a VPN, or a private tunnel.
 
 ### 2) Install backend dependencies
 
@@ -72,18 +74,18 @@ python -m venv .venv
 cd backend
 
 # Start the FastAPI server with auto-reload and load the root .env
-uvicorn main:app --reload --port 3000 --env-file ../.env
+uvicorn main:create_app --factory --reload --port 3000 --env-file ../.env
 ```
 
 For the backend documentation, go to `http://localhost:3000/docs` in your browser.
 
 ### 4) Point the frontend to the backend (optional)
 
-The frontend is configured to call the backend through `/api`, which works in local Vite dev and in Docker.
+The frontend is configured to call the backend through `/api/v1`, which works in local Vite dev and in Docker.
 If you need to override that, set `VITE_API_BASE_URL` in the root `.env`:
 
 ```env
-VITE_API_BASE_URL=/api
+VITE_API_BASE_URL=/api/v1
 ```
 
 ## Docker Compose
@@ -94,7 +96,7 @@ The repo includes Dockerfiles for the frontend and backend plus a `docker-compos
 
 - frontend: `http://localhost:8080`
 - backend: `http://localhost:3000`
-- frontend-to-backend browser traffic goes through `http://localhost:8080/api`
+- frontend-to-backend browser traffic goes through `http://localhost:8080/api/v1`
 
 ### 1) Edit the root env file
 

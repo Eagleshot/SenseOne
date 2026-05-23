@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { motion } from "framer-motion";
 import { Copy, Pencil, Save, X } from "lucide-react";
@@ -8,11 +8,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { DESCRIPTION_MAX_LENGTH } from "@/contexts/appContextUtils";
 
 import { HeroImage } from "./HeroImage";
-import { WeatherDetail } from "./WeatherDetail";
-import { SensorHistoryPanel } from "./SensorHistoryPanel";
-import { WebsiteSettingsPanel } from "./WebsiteSettingsPanel";
-import { InteractiveMap } from "./InteractiveMap";
 import { useApp } from "@/contexts/useApp";
+
+const WeatherDetail = lazy(() => import("./WeatherDetail").then((module) => ({ default: module.WeatherDetail })));
+const SensorHistoryPanel = lazy(() =>
+  import("./SensorHistoryPanel").then((module) => ({ default: module.SensorHistoryPanel }))
+);
+const WebsiteSettingsPanel = lazy(() =>
+  import("./WebsiteSettingsPanel").then((module) => ({ default: module.WebsiteSettingsPanel }))
+);
+const InteractiveMap = lazy(() => import("./InteractiveMap").then((module) => ({ default: module.InteractiveMap })));
+
+const SectionFallback = () => <div className="panel-shell min-h-[10rem] animate-pulse" aria-hidden="true" />;
 
 export const MainContent: React.FC = () => {
   const {
@@ -148,10 +155,20 @@ export const MainContent: React.FC = () => {
             </div>
           </section>
         )}
-        <WeatherDetail />
-        <SensorHistoryPanel />
-        {isAuthenticated && <WebsiteSettingsPanel />}
-        <InteractiveMap />
+        <Suspense fallback={<SectionFallback />}>
+          <WeatherDetail />
+        </Suspense>
+        <Suspense fallback={<SectionFallback />}>
+          <SensorHistoryPanel />
+        </Suspense>
+        {isAuthenticated && (
+          <Suspense fallback={<SectionFallback />}>
+            <WebsiteSettingsPanel />
+          </Suspense>
+        )}
+        <Suspense fallback={<SectionFallback />}>
+          <InteractiveMap />
+        </Suspense>
 
         <footer className="border-t border-border py-8">
           <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3 md:items-center">

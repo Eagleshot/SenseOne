@@ -6,7 +6,6 @@ from utils import (
     sanitize_filename,
     sanitize_camera_id,
     normalize_content_type,
-    parse_embedded_timestamp,
     parse_iso_timestamp,
     iso_utc,
     humanize_camera_id,
@@ -66,19 +65,6 @@ class TestContentTypeHandling:
 
 class TestTimestampParsing:
     """Test timestamp parsing."""
-
-    def test_parse_embedded_timestamp_valid(self):
-        result = parse_embedded_timestamp("20240101_1230Z_test.jpg")
-        assert result is not None
-        assert result.year == 2024
-        assert result.month == 1
-        assert result.day == 1
-        assert result.hour == 12
-        assert result.minute == 30
-
-    def test_parse_embedded_timestamp_invalid(self):
-        assert parse_embedded_timestamp("test.jpg") is None
-        assert parse_embedded_timestamp("invalid_timestamp.jpg") is None
 
     def test_parse_iso_timestamp_valid(self):
         result = parse_iso_timestamp("2024-01-01T12:30:00Z")

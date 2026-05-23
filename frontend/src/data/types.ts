@@ -15,6 +15,7 @@ export interface Webcam {
   isOnline?: boolean;
   lastUpdate?: Date | null;
   nextUpdate?: Date | null;
+  isPublic?: boolean;
 }
 
 export interface SensorData {

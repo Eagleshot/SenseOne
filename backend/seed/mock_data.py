@@ -18,6 +18,7 @@ WEBCAM_SEED = [
         "isOnline": True,
         "lastUpdateMinutesAgo": 10,
         "nextUpdateMinutesIn": 20,
+        "is_public": True,
     },
     {
         "id": "gries-glacier",
@@ -30,6 +31,7 @@ WEBCAM_SEED = [
         "isOnline": True,
         "lastUpdateMinutesAgo": 5,
         "nextUpdateMinutesIn": 25,
+        "is_public": True,
     },
     {
         "id": "rhone-glacier",
@@ -42,6 +44,7 @@ WEBCAM_SEED = [
         "isOnline": True,
         "lastUpdateMinutesAgo": 15,
         "nextUpdateMinutesIn": 15,
+        "is_public": True,
     },
     {
         "id": "jungfrau-top",
@@ -54,6 +57,7 @@ WEBCAM_SEED = [
         "isOnline": False,
         "lastUpdateMinutesAgo": 120,
         "nextUpdateMinutesIn": 60,
+        "is_public": True,
     },
     {
         "id": "titlis-glacier",
@@ -66,6 +70,7 @@ WEBCAM_SEED = [
         "isOnline": True,
         "lastUpdateMinutesAgo": 8,
         "nextUpdateMinutesIn": 22,
+        "is_public": False,
     },
     {
         "id": "reykjavik-harbor",
@@ -78,6 +83,7 @@ WEBCAM_SEED = [
         "isOnline": True,
         "lastUpdateMinutesAgo": 12,
         "nextUpdateMinutesIn": 18,
+        "is_public": False,
     },
     {
         "id": "yosemite-valley",
@@ -90,6 +96,7 @@ WEBCAM_SEED = [
         "isOnline": True,
         "lastUpdateMinutesAgo": 7,
         "nextUpdateMinutesIn": 23,
+        "is_public": True,
     },
     {
         "id": "paris-seine",
@@ -103,6 +110,7 @@ WEBCAM_SEED = [
         "isOnline": True,
         "lastUpdateMinutesAgo": 9,
         "nextUpdateMinutesIn": 21,
+        "is_public": True,
     },
     {
         "id": "tokyo-skyline",
@@ -115,6 +123,7 @@ WEBCAM_SEED = [
         "isOnline": True,
         "lastUpdateMinutesAgo": 11,
         "nextUpdateMinutesIn": 19,
+        "is_public": False,
     },
     {
         "id": "bangkok-river",
@@ -127,6 +136,7 @@ WEBCAM_SEED = [
         "isOnline": True,
         "lastUpdateMinutesAgo": 6,
         "nextUpdateMinutesIn": 24,
+        "is_public": True,
     },
 ]
 
@@ -139,46 +149,6 @@ TIMEZONES = [
     {"value": "America/Los_Angeles", "label": "Los Angeles (PST/PDT)"},
     {"value": "Asia/Tokyo", "label": "Tokyo (JST)"},
 ]
-
-CHART_DATA_SOURCE_SEED = [
-    {
-        "id": "temperature",
-        "label": "Temperature",
-        "icon": "thermometer",
-        "color": "hsl(var(--chart-1))",
-    },
-    {
-        "id": "humidity",
-        "label": "Humidity",
-        "icon": "humidity",
-        "color": "hsl(var(--chart-3))",
-    },
-    {
-        "id": "battery",
-        "label": "Battery Level",
-        "icon": "battery",
-        "color": "hsl(var(--chart-2))",
-    },
-    {
-        "id": "wind",
-        "label": "Wind Conditions",
-        "icon": "wind",
-        "color": "hsl(var(--chart-1))",
-    },
-    {
-        "id": "atmosphere",
-        "label": "Atmospheric Conditions",
-        "icon": "gauge",
-        "color": "hsl(var(--chart-2))",
-    },
-    {
-        "id": "thermal-comfort",
-        "label": "Thermal Comfort",
-        "icon": "activity",
-        "color": "hsl(var(--chart-3))",
-    },
-]
-
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

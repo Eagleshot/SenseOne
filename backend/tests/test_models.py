@@ -2,7 +2,7 @@
 
 import pytest
 
-from models import AppConfig, LoginRequest, AuthResponse, MeResponse, ChartDataSource
+from models import AppConfig, LoginRequest, AuthResponse, MeResponse
 
 
 class TestAppConfig:
@@ -104,18 +104,6 @@ class TestAppConfig:
         assert config.last_online is None
         assert config.next_online is None
 
-    def test_optional_online_status(self):
-        """Test is_online field options."""
-        config1 = AppConfig(is_online=True)
-        assert config1.is_online is True
-        
-        config2 = AppConfig(is_online=False)
-        assert config2.is_online is False
-        
-        config3 = AppConfig(is_online=None)
-        assert config3.is_online is None
-
-
 class TestLoginRequest:
     """Test LoginRequest model."""
 
@@ -144,29 +132,3 @@ class TestMeResponse:
         assert response.username == "testuser"
 
 
-class TestChartDataSource:
-    """Test ChartDataSource model."""
-
-    def test_chart_data_source_structure(self):
-        """Test ChartDataSource with valid values."""
-        source = ChartDataSource(
-            id="temperature",
-            label="Temperature",
-            icon="thermometer",
-            color="hsl(var(--chart-1))",
-        )
-        assert source.id == "temperature"
-        assert source.label == "Temperature"
-        assert source.icon == "thermometer"
-        assert source.color == "hsl(var(--chart-1))"
-
-    def test_chart_data_source_strips_whitespace(self):
-        """Test ChartDataSource trims whitespace from text fields."""
-        source = ChartDataSource(
-            id=" temperature ",
-            label=" Temperature ",
-            icon=" thermometer ",
-            color=" hsl(var(--chart-1)) ",
-        )
-        assert source.id == "temperature"
-        assert source.label == "Temperature"

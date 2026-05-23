@@ -5,25 +5,25 @@
 From `backend/`:
 
 ```powershell
-python .\seed_mock_data.py
+python .\seed\seed_mock_data.py
 ```
 
 This creates per-camera folders in `backend/data/<camera_id>/` with:
 
 - `images/` mock assets
 - `config.yaml` including schedule and metadata (`title`, `lat`, `lon`, `alt`, `location`, `country`, `country_emoji`)
-- `camera.db` containing timeline rows
+- `camera.db` containing image capture and sensor reading rows
 
 Use `--camera-id`, `--count`, and `--overwrite` to control generated sample data:
 
 ```powershell
-python .\seed_mock_data.py --camera-id matterhorn-01 --count 24 --overwrite
+python .\seed\seed_mock_data.py --camera-id matterhorn-01 --count 24 --overwrite
 ```
 
 This backend is a single FastAPI server that:
 
-- accepts uploads on `POST /upload/{camera_id}` from the device
-- serves the frontend API routes used by the Vite app
+- serves the frontend API routes used by the Vite app with session-cookie auth
+- accepts HMAC-signed device uploads on `POST /v1/device/stations/{station_id}/images` and `POST /v1/device/stations/{station_id}/sensor-readings` — see [Device auth (HMAC)](#device-auth-hmac)
 - saves uploaded files into `backend/data/<camera>/images/`, where each camera has its own folder
 - creates a `config.yaml` and `camera.db` per camera directory on first write
 - can optionally expose weather and auth features through the shared project root `.env`
@@ -38,7 +38,7 @@ Optional for the shared frontend/backend `.env`:
 
 - `VITE_API_BASE_URL` for the frontend
 - `APP_AUTH_USERNAME`, `APP_AUTH_PASSWORD`, and `OPENWEATHER_API_KEY` for the backend
-- brute-force protection, login throttling, and account lockout are not built into the backend application code
+- `APP_REQUIRE_HTTPS=true` to reject plain-HTTP requests for user-auth routes (device routes stay HTTP-allowed since their auth is HMAC-signed)
 
 ## 2) Open the backend folder
 
@@ -64,7 +64,7 @@ python -m pip install -r .\requirements.txt
 From `backend/`:
 
 ```powershell
-uvicorn main:app --reload --port 3000 --env-file ..\.env
+uvicorn main:create_app --factory --reload --port 3000 --env-file ..\.env
 ```
 
 Expected behavior:
@@ -73,70 +73,149 @@ Expected behavior:
 - `backend/data/` is created automatically (if missing)
 - `http://127.0.0.1:3000/docs` serves the OpenAPI docs
 
+## Device auth (HMAC)
+
+Devices authenticate every request by signing it — the shared secret never goes over the wire. See `backend/station_hmac.py` for the canonical signing string. Each request must carry these four headers:
+
+| Header | Example | Notes |
+| --- | --- | --- |
+| `X-Station-Id` | `silvretta-glacier` | Must match the URL path. |
+| `X-Timestamp` | `1748000000` | Unix seconds, within +-300 s of the server clock. |
+| `X-Nonce` | `0123456789abcdef0123456789abcdef` | Hex, >=16 chars, fresh per request. |
+| `X-Signature` | `v1=<64 hex chars>` | HMAC-SHA256 of the canonical string with the per-station secret. |
+
+Provision the per-station secret from an authenticated admin session:
+
+```
+POST /v1/stations/{station_id}/rotate-device-secret
+```
+
+The response includes the base64url secret exactly once — flash it to the device and discard the response.
+
+Reference signers:
+
+- Python: [`clients/python/eagleshot_signing.py`](../clients/python/eagleshot_signing.py)
+- MicroPython / OpenMV: [`clients/openmv/eagleshot_signing.py`](../clients/openmv/eagleshot_signing.py)
+
+Devices without an RTC can call the unauthenticated `GET /v1/server-time` once at boot and track the offset against a monotonic counter.
+
 ## 6) Test with a local image upload
 
 ```powershell
-Invoke-WebRequest `
-  -Method Post `
-  -Uri "http://127.0.0.1:3000/upload/{CAMERA_ID}" `
-  -Headers @{ "X-Filename" = "test.jpg" } `
-  -ContentType "image/jpeg" `
-  -InFile "C:\path\to\test.jpg"
+python - <<'PY'
+import sys
+sys.path.insert(0, "../clients/python")
+import eagleshot_signing, requests
+
+STATION_ID = "{STATION_ID}"
+SECRET_B64 = "{DEVICE_SECRET_B64}"
+body = open(r"C:\path\to\test.jpg", "rb").read()
+path = f"/v1/device/stations/{STATION_ID}/images"
+
+headers = eagleshot_signing.sign_request(
+    station_id=STATION_ID,
+    secret_b64=SECRET_B64,
+    method="POST",
+    path=path,
+    body=body,
+)
+headers.update({"Content-Type": "image/jpeg", "X-Filename": "test.jpg"})
+
+response = requests.post(f"http://127.0.0.1:3000{path}", data=body, headers=headers)
+print(response.status_code, response.text)
+PY
 ```
 
-You should get a response similar to:
+Expected response:
 
-```text
-File uploaded as test.jpg
+```json
+{
+  "filename": "1763900000000-test.jpg",
+  "url": "/stations/{STATION_ID}/images/1763900000000-test.jpg"
+}
 ```
 
-Then confirm file exists:
+Then confirm the file exists:
 
 ```powershell
-Get-ChildItem .\data\<CAMERA_ID>\images
+Get-ChildItem .\data\<STATION_ID>\images
 ```
 
-## 7) Connect your ESP32 camera firmware
+## 7) Test with a local sensor reading
 
-Your firmware already matches this backend contract:
+```powershell
+python - <<'PY'
+import json, sys
+sys.path.insert(0, "../clients/python")
+import eagleshot_signing, requests
 
-- `server_port` = `3000`
-- `resource` = `"/upload/{camera_id}"`
-- legacy fallback: `"/upload"` with required header `X-Camera-Id`
-- request header `X-Filename`
+STATION_ID = "{STATION_ID}"
+SECRET_B64 = "{DEVICE_SECRET_B64}"
+path = f"/v1/device/stations/{STATION_ID}/sensor-readings"
+body = json.dumps({
+    "temperature": 21.5,
+    "humidity": 58,
+    "pressure": 1012,
+    "battery": 87,
+    "windSpeed": 4.2,
+    "windDirection": 225,
+    "visibility": 9.5,
+    "uvIndex": 3,
+    "dewPoint": 13.1,
+    "feelsLike": 20.9,
+}).encode("utf-8")
 
-These are defined in `config.h`.
+headers = eagleshot_signing.sign_request(
+    station_id=STATION_ID,
+    secret_b64=SECRET_B64,
+    method="POST",
+    path=path,
+    body=body,
+)
+headers["Content-Type"] = "application/json"
 
-Important:
+response = requests.post(f"http://127.0.0.1:3000{path}", data=body, headers=headers)
+print(response.status_code, response.text)
+PY
+```
 
-- `server_ip` in `config.h` must point to the machine/IP running this backend.
-- `127.0.0.1` will only work from the same machine, not from the ESP32.
-- If needed, allow inbound TCP port `3000` in Windows Firewall.
+`timestamp` is optional; the backend records the current server time when it is omitted.
 
-Optional:
+## 8) Endpoints
 
-- set `APP_DATA_DIR` to override the data root.
-- set `APP_DEFAULT_CAMERA_ID` to change the fallback camera id when none is provided.
-- station summary/detail endpoints:
-- `GET /stations`
-- `GET /stations/{station_id}`
-- `GET /stations/{station_id}/history`
-- `GET /stations/{station_id}/timeline`
-- `GET /stations/{station_id}/weather/current`
-- `GET /stations/{station_id}/weather/forecast`
-- per-station config endpoints:
-- `GET /stations/{station_id}/config`
-- `PUT /stations/{station_id}/config`
+Frontend routes (session-cookie auth):
 
-## 8) Troubleshooting
+- `GET /v1/stations`
+- `GET /v1/stations/{station_id}`
+- `GET /v1/stations/{station_id}/sensor-readings`
+- `GET /v1/stations/{station_id}/image-captures`
+- `GET /v1/stations/{station_id}/weather/current`
+- `GET /v1/stations/{station_id}/weather/forecast`
+- `GET /v1/stations/{station_id}/config`
+- `PUT /v1/stations/{station_id}/config`
+- `POST /v1/stations/{station_id}/rotate-device-secret`
 
-- `Connection to server failed!` on device:
-  - verify `server_ip`
-  - verify backend is running
-  - verify port `3000` is open/reachable
+Device routes (HMAC signing, see above):
+
+- `POST /v1/device/stations/{station_id}/images`
+- `POST /v1/device/stations/{station_id}/sensor-readings`
+
+Open:
+
+- `GET /v1/server-time`
+- `GET /health`
+
+## 9) Troubleshooting
+
+- `401 Unauthorized` on a device request:
+  - timestamp is outside the +-300 s window — re-sync via `GET /v1/server-time`
+  - nonce was reused — generate a fresh one per request
+  - secret on device doesn't match the server — rotate via `POST /v1/stations/{station_id}/rotate-device-secret` and re-flash
 - `404 Not Found`:
-  - ensure firmware posts to `/upload/{camera_id}` (or `/upload` with `X-Camera-Id`)
-- Empty/incorrect filename:
-  - backend falls back to `default.jpg` when `X-Filename` is missing
+  - station id doesn't exist or the URL path doesn't match `/v1/device/stations/{station_id}/images` / `.../sensor-readings`
+- `413 Payload Too Large`:
+  - default upload cap is 25 MB; override with `APP_MAX_UPLOAD_BYTES`
+- `426 Upgrade Required`:
+  - `APP_REQUIRE_HTTPS=true` is set but the request reached the server over plain HTTP — fix the reverse proxy / `--proxy-headers` setup, or scope the env flag to production only
 - File not where expected:
-- uploaded files are written to `backend/data/<camera>/images/`
+  - uploaded files are written to `backend/data/<camera>/images/`

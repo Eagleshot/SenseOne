@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState, memo } from "react";
 
 import { ChevronDown, Download, Search, ArrowUpDown } from "lucide-react";
-import { format } from "date-fns";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -9,13 +8,19 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 import { cn } from "@/lib/utils";
-import { formatCsvTimestamp, formatDateTimeLabel } from "@/lib/datetime";
 import { TEMPERATURE_UNIT } from "@/lib/units";
 import { useApp } from "@/contexts/useApp";
 import type { SensorData } from "@/data/types";
-
-type SortField = "timestamp" | "temperature" | "humidity" | "battery" | "windSpeed" | "pressure";
-type SortDirection = "asc" | "desc";
+import {
+  buildSensorCsv,
+  createFormattedTimestampMap,
+  createSensorRowKeyMap,
+  filterAndSortSensorRows,
+  paginateRows,
+  sensorCsvFilename,
+  type SortDirection,
+  type SortField,
+} from "./rawDataTableUtils";
 
 interface SortableHeaderProps {
   field: SortField;
@@ -49,52 +54,22 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
   const itemsPerPage = 10;
 
   const formattedTimestamps = useMemo(
-    () => new Map(data.map((d) => [d, formatDateTimeLabel(d.timestamp, timezone)])),
+    () => createFormattedTimestampMap(data, timezone),
     [data, timezone]
   );
   const rowKeys = useMemo(
-    () => new Map(data.map((row, index) => [row, `${row.timestamp.toISOString()}-${index}`])),
+    () => createSensorRowKeyMap(data),
     [data]
   );
 
-  const filteredAndSortedData = useMemo(() => {
-    let working = [...data];
-
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      working = working.filter((d) => {
-        const dateStr = (formattedTimestamps.get(d) ?? "").toLowerCase();
-        const values = [d.temperature, d.humidity, d.battery, d.windSpeed, d.pressure]
-          .map(String)
-          .join(" ");
-        return dateStr.includes(query) || values.includes(query);
-      });
-    }
-
-    working.sort((a, b) => {
-      let aVal: number | Date = a[sortField];
-      let bVal: number | Date = b[sortField];
-
-      if (sortField === "timestamp") {
-        aVal = a.timestamp.getTime();
-        bVal = b.timestamp.getTime();
-      }
-
-      if (sortDirection === "asc") {
-        return (aVal as number) - (bVal as number);
-      }
-      return (bVal as number) - (aVal as number);
-    });
-
-    return working;
-  }, [data, searchQuery, sortField, sortDirection, formattedTimestamps]);
+  const filteredAndSortedData = useMemo(
+    () => filterAndSortSensorRows({ data, formattedTimestamps, searchQuery, sortField, sortDirection }),
+    [data, formattedTimestamps, searchQuery, sortDirection, sortField]
+  );
 
   const totalPages = Math.max(1, Math.ceil(filteredAndSortedData.length / itemsPerPage));
   const page = Math.min(currentPage, totalPages);
-  const paginatedData = filteredAndSortedData.slice(
-    (page - 1) * itemsPerPage,
-    page * itemsPerPage
-  );
+  const paginatedData = paginateRows(filteredAndSortedData, page, itemsPerPage);
 
   const handleSort = useCallback((field: SortField) => {
     if (sortField === field) {
@@ -106,29 +81,12 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
   }, [sortField, sortDirection]);
 
   const handleDownloadCSV = useCallback(() => {
-    const headers = [
-      "Timestamp",
-      `Temperature (${TEMPERATURE_UNIT})`,
-      "Humidity (%)",
-      "Battery (%)",
-      "Wind (km/h)",
-      "Pressure (hPa)",
-    ];
-    const rows = filteredAndSortedData.map((d) => [
-      formatCsvTimestamp(d.timestamp, timezone),
-      d.temperature,
-      d.humidity,
-      d.battery,
-      d.windSpeed,
-      d.pressure,
-    ]);
-
-    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
+    const csv = buildSensorCsv(filteredAndSortedData, timezone);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `sensor-data-${format(new Date(), "yyyy-MM-dd")}.csv`;
+    a.download = sensorCsvFilename();
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

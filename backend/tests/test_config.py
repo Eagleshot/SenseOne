@@ -89,6 +89,8 @@ class TestConfigYAML:
         assert isinstance(yaml, str)
         assert "title" in yaml
         assert "camera_start_time" in yaml
+        assert "is_offline" not in yaml
+        assert "is_online" not in yaml
 
     def test_camera_config_yaml_default(self, sample_camera_id):
         """Test default config YAML generation."""

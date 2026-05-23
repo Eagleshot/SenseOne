@@ -5,7 +5,6 @@
     * Save the charts
     * Default charts at the beginning?
 
-* Fix the weather design
 * Custom Google Maps Link
 * Link other Webcams from this Owner
 
@@ -18,6 +17,7 @@
 -> Add different alerting options (e-mail etc.)
 
 * Image processing
+    * Add logo + timestamp on the image itself
     * Blur on camera
     * Detect and blur people
     * Custom detection pipeline
@@ -26,3 +26,5 @@
     * Connect to different data sources to back up the data
 
 * Add the page as a PWA
+
+* Change Units from Metric to Imperial and vice versa

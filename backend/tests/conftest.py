@@ -3,6 +3,8 @@
 import pytest
 import tempfile
 import sqlite3
+import gc
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -13,8 +15,12 @@ from models import AppConfig
 @pytest.fixture
 def tmp_data_dir():
     """Create a temporary data directory for tests."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+    tmpdir = Path(tempfile.mkdtemp())
+    try:
+        yield tmpdir
+    finally:
+        gc.collect()
+        shutil.rmtree(tmpdir)
 
 
 @pytest.fixture

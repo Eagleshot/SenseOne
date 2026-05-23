@@ -4,46 +4,38 @@ import os
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
+from auth import get_optional_current_user
 from config import read_camera_config, get_data_dir
+from station_access import require_station_view
 from utils import media_type_from_path, sanitize_filename
 from routes import ValidStationId
-
-try:
-    from mock_data import TIMEZONES
-except ImportError:
-    TIMEZONES = []
 
 
 router = APIRouter(tags=["Stations"])
 
 
 @router.get(
-    "/timezones",
-    tags=["System"],
-    summary="List Timezones",
-    description="Return the curated timezone options used by the frontend.",
-)
-def get_timezones() -> list[dict]:
-    """Return list of available timezones."""
-    return TIMEZONES
-
-
-@router.get(
     "/stations/{station_id}/images/{filename}",
-    summary="Get Station Image",
-    description="Serve a stored image file for a specific station.",
+    summary="Get station image",
+    description=(
+        "Serve a single image file from the station's image directory. "
+        "`filename` must be the value returned by an image-captures listing — "
+        "anything outside the station directory or with path-traversal characters "
+        "is rejected with 400."
+    ),
 )
 def get_station_image(
     station_id: ValidStationId,
     filename: str,
+    user=Depends(get_optional_current_user),
 ) -> FileResponse:
-    """Serve an image file for a station."""
     if filename != sanitize_filename(filename):
         raise HTTPException(status_code=400, detail="Invalid filename.")
 
+    require_station_view(station_id, user)
     data_dir = get_data_dir()
     image_path = data_dir / station_id / "images" / filename
     if not image_path.is_file():
@@ -98,21 +90,36 @@ def camera_coordinates_for_weather(base_dir: Path, camera_id: str) -> tuple[floa
 
 @router.get(
     "/stations/{station_id}/weather/current",
-    summary="Get Current Weather",
-    description="Fetch the current weather for a station using the station coordinates and metric units.",
+    summary="Get current weather",
+    description=(
+        "Proxy the current weather for this station from OpenWeather, using the "
+        "station's stored coordinates and metric units. Upstream failures are "
+        "surfaced as 502 so clients don't mistake them for issues with this "
+        "service. Requires `OPENWEATHER_API_KEY` in the server environment."
+    ),
 )
-async def get_station_current_weather(station_id: ValidStationId) -> dict:
-    """Get current weather for a station."""
+async def get_station_current_weather(
+    station_id: ValidStationId,
+    user=Depends(get_optional_current_user),
+) -> dict:
+    require_station_view(station_id, user)
     lat, lon = camera_coordinates_for_weather(get_data_dir(), station_id)
     return await fetch_openweather("weather", lat, lon, "metric")
 
 
 @router.get(
     "/stations/{station_id}/weather/forecast",
-    summary="Get Weather Forecast",
-    description="Fetch the weather forecast for a station using the station coordinates and metric units.",
+    summary="Get weather forecast",
+    description=(
+        "Proxy the multi-day forecast for this station from OpenWeather, using "
+        "the station's stored coordinates and metric units. Upstream failures "
+        "surface as 502. Requires `OPENWEATHER_API_KEY` in the server environment."
+    ),
 )
-async def get_station_weather_forecast(station_id: ValidStationId) -> dict:
-    """Get weather forecast for a station."""
+async def get_station_weather_forecast(
+    station_id: ValidStationId,
+    user=Depends(get_optional_current_user),
+) -> dict:
+    require_station_view(station_id, user)
     lat, lon = camera_coordinates_for_weather(get_data_dir(), station_id)
     return await fetch_openweather("forecast", lat, lon, "metric")

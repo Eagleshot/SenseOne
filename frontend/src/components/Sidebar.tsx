@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ExternalLink,
   Globe,
+  Lock,
   LogIn,
   LogOut,
   MapPin,
@@ -173,7 +174,7 @@ export const Sidebar: React.FC = () => {
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 className={cn(
-                  `chrome-shell-stroke w-full rounded-xl border p-3 text-left transition-all duration-200 ${sidebarInsetFocusClass}`,
+                  `chrome-shell-stroke relative w-full rounded-xl border p-3 text-left transition-all duration-200 ${sidebarInsetFocusClass}`,
                   activeWebcam.id === webcam.id
                     ? "border-primary/60 bg-sidebar-accent shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(15,23,42,0.08)]"
                     : `${sidebarSurfaceClass} hover:border-primary/25 hover:bg-sidebar-accent`
@@ -181,7 +182,18 @@ export const Sidebar: React.FC = () => {
               >
                 <div className="flex gap-3">
                   <div className="min-w-0 flex-1">
-                    <h3 className="truncate text-sm font-medium text-sidebar-foreground">{webcam.name}</h3>
+                    <div className="flex items-center gap-2 pr-16">
+                      <h3 className="truncate text-sm font-medium text-sidebar-foreground">{webcam.name}</h3>
+                      {isAuthenticated && webcam.isPublic === false && (
+                        <span
+                          title="Private station"
+                          className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
+                        >
+                          Private
+                          <Lock className="h-2.5 w-2.5" />
+                        </span>
+                      )}
+                    </div>
                     <div className="mt-1 flex items-center gap-1">
                       <MapPin className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
                       <p className="truncate text-xs text-muted-foreground">

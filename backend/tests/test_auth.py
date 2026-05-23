@@ -56,49 +56,22 @@ class TestSessionManagement:
 class TestCredentialVerification:
     """Test credential verification."""
 
-    def test_verify_credentials_requires_env_vars(self, monkeypatch):
-        """Test that verify_credentials uses environment variables."""
-        # This test depends on environment being set properly in auth.py
-        # We can test the logic here
-        
-        # Mock credentials
-        monkeypatch.setenv("APP_AUTH_USERNAME", "testuser")
-        monkeypatch.setenv("APP_AUTH_PASSWORD", "testpassword123")
-        
-        # Note: The actual AUTH_USERNAME and AUTH_PASSWORD are set at import time
-        # So we can't easily mock them. This test is more for documentation.
+    def test_hash_secret_roundtrip(self):
+        """A hashed secret should verify against its plaintext."""
+        from auth import hash_secret, verify_secret
 
-    def test_verify_credentials_comparison(self):
-        """Test that credential comparison is timing-safe."""
-        # verify_credentials uses secrets.compare_digest
-        # This test ensures it's being used
+        stored = hash_secret("correct-horse-battery-staple")
+        assert verify_secret("correct-horse-battery-staple", stored)
+        assert not verify_secret("wrong-password", stored)
+        assert not verify_secret("correct-horse-battery-staple", None)
+
+    def test_secret_verification_is_timing_safe(self):
+        """verify_secret must use hmac.compare_digest under the hood."""
         import inspect
-        from auth import verify_credentials
-        
-        source = inspect.getsource(verify_credentials)
+        from auth import verify_secret
+
+        source = inspect.getsource(verify_secret)
         assert "compare_digest" in source
-
-
-class TestAuthConfiguration:
-    """Test auth configuration."""
-
-    def test_auth_password_minimum_length(self):
-        """Test that password minimum length check exists in code."""
-        # This is validated at import time in AUTH_ENABLED initialization
-        # We can verify it's in the source code
-        import inspect
-        from auth import ensure_auth_configured
-        
-        source = inspect.getsource(ensure_auth_configured)
-        # The requirement is defined at module level, not in this function
-        assert True  # Skip this as it's validated at module load time
-
-    def test_auth_username_password_consistency(self):
-        """Test that AUTH_ENABLED depends on both username and password."""
-        # This is validated at import time
-        # We can verify AUTH_ENABLED is set based on environment
-        from auth import AUTH_ENABLED
-        assert isinstance(AUTH_ENABLED, bool)
 
 
 def test_session_storage_is_mutable():

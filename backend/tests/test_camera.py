@@ -1,16 +1,16 @@
 """Tests for camera operations."""
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
-from camera import (
-    all_camera_ids,
-    timeline_from_camera_db,
-    history_from_camera_db,
-    latest_camera_battery,
-    latest_camera_capture,
-    camera_status,
-    camera_summary,
-    camera_detail,
+from station_repository import (
+    image_captures as timeline_from_camera_db,
+    latest_battery as latest_camera_battery,
+    latest_capture as latest_camera_capture,
+    list_station_ids as all_camera_ids,
+    sensor_history as history_from_camera_db,
+    station_detail as camera_detail,
+    station_status as camera_status,
+    station_summary as camera_summary,
 )
 from config import ensure_camera_dir
 from models import AppConfig
@@ -21,10 +21,8 @@ class TestCameraListing:
 
     def test_all_camera_ids_empty(self, tmp_data_dir):
         """Test listing cameras with no filesystem cameras."""
-        # Note: WEBCAM_SEED includes mock cameras, so this won't be truly empty
         ids = all_camera_ids(tmp_data_dir)
-        # Just verify it returns a list
-        assert isinstance(ids, list)
+        assert ids == []
 
     def test_all_camera_ids_single(self, setup_camera_dir):
         """Test listing with one camera."""
@@ -61,24 +59,32 @@ class TestTimeline:
         data_dir, camera_id = camera_with_sample_images
         result = timeline_from_camera_db(data_dir, camera_id, 10)
         
-        # With no embedded timestamps in filenames, should return sorted list
-        if result is not None:
-            assert len(result) <= 5
-            # Check that items have required fields
-            for item in result:
-                assert "timestamp" in item
-                assert "url" in item
-        else:
-            # Could return None if filtered
-            assert True
+        assert result is not None
+        assert len(result) == 5
+        for item in result:
+            assert "timestamp" in item
+            assert "url" in item
+            assert item["url"].startswith(f"/stations/{camera_id}/images/")
 
     def test_timeline_respects_count_limit(self, camera_with_sample_images):
         """Test that timeline respects count parameter when images exist."""
         data_dir, camera_id = camera_with_sample_images
         result = timeline_from_camera_db(data_dir, camera_id, 2)
         
-        if result is not None:
-            assert len(result) <= 2
+        assert result is not None
+        assert len(result) == 2
+
+    def test_timeline_uses_db_created_at_and_filename(self, camera_with_sample_images):
+        """Timeline rows should come from camera_images metadata, not file mtimes."""
+        data_dir, camera_id = camera_with_sample_images
+        result = timeline_from_camera_db(data_dir, camera_id, 2)
+
+        assert result is not None
+        assert [item["url"] for item in result] == [
+            f"/stations/{camera_id}/images/1-test.jpg",
+            f"/stations/{camera_id}/images/0-test.jpg",
+        ]
+        assert result[0]["timestamp"] < result[1]["timestamp"]
 
 
 class TestHistory:
@@ -116,18 +122,17 @@ class TestHistory:
         result = history_from_camera_db(data_dir, camera_id, 2)
         assert len(result) <= 2
 
-    def test_history_converts_field_names(self, camera_with_history):
-        """Test that history uses camelCase field names when available."""
+    def test_history_uses_python_field_names(self, camera_with_history):
+        """Test that repository history stays snake_case internally."""
         data_dir, camera_id = camera_with_history
         result = history_from_camera_db(data_dir, camera_id, 24)
         
         if result and len(result) > 0:
             item = result[0]
-            # Fields should be in camelCase already
-            assert "windSpeed" in item
-            assert "wind_speed" not in item
-            assert "uvIndex" in item
-            assert "windDirection" in item
+            assert "wind_speed" in item
+            assert "windSpeed" not in item
+            assert "uv_index" in item
+            assert "wind_direction" in item
 
 
 class TestLatestCapture:
@@ -144,10 +149,10 @@ class TestLatestCapture:
         data_dir, camera_id = camera_with_sample_images
         result = latest_camera_capture(data_dir, camera_id)
         
-        if result is not None:
-            timestamp, url = result
-            assert isinstance(timestamp, datetime)
-            assert url.startswith("/stations/")
+        assert result is not None
+        timestamp, url = result
+        assert isinstance(timestamp, datetime)
+        assert url == f"/stations/{camera_id}/images/0-test.jpg"
 
 
 class TestLatestBattery:
@@ -231,17 +236,27 @@ class TestCameraStatus:
         data_dir, camera_id = camera_with_sample_images
         status = camera_status(data_dir, camera_id, sample_config)
         
-        assert "isOnline" in status
-        assert "currentImage" in status
-        assert "lastUpdate" in status
+        assert "is_online" in status
+        assert "current_image" in status
+        assert "last_update" in status
 
     def test_status_from_config(self, setup_camera_dir):
-        """Test status when config specifies online state."""
+        """Test status while the configured UTC next_online time is within the buffer."""
         data_dir, camera_id = setup_camera_dir
-        config = AppConfig(is_online=True, title="Test")
+        next_online = (datetime.now(timezone.utc) - timedelta(minutes=4)).isoformat()
+        config = AppConfig(next_online=next_online, title="Test")
         status = camera_status(data_dir, camera_id, config)
         
-        assert status["isOnline"] is True
+        assert status["is_online"] is True
+
+    def test_status_offline_when_next_online_is_past_buffer(self, setup_camera_dir):
+        """Test status after the configured UTC next_online time and buffer have passed."""
+        data_dir, camera_id = setup_camera_dir
+        next_online = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+        config = AppConfig(next_online=next_online, title="Test")
+        status = camera_status(data_dir, camera_id, config)
+
+        assert status["is_online"] is False
 
     def test_status_no_images(self, setup_camera_dir):
         """Test status with no images."""
@@ -249,48 +264,52 @@ class TestCameraStatus:
         config = AppConfig()
         status = camera_status(data_dir, camera_id, config)
         
-        assert status["isOnline"] is False
-        assert status["currentImage"] is None
+        assert status["is_online"] is False
+        assert status["current_image"] is None
 
 
 class TestCameraSummary:
     """Test camera summary operations."""
 
     def test_summary_has_required_fields(self, setup_camera_dir, sample_config):
-        """Test that summary has required fields."""
+        """Test that summary has required fields. Battery lives on detail, not summary."""
         data_dir, camera_id = setup_camera_dir
         summary = camera_summary(data_dir, camera_id)
-        
+
         assert "id" in summary
         assert "name" in summary
         assert "location" in summary
         assert "country" in summary
         assert "coordinates" in summary
-        assert "isOnline" in summary
-        assert "battery" in summary
+        assert "is_online" in summary
+        assert "battery" not in summary
 
     def test_summary_uses_config_title(self, setup_camera_dir, sample_config):
         """Test that summary has a name field."""
         data_dir, camera_id = setup_camera_dir
         summary = camera_summary(data_dir, camera_id)
-        
+
         # Name can be either the config title or humanized camera ID
         assert "name" in summary
         assert isinstance(summary["name"], str)
 
-    def test_summary_includes_latest_battery(self, camera_with_history):
-        """Test that summary includes the latest battery reading."""
+    def test_detail_includes_latest_battery_value(self, camera_with_history):
+        """Detail should include the latest battery reading."""
+        from station_repository import station_detail as camera_detail
+
         data_dir, camera_id = camera_with_history
-        summary = camera_summary(data_dir, camera_id)
+        detail = camera_detail(data_dir, camera_id)
 
-        assert summary["battery"] == 95
+        assert detail["battery"] == 95
 
-    def test_summary_returns_none_battery_without_history(self, setup_camera_dir):
-        """Test that summary returns None battery when no history exists."""
+    def test_detail_returns_none_battery_without_history(self, setup_camera_dir):
+        """Detail should return None battery when no history exists."""
+        from station_repository import station_detail as camera_detail
+
         data_dir, camera_id = setup_camera_dir
-        summary = camera_summary(data_dir, camera_id)
+        detail = camera_detail(data_dir, camera_id)
 
-        assert summary["battery"] is None
+        assert detail["battery"] is None
 
 
 class TestCameraDetail:
@@ -304,10 +323,10 @@ class TestCameraDetail:
         assert "id" in detail
         assert "name" in detail
         assert "description" in detail
-        assert "currentImage" in detail
-        assert "isOnline" in detail
-        assert "lastUpdate" in detail
-        assert "nextUpdate" in detail
+        assert "current_image" in detail
+        assert "is_online" in detail
+        assert "last_update" in detail
+        assert "next_update" in detail
         assert "battery" in detail
 
     def test_detail_includes_latest_battery(self, camera_with_history):
