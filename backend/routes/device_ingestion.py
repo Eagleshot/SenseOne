@@ -2,19 +2,25 @@
 
 import logging
 import os
-import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from config import get_data_dir, station_db_path
+from config import get_data_dir, station_db_path, write_station_runtime_status
 from constants import ALLOWED_IMAGE_EXTENSIONS
 from models import ImageUploadResponse, SensorHistoryResponse, SensorReadingRequest
 from routes import ValidStationId
 from station_access import require_station_exists
-from station_db import append_sensor_reading, append_station_image
+from station_db import append_sensor_reading, append_station_image, latest_status_from_db
 from station_hmac import verify_station_signature
-from utils import is_supported_image_upload, iso_utc, media_type_from_path, sanitize_filename
+from utils import (
+    image_timestamp_from_filename,
+    is_supported_image_upload,
+    iso_utc,
+    media_type_from_path,
+    parse_iso_timestamp,
+    sanitize_filename,
+)
 
 
 def _parse_max_upload_bytes() -> int:
@@ -33,11 +39,34 @@ MAX_UPLOAD_BYTES = _parse_max_upload_bytes()
 router = APIRouter(prefix="/stations", tags=["Device"])
 
 
+def parse_next_online(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    parsed = parse_iso_timestamp(value)
+    if parsed is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="X-Next-Online must be an ISO 8601 timestamp.",
+        )
+    return iso_utc(parsed)
+
+
+def sync_station_runtime_status(data_dir, station_id: str) -> None:
+    _, _, last_online, next_online = latest_status_from_db(station_db_path(data_dir, station_id), station_id)
+    write_station_runtime_status(
+        data_dir,
+        station_id,
+        last_online=last_online,
+        next_online=next_online,
+    )
+
+
 def store_uploaded_image(
     station_id: str,
     filename: str,
     body: bytes,
     content_type: str | None,
+    next_online: str | None = None,
 ) -> tuple[str, str]:
     """Persist an uploaded image that has already passed HMAC verification."""
     if not is_supported_image_upload(filename, content_type):
@@ -59,7 +88,17 @@ def store_uploaded_image(
 
     images_dir = data_dir / station_id / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
-    stored_filename = f"{int(time.time() * 1000)}-{filename}"
+    image_timestamp = image_timestamp_from_filename(filename)
+    if image_timestamp is None:
+        timestamp_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        stored_filename = f"{timestamp_ms}-{filename}"
+        image_timestamp = image_timestamp_from_filename(stored_filename)
+    else:
+        stored_filename = filename
+
+    if image_timestamp is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image timestamp.")
+
     file_path = images_dir / stored_filename
 
     try:
@@ -75,14 +114,15 @@ def store_uploaded_image(
             file_path.unlink(missing_ok=True)
         raise
 
-    captured_at = datetime.now(timezone.utc).isoformat()
     append_station_image(
         station_db_path(data_dir, station_id),
         filename=stored_filename,
         content_type=detected_media_type,
         size_bytes=len(body),
-        captured_at=captured_at,
+        captured_at=iso_utc(image_timestamp),
+        next_online=next_online,
     )
+    sync_station_runtime_status(data_dir, station_id)
     return stored_filename, f"/stations/{station_id}/images/{stored_filename}"
 
 
@@ -97,6 +137,7 @@ async def upload_station_image(
     station_id: ValidStationId,
     request: Request,
     x_filename: str | None = Header(default=None, description="Optional filename suggestion."),
+    x_next_online: str | None = Header(default=None, description="Optional ISO 8601 next check-in timestamp."),
 ) -> ImageUploadResponse:
     content_length = request.headers.get("content-length")
     if content_length:
@@ -116,6 +157,7 @@ async def upload_station_image(
         filename=sanitize_filename(x_filename or "default.jpg"),
         body=body,
         content_type=request.headers.get("content-type"),
+        next_online=parse_next_online(x_next_online),
     )
     logging.info("File saved for station %s as %s", station_id, stored_filename)
     return ImageUploadResponse(filename=stored_filename, url=image_url)
@@ -135,6 +177,13 @@ async def create_sensor_reading(
 ) -> SensorHistoryResponse:
     await verify_station_signature(station_id, request)
     timestamp = payload.timestamp or iso_utc(datetime.now(timezone.utc))
-    fields = payload.model_dump(exclude={"timestamp"})
-    append_sensor_reading(station_db_path(get_data_dir(), station_id), timestamp, fields)
+    fields = payload.model_dump(exclude={"timestamp", "next_online"})
+    data_dir = get_data_dir()
+    append_sensor_reading(
+        station_db_path(data_dir, station_id),
+        timestamp,
+        fields,
+        next_online=payload.next_online,
+    )
+    sync_station_runtime_status(data_dir, station_id)
     return SensorHistoryResponse(timestamp=timestamp, **fields)

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type SidebarState = {
   isSidebarOpen: boolean;
@@ -26,10 +26,13 @@ export const useSidebarState = (): SidebarState => {
     };
   }, []);
 
-  return {
+  const toggleSidebar = useCallback(() => setIsSidebarOpen((currentValue) => !currentValue), []);
+  const setSidebarOpen = useCallback((open: boolean) => setIsSidebarOpen(open), []);
+
+  return useMemo(() => ({
     isSidebarOpen,
-    toggleSidebar: () => setIsSidebarOpen((currentValue) => !currentValue),
-    setSidebarOpen: (open) => setIsSidebarOpen(open),
-  };
+    toggleSidebar,
+    setSidebarOpen,
+  }), [isSidebarOpen, setSidebarOpen, toggleSidebar]);
 };
 

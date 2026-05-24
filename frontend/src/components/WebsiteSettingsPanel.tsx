@@ -25,13 +25,10 @@ export const WebsiteSettingsPanel: React.FC = () => {
     brandLogoUrl,
     setBrandLogoUrl,
     stationStartTime,
-    setStationStartTime,
     stationStopTime,
-    setStationStopTime,
     useSunriseSunset,
-    setUseSunriseSunset,
     captureInterval,
-    setCaptureInterval,
+    saveStationSchedule,
     isStationConfigLoading,
     isStationConfigSaving,
     stationConfigError,
@@ -119,10 +116,12 @@ export const WebsiteSettingsPanel: React.FC = () => {
 
   const handleSaveSchedule = () => {
     if (!validateScheduleTimes()) return;
-    setStationStartTime(draftStationStartTime);
-    setStationStopTime(draftStationStopTime);
-    setUseSunriseSunset(draftUseSunriseSunset);
-    setCaptureInterval(draftCaptureInterval);
+    void saveStationSchedule({
+      stationStartTime: draftStationStartTime,
+      stationStopTime: draftStationStopTime,
+      useSunriseSunset: draftUseSunriseSunset,
+      captureInterval: draftCaptureInterval,
+    });
   };
 
   const handleCancelScheduleEdit = () => {

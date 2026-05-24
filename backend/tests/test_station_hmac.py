@@ -1,4 +1,4 @@
-﻿"""Round-trip tests for the device HMAC signing scheme.
+"""Round-trip tests for the device HMAC signing scheme.
 
 Exercises the server-side verifier against the reference client signer so any
 drift between the two implementations fails the build.
@@ -66,7 +66,7 @@ def provisioned_station(setup_station_dir, monkeypatch):
 
 
 def _sign_and_verify(station_id: str, secret_b64: str, body: bytes = b"hello") -> bytes:
-    path = f"/v1/device/stations/{station_id}/images"
+    path = f"/device/stations/{station_id}/images"
     headers = eagleshot_signing.sign_request(
         station_id=station_id,
         secret_b64=secret_b64,
@@ -86,7 +86,7 @@ def test_valid_signature_is_accepted(provisioned_station):
 
 def test_replayed_nonce_is_rejected(provisioned_station):
     station_id, secret_b64 = provisioned_station
-    path = f"/v1/device/stations/{station_id}/images"
+    path = f"/device/stations/{station_id}/images"
     body = b"payload"
     headers = eagleshot_signing.sign_request(
         station_id=station_id,
@@ -108,7 +108,7 @@ def test_replayed_nonce_is_rejected(provisioned_station):
 
 def test_stale_timestamp_is_rejected(provisioned_station):
     station_id, secret_b64 = provisioned_station
-    path = f"/v1/device/stations/{station_id}/images"
+    path = f"/device/stations/{station_id}/images"
     body = b"x"
     stale_ts = int(time.time()) - TIMESTAMP_SKEW_SECONDS - 60
     headers = eagleshot_signing.sign_request(
@@ -128,7 +128,7 @@ def test_stale_timestamp_is_rejected(provisioned_station):
 
 def test_tampered_body_is_rejected(provisioned_station):
     station_id, secret_b64 = provisioned_station
-    path = f"/v1/device/stations/{station_id}/images"
+    path = f"/device/stations/{station_id}/images"
     body = b"original"
     headers = eagleshot_signing.sign_request(
         station_id=station_id,
@@ -148,7 +148,7 @@ def test_wrong_secret_is_rejected(provisioned_station):
     station_id, _ = provisioned_station
     # An attacker who doesn't know the real secret picks a random one.
     bogus_b64 = station_hmac.generate_device_hmac_secret_b64()
-    path = f"/v1/device/stations/{station_id}/images"
+    path = f"/device/stations/{station_id}/images"
     body = b"x"
     headers = eagleshot_signing.sign_request(
         station_id=station_id,
@@ -167,7 +167,7 @@ def test_station_without_secret_is_rejected(setup_station_dir, monkeypatch):
     data_dir, station_id = setup_station_dir
     monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
     # Note: provision_device_hmac_secret is NOT called for this station.
-    path = f"/v1/device/stations/{station_id}/images"
+    path = f"/device/stations/{station_id}/images"
     body = b"x"
     headers = eagleshot_signing.sign_request(
         station_id=station_id,
@@ -185,7 +185,7 @@ def test_station_without_secret_is_rejected(setup_station_dir, monkeypatch):
 
 def test_station_id_mismatch_is_rejected(provisioned_station):
     station_id, secret_b64 = provisioned_station
-    path = f"/v1/device/stations/{station_id}/images"
+    path = f"/device/stations/{station_id}/images"
     body = b"x"
     headers = eagleshot_signing.sign_request(
         station_id="some-other-station",
@@ -202,7 +202,7 @@ def test_station_id_mismatch_is_rejected(provisioned_station):
 
 def test_signature_version_prefix_is_required(provisioned_station):
     station_id, secret_b64 = provisioned_station
-    path = f"/v1/device/stations/{station_id}/images"
+    path = f"/device/stations/{station_id}/images"
     body = b"x"
     headers = eagleshot_signing.sign_request(
         station_id=station_id,

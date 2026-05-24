@@ -13,6 +13,8 @@ _EXTENSION_TO_MEDIA_TYPE: dict[str, str] = {
     ".webp": "image/webp",
 }
 
+_IMAGE_TIMESTAMP_PREFIX = re.compile(r"^(\d{10}|\d{13})(?=[-_.])")
+
 
 def sanitize_filename(raw_name: str) -> str:
     """Sanitize a filename to prevent path traversal attacks."""
@@ -71,6 +73,20 @@ def parse_iso_timestamp(value: str | None) -> datetime | None:
 def iso_utc(value: datetime) -> str:
     """Convert a datetime to ISO 8601 UTC string."""
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def image_timestamp_from_filename(filename: str) -> datetime | None:
+    """Parse a leading epoch timestamp from an image filename."""
+    match = _IMAGE_TIMESTAMP_PREFIX.match(filename)
+    if not match:
+        return None
+
+    raw_timestamp = match.group(1)
+    divisor = 1000 if len(raw_timestamp) == 13 else 1
+    try:
+        return datetime.fromtimestamp(int(raw_timestamp) / divisor, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def is_supported_image_upload(filename: str, content_type: str | None) -> bool:

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ColorThemeKey, applyColorTheme, isColorThemeKey } from "@/lib/appThemes";
 import {
@@ -78,17 +78,34 @@ export const useAppPreferences = (): AppPreferencesState => {
     setStoredString("mapStyle", mapStyle);
   }, [mapStyle]);
 
-  return {
+  const toggleDarkMode = useCallback(() => setIsDarkMode((currentValue) => !currentValue), []);
+  const setColorTheme = useCallback((theme: ColorThemeKey) => setColorThemeState(theme), []);
+  const setBrandLogoUrl = useCallback((logoUrl: string | null) => setBrandLogoUrlState(logoUrl), []);
+  const setMapStyle = useCallback((style: MapStyleKey) => setMapStyleState(style), []);
+  const setTimezone = useCallback((tz: string) => setTimezoneState(tz), []);
+
+  return useMemo(() => ({
     isDarkMode,
-    toggleDarkMode: () => setIsDarkMode((currentValue) => !currentValue),
+    toggleDarkMode,
     colorTheme,
-    setColorTheme: (theme) => setColorThemeState(theme),
+    setColorTheme,
     brandLogoUrl,
-    setBrandLogoUrl: (logoUrl) => setBrandLogoUrlState(logoUrl),
+    setBrandLogoUrl,
     mapStyle,
-    setMapStyle: (style) => setMapStyleState(style),
+    setMapStyle,
     timezone,
-    setTimezone: (tz) => setTimezoneState(tz),
-  };
+    setTimezone,
+  }), [
+    brandLogoUrl,
+    colorTheme,
+    isDarkMode,
+    mapStyle,
+    setBrandLogoUrl,
+    setColorTheme,
+    setMapStyle,
+    setTimezone,
+    timezone,
+    toggleDarkMode,
+  ]);
 };
 

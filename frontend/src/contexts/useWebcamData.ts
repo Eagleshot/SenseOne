@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { TIMEZONES } from "@/data/timezones";
 import { SensorData, Webcam } from "@/data/types";
 import {
-  createStationConfigRequest,
-  createStationScheduleUpdate,
   DESCRIPTION_MAX_LENGTH,
   FALLBACK_STATION_SCHEDULE_CONFIG,
   FALLBACK_WEBCAM,
@@ -13,7 +11,6 @@ import {
   getStationImageCaptures,
   getStationSensorReadings,
   listStations,
-  parseStationConfigResponse,
   parseStationResponse,
   parseTimestampResponse,
   parseTimelineItemResponse,
@@ -39,13 +36,10 @@ export type WebcamDataState = {
   setIsPlaying: (playing: boolean) => void;
   timezones: typeof TIMEZONES;
   stationStartTime: string;
-  setStationStartTime: (time: string) => void;
   stationStopTime: string;
-  setStationStopTime: (time: string) => void;
   useSunriseSunset: boolean;
-  setUseSunriseSunset: (value: boolean) => void;
   captureInterval: string;
-  setCaptureInterval: (interval: string) => void;
+  saveStationSchedule: (schedule: StationScheduleConfig) => Promise<void>;
   description: string;
   descriptionDraft: string;
   setDraftDescription: (description: string) => void;
@@ -66,7 +60,6 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   const [imageTimeline, setImageTimeline] = useState<TimelineImage[]>([]);
   const [currentImageIndex, setCurrentImageIndexState] = useState(0);
   const [isPlaying, setIsPlayingState] = useState(false);
-  const timezones = TIMEZONES;
   const [stationSchedule, setStationSchedule] = useState<StationScheduleConfig>(FALLBACK_STATION_SCHEDULE_CONFIG);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [isDescriptionSaving, setIsDescriptionSaving] = useState(false);
@@ -92,7 +85,14 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   const applyStationConfig = useCallback((config: StationConfigResponse | null) => {
     stationConfigRef.current = config;
 
-    const nextSchedule = config ? parseStationConfigResponse(config) : FALLBACK_STATION_SCHEDULE_CONFIG;
+    const nextSchedule = config
+      ? {
+          stationStartTime: config.stationStartTime,
+          stationStopTime: config.stationStopTime,
+          useSunriseSunset: config.useSunriseSunset,
+          captureInterval: String(config.captureIntervalMinutes),
+        }
+      : FALLBACK_STATION_SCHEDULE_CONFIG;
     stationScheduleRef.current = nextSchedule;
     setStationSchedule(nextSchedule);
     setDescriptionDraft(config?.description ?? "");
@@ -188,8 +188,8 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     [apiBaseUrl, applyStationConfig, isAuthenticated]
   );
 
-  const updateStationSchedule = useCallback(
-    async (updater: (current: StationScheduleConfig) => StationScheduleConfig) => {
+  const saveStationSchedule = useCallback(
+    async (nextSchedule: StationScheduleConfig) => {
       const currentConfig = stationConfigRef.current;
       const previousSchedule = stationScheduleRef.current;
 
@@ -197,8 +197,13 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
         return;
       }
 
-      const nextSchedule = updater(previousSchedule);
-      const nextConfig = createStationConfigRequest(currentConfig, createStationScheduleUpdate(nextSchedule));
+      const nextConfig: StationConfigResponse = {
+        ...currentConfig,
+        stationStartTime: nextSchedule.stationStartTime,
+        stationStopTime: nextSchedule.stationStopTime,
+        useSunriseSunset: nextSchedule.useSunriseSunset,
+        captureIntervalMinutes: Number(nextSchedule.captureInterval),
+      };
 
       await persistStationConfig(nextConfig, {
         previousConfig: currentConfig,
@@ -228,7 +233,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       return false;
     }
     const nextDescription = descriptionDraft.slice(0, DESCRIPTION_MAX_LENGTH);
-    const nextConfig = createStationConfigRequest(currentConfig, { description: nextDescription });
+    const nextConfig: StationConfigResponse = { ...currentConfig, description: nextDescription };
     let didSave = false;
 
     setDescriptionError(null);
@@ -264,7 +269,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       if (currentConfig.isPublic === isPublic) {
         return;
       }
-      const nextConfig = createStationConfigRequest(currentConfig, { isPublic });
+      const nextConfig: StationConfigResponse = { ...currentConfig, isPublic };
       const stationId = activeStationIdRef.current;
       await persistStationConfig(nextConfig, {
         previousConfig: currentConfig,
@@ -474,48 +479,71 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     };
   }, [imageTimeline.length, isPlaying]);
 
-  return {
+  const setActiveWebcam = useCallback((webcam: Webcam) => setActiveWebcamState(webcam), []);
+  const setCurrentImageIndex = useCallback((index: number) => setCurrentImageIndexState(index), []);
+  const setIsPlaying = useCallback((playing: boolean) => setIsPlayingState(playing), []);
+  const setDraftDescription = useCallback((description: string) => {
+    setDescriptionDraft(description.slice(0, DESCRIPTION_MAX_LENGTH));
+    setDescriptionError(null);
+  }, []);
+  const description = stationConfigRef.current?.description ?? activeWebcam.description ?? "";
+  const isPublic = stationConfigRef.current?.isPublic ?? activeWebcam.isPublic ?? true;
+
+  return useMemo(() => ({
     activeWebcam,
-    setActiveWebcam: (webcam) => setActiveWebcamState(webcam),
+    setActiveWebcam,
     webcamList,
     historicalData,
     imageTimeline,
     currentImageIndex,
-    setCurrentImageIndex: (index) => setCurrentImageIndexState(index),
+    setCurrentImageIndex,
     refreshImageTimeline: fetchActiveStationData,
     isPlaying,
-    setIsPlaying: (playing) => setIsPlayingState(playing),
-    timezones,
+    setIsPlaying,
+    timezones: TIMEZONES,
     stationStartTime: stationSchedule.stationStartTime,
-    setStationStartTime: (time) => {
-      void updateStationSchedule((currentValue) => ({ ...currentValue, stationStartTime: time }));
-    },
     stationStopTime: stationSchedule.stationStopTime,
-    setStationStopTime: (time) => {
-      void updateStationSchedule((currentValue) => ({ ...currentValue, stationStopTime: time }));
-    },
     useSunriseSunset: stationSchedule.useSunriseSunset,
-    setUseSunriseSunset: (value) => {
-      void updateStationSchedule((currentValue) => ({ ...currentValue, useSunriseSunset: value }));
-    },
     captureInterval: stationSchedule.captureInterval,
-    setCaptureInterval: (interval) => {
-      void updateStationSchedule((currentValue) => ({ ...currentValue, captureInterval: interval }));
-    },
-    description: stationConfigRef.current?.description ?? activeWebcam.description ?? "",
+    saveStationSchedule,
+    description,
     descriptionDraft,
-    setDraftDescription: (description) => {
-      setDescriptionDraft(description.slice(0, DESCRIPTION_MAX_LENGTH));
-      setDescriptionError(null);
-    },
+    setDraftDescription,
     saveDescription,
     isDescriptionSaving,
     descriptionError,
     isStationConfigLoading,
     isStationConfigSaving,
     stationConfigError,
-    isPublic: stationConfigRef.current?.isPublic ?? activeWebcam.isPublic ?? true,
+    isPublic,
     setIsPublic,
-  };
+  }), [
+    activeWebcam,
+    currentImageIndex,
+    description,
+    descriptionDraft,
+    descriptionError,
+    fetchActiveStationData,
+    historicalData,
+    imageTimeline,
+    isDescriptionSaving,
+    isPlaying,
+    isPublic,
+    isStationConfigLoading,
+    isStationConfigSaving,
+    saveDescription,
+    saveStationSchedule,
+    setActiveWebcam,
+    setCurrentImageIndex,
+    setDraftDescription,
+    setIsPlaying,
+    setIsPublic,
+    stationConfigError,
+    stationSchedule.captureInterval,
+    stationSchedule.stationStartTime,
+    stationSchedule.stationStopTime,
+    stationSchedule.useSunriseSunset,
+    webcamList,
+  ]);
 };
 

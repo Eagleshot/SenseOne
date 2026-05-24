@@ -7,13 +7,18 @@ Pydantic body parsing that could weaken authentication.
 """
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
 import pytest
+import sqlite3
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from config import station_db_path
+from constants import STATION_CONFIG_FILENAME
 from constants import DEVICE_API_PREFIX
 from routes import device_ingestion
 from station_hmac import generate_device_hmac_secret_b64, provision_device_hmac_secret
@@ -47,6 +52,7 @@ _SENSOR_PAYLOAD = {
     "dewPoint": 8.1,
     "feelsLike": 11.2,
 }
+_NEXT_ONLINE = "2026-05-23T12:30:00Z"
 
 
 def _build_app() -> FastAPI:
@@ -97,6 +103,28 @@ def test_signed_image_upload_succeeds(signed_client):
     assert body["url"].endswith(body["filename"])
 
 
+def test_signed_image_upload_persists_next_online(signed_client):
+    client, station_id, secret_b64 = signed_client
+    data_dir = os.environ["APP_DATA_DIR"]
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
+    response = _post_signed(
+        client, secret_b64, station_id, path, _JPEG_BODY,
+        extra_headers={
+            "Content-Type": "image/jpeg",
+            "X-Filename": "capture.jpg",
+            "X-Next-Online": _NEXT_ONLINE,
+        },
+    )
+    assert response.status_code == 201, response.text
+
+    with sqlite3.connect(station_db_path(Path(data_dir), station_id)) as connection:
+        row = connection.execute(
+            "SELECT next_online FROM station_images ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    assert row == (_NEXT_ONLINE,)
+
+
 def test_image_upload_without_signature_is_rejected(signed_client):
     client, station_id, _ = signed_client
     path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
@@ -129,6 +157,32 @@ def test_signed_sensor_reading_succeeds(signed_client):
     parsed = response.json()
     assert parsed["temperature"] == _SENSOR_PAYLOAD["temperature"]
     assert parsed["humidity"] == _SENSOR_PAYLOAD["humidity"]
+
+
+def test_signed_sensor_reading_persists_next_online(signed_client):
+    import json
+
+    client, station_id, secret_b64 = signed_client
+    data_dir = os.environ["APP_DATA_DIR"]
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
+    body = json.dumps({**_SENSOR_PAYLOAD, "nextOnline": _NEXT_ONLINE}).encode("utf-8")
+    response = _post_signed(
+        client, secret_b64, station_id, path, body,
+        extra_headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 201, response.text
+
+    with sqlite3.connect(station_db_path(Path(data_dir), station_id)) as connection:
+        row = connection.execute(
+            "SELECT timestamp, next_online FROM sensor_history ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    assert row is not None
+    assert row[1] == _NEXT_ONLINE
+
+    config_doc = yaml.safe_load((Path(data_dir) / station_id / STATION_CONFIG_FILENAME).read_text())
+    assert config_doc["last_online"] == row[0]
+    assert config_doc["next_online"] == _NEXT_ONLINE
 
 
 def test_sensor_reading_without_signature_is_rejected(signed_client):

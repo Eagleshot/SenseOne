@@ -128,28 +128,6 @@ export const parseStationResponse = (
   };
 };
 
-export const parseStationConfigResponse = (item: StationConfigResponse): StationScheduleConfig => ({
-  stationStartTime: item.stationStartTime,
-  stationStopTime: item.stationStopTime,
-  useSunriseSunset: item.useSunriseSunset,
-  captureInterval: String(item.captureIntervalMinutes),
-});
-
-export const createStationConfigRequest = (
-  currentConfig: StationConfigResponse,
-  updates: Partial<StationConfigResponse>
-): StationConfigResponse => ({
-  ...currentConfig,
-  ...updates,
-});
-
-export const createStationScheduleUpdate = (schedule: StationScheduleConfig): Partial<StationConfigResponse> => ({
-  stationStartTime: schedule.stationStartTime,
-  stationStopTime: schedule.stationStopTime,
-  useSunriseSunset: schedule.useSunriseSunset,
-  captureIntervalMinutes: Number(schedule.captureInterval),
-});
-
 export const parseTimestampResponse = <
   T extends { timestamp: string },
   U extends Omit<T, "timestamp"> & { timestamp: Date },

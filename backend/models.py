@@ -116,13 +116,13 @@ class AppConfig(ApiModel):
 
 
 class LoginRequest(ApiModel):
-    """Credentials posted to POST /v1/auth/login."""
+    """Credentials posted to POST /auth/login."""
     username: str = Field(description="Account username, case-sensitive.")
     password: str = Field(description="Account password in plaintext (over HTTPS).")
 
 
 class AuthResponse(ApiModel):
-    """Returned by POST /v1/auth/login on success."""
+    """Returned by POST /auth/login on success."""
     expires_in: int = Field(
         description="Seconds until the session cookie / token expires.",
     )
@@ -134,7 +134,7 @@ class AuthResponse(ApiModel):
 
 
 class MeResponse(ApiModel):
-    """Returned by GET /v1/auth/me for the currently-logged-in user."""
+    """Returned by GET /auth/me for the currently-logged-in user."""
     username: str = Field(description="Username of the authenticated session.")
     is_admin: bool = Field(
         default=False,
@@ -235,8 +235,12 @@ class SensorReadingRequest(_SensorFields):
             "row with the current UTC time on receipt."
         ),
     )
+    next_online: str | None = Field(
+        default=None,
+        description="Optional ISO 8601 timestamp when the station expects to check in next.",
+    )
 
-    @field_validator("timestamp")
+    @field_validator("timestamp", "next_online")
     @classmethod
     def validate_timestamp_field(cls, value: str | None) -> str | None:
         if value is None:
@@ -245,5 +249,4 @@ class SensorReadingRequest(_SensorFields):
         if parsed is None:
             raise ValueError("Timestamp must be ISO 8601.")
         return iso_utc(parsed)
-
 

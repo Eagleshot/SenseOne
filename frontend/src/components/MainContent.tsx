@@ -5,7 +5,7 @@ import { Copy, Pencil, Save, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { DESCRIPTION_MAX_LENGTH } from "@/contexts/appContextUtils";
+import { DESCRIPTION_MAX_LENGTH } from "@/api/stations";
 
 import { HeroImage } from "./HeroImage";
 import { useApp } from "@/contexts/AppContext";

@@ -9,6 +9,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import yaml
+
 try:
     from .mock_data import WEBCAM_SEED, generate_historical_data
 except ImportError:
@@ -122,6 +124,9 @@ def _ensure_station_schema(db_path: Path) -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_station_images_created_at ON station_images(created_at)"
         )
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(station_images)")}
+        if "next_online" not in columns:
+            connection.execute("ALTER TABLE station_images ADD COLUMN next_online TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS sensor_history (
@@ -140,7 +145,62 @@ def _ensure_station_schema(db_path: Path) -> None:
             )
             """
         )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sensor_history_timestamp ON sensor_history(timestamp)"
+        )
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(sensor_history)")}
+        if "next_online" not in columns:
+            connection.execute("ALTER TABLE sensor_history ADD COLUMN next_online TEXT")
         connection.commit()
+
+
+def _latest_runtime_status(db_path: Path) -> tuple[str | None, str | None, str | None, int | None]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        image = connection.execute(
+            "SELECT id, created_at, next_online FROM station_images ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        sensor = connection.execute(
+            "SELECT id, timestamp, next_online FROM sensor_history ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+
+    candidates = []
+    if image:
+        candidates.append(("station_images", image["id"], image["created_at"], image["next_online"]))
+    if sensor:
+        candidates.append(("sensor_history", sensor["id"], sensor["timestamp"], sensor["next_online"]))
+
+    parsed = []
+    for table, row_id, timestamp, next_online in candidates:
+        parsed_at = _parse_iso_utc(timestamp)
+        if parsed_at is not None:
+            parsed.append((parsed_at, table, row_id, next_online))
+    if not parsed:
+        return None, None, None, None
+
+    latest_at, table, row_id, next_online = max(parsed, key=lambda item: item[0])
+    return _iso_utc(latest_at), next_online, table, row_id
+
+
+def _sync_runtime_status(data_dir: Path, station_id: str, seed_next_online: str | None) -> None:
+    station_root = _station_dir(data_dir, station_id)
+    db_path = station_root / STATION_DB_FILENAME
+    config_file = station_root / STATION_CONFIG_FILENAME
+
+    last_online, next_online, table, row_id = _latest_runtime_status(db_path)
+    parsed_next = _parse_iso_utc(seed_next_online)
+    parsed_last = _parse_iso_utc(last_online)
+    if row_id is not None and next_online is None and parsed_next and parsed_last and parsed_next > parsed_last:
+        next_online = _iso_utc(parsed_next)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(f"UPDATE {table} SET next_online = ? WHERE id = ?", (next_online, row_id))
+            connection.commit()
+
+    last_online, next_online, _table, _row_id = _latest_runtime_status(db_path)
+    document = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+    document["last_online"] = last_online
+    document["next_online"] = next_online
+    config_file.write_text(yaml.safe_dump(document, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 
 def _download_image(url: str, path: Path, overwrite: bool) -> bool:
@@ -249,34 +309,40 @@ def _seed_station(data_dir: Path, station_id: str, count: int, overwrite: bool) 
             )
             connection.commit()
 
-    if count <= 0:
-        return
+    if count > 0:
+        now = datetime.now(timezone.utc)
+        rows = []
+        with sqlite3.connect(db_path) as connection:
+            for index in range(count):
+                timestamp = now - timedelta(minutes=(count - index) * 30)
+                source_name = SAMPLE_IMAGE_FILES[index % len(SAMPLE_IMAGE_FILES)]
+                filename = f"{int(timestamp.timestamp() * 1000)}-{source_name}"
+                destination = images_dir / filename
+                if not destination.exists() or overwrite:
+                    source_file = images_dir / source_name
+                    if source_file.exists():
+                        destination.write_bytes(source_file.read_bytes())
+                    else:
+                        destination.write_bytes(SAMPLE_PNG_BYTES)
+                size_bytes = destination.stat().st_size
+                rows.append((filename, "image/png", size_bytes, timestamp.isoformat().replace("+00:00", "Z")))
 
-    now = datetime.now(timezone.utc)
-    rows = []
-    with sqlite3.connect(db_path) as connection:
-        for index in range(count):
-            timestamp = now - timedelta(minutes=(count - index) * 30)
-            source_name = SAMPLE_IMAGE_FILES[index % len(SAMPLE_IMAGE_FILES)]
-            filename = f"{int(timestamp.timestamp() * 1000)}-{source_name}"
-            destination = images_dir / filename
-            if not destination.exists() or overwrite:
-                source_file = images_dir / source_name
-                if source_file.exists():
-                    destination.write_bytes(source_file.read_bytes())
-                else:
-                    destination.write_bytes(SAMPLE_PNG_BYTES)
-            size_bytes = destination.stat().st_size
-            rows.append((filename, "image/png", size_bytes, timestamp.isoformat().replace("+00:00", "Z")))
+            connection.executemany(
+                """
+                INSERT INTO station_images (filename, content_type, size_bytes, created_at, next_online)
+                VALUES (?, ?, ?, ?, NULL)
+                """,
+                rows,
+            )
+            connection.commit()
 
-        connection.executemany(
-            """
-            INSERT INTO station_images (filename, content_type, size_bytes, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            rows,
+    seed = _station_seed(station_id)
+    seed_next_online = None
+    if seed:
+        seed_next_online = _iso_utc(
+            datetime.now(timezone.utc) + timedelta(minutes=int(seed.get("nextUpdateMinutesIn") or 0))
         )
-        connection.commit()
+    _sync_runtime_status(data_dir, station_id, seed_next_online)
 
 
 def _parse_args() -> argparse.Namespace:

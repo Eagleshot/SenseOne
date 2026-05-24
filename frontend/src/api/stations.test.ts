@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { parseApiTimestamp, parseStationResponse, parseTimestampResponse, parseTimelineItemResponse } from "@/contexts/appContextUtils";
+import { parseApiTimestamp, parseStationResponse, parseTimestampResponse, parseTimelineItemResponse } from "@/api/stations";
 
-describe("appContextUtils timestamp parsing", () => {
+describe("station API parsing", () => {
   it("normalizes microsecond ISO timestamps to valid Date objects", () => {
     const parsed = parseApiTimestamp("2026-04-21T20:06:51.864377Z");
 
@@ -42,12 +42,12 @@ describe("appContextUtils timestamp parsing", () => {
         timestamp: "2026-04-21T20:06:51.864377Z",
         url: "/stations/station-1/images/example.png",
       },
-      "/api/v1"
+      "/api"
     );
 
     expect(historyRow.timestamp.toISOString()).toBe("2026-04-21T20:06:51.864Z");
     expect(timelineItem.timestamp.toISOString()).toBe("2026-04-21T20:06:51.864Z");
-    expect(timelineItem.url).toBe("/api/v1/stations/station-1/images/example.png");
+    expect(timelineItem.url).toBe("/api/stations/station-1/images/example.png");
   });
 });
 

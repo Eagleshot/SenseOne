@@ -5,7 +5,7 @@ import requests
 
 class EagleshotAPI:
     """A simple Python library to interact with the Eagleshot API."""
-    def __init__(self, username: str, password: str, url: str = "https://api.eagleshot.org/v1"):
+    def __init__(self, username: str, password: str, url: str = "https://api.eagleshot.org"):
         self.username = username
         self.password = password
         self.url = url

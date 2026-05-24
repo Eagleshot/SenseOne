@@ -3,6 +3,7 @@
 from fastapi import HTTPException, status
 
 from config import get_data_dir, read_station_config, read_station_owner
+from models import AppConfig
 
 
 def require_station_exists(station_id: str) -> None:
@@ -14,13 +15,14 @@ def require_station_exists(station_id: str) -> None:
         )
 
 
-def can_view_station(station_id: str, user) -> bool:
+def can_view_station(station_id: str, user, config: AppConfig | None = None) -> bool:
     """A caller may view a station if it is public, owned by them, or they are admin."""
     data_dir = get_data_dir()
     if not (data_dir / station_id).exists():
         return False
 
-    config = read_station_config(data_dir, station_id)
+    if config is None:
+        config = read_station_config(data_dir, station_id)
     if config.is_public:
         return True
     if user is None:

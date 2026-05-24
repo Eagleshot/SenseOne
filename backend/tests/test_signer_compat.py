@@ -1,4 +1,4 @@
-﻿"""Verify the OpenMV (MicroPython) signer matches the CPython reference.
+"""Verify the OpenMV (MicroPython) signer matches the CPython reference.
 
 If these implementations ever diverge, device-signed requests will be rejected
 by the server. Loading both modules into CPython and comparing outputs on
@@ -35,7 +35,7 @@ def test_signatures_match_for_image_upload(signers):
         station_id="silvretta-glacier",
         secret_b64="abcdef0123456789-_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         method="POST",
-        path="/v1/device/stations/silvretta-glacier/images",
+        path="/device/stations/silvretta-glacier/images",
         body=b"\xff\xd8\xff\xe0fake-jpeg-bytes",
         timestamp=1748000000,
         nonce_hex="0123456789abcdef0123456789abcdef",
@@ -49,7 +49,7 @@ def test_signatures_match_for_sensor_reading(signers):
         station_id="alp-grimsel",
         secret_b64="ZDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAx",
         method="POST",
-        path="/v1/device/stations/alp-grimsel/sensor-readings",
+        path="/device/stations/alp-grimsel/sensor-readings",
         body=b'{"temperature":12.5,"humidity":78}',
         timestamp=1748123456,
         nonce_hex="ffffffffffffffffffffffffffffffff",
@@ -58,7 +58,7 @@ def test_signatures_match_for_sensor_reading(signers):
 
 
 def test_hmac_implementation_matches_stdlib(signers):
-    """The MicroPython port reimplements HMAC inline â€” verify it matches CPython's hmac."""
+    """The MicroPython port reimplements HMAC inline — verify it matches CPython's hmac."""
     import hmac
     import hashlib
 

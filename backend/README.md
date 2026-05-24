@@ -23,7 +23,7 @@ python .\seed\seed_mock_data.py --station-id matterhorn-01 --count 24 --overwrit
 This backend is a single FastAPI server that:
 
 - serves the frontend API routes used by the Vite app with session-cookie auth
-- accepts HMAC-signed device uploads on `POST /v1/device/stations/{station_id}/images` and `POST /v1/device/stations/{station_id}/sensor-readings` — see [Device auth (HMAC)](#device-auth-hmac)
+- accepts HMAC-signed device uploads on `POST /device/stations/{station_id}/images` and `POST /device/stations/{station_id}/sensor-readings` — see [Device auth (HMAC)](#device-auth-hmac)
 - saves uploaded files into `backend/data/<station>/images/`, where each station has its own folder
 - creates a `config.yaml` and `station.db` per station directory on first write
 - can optionally expose weather and auth features through the shared project root `.env`
@@ -39,17 +39,6 @@ Optional for the shared frontend/backend `.env`:
 - `VITE_API_BASE_URL` for the frontend
 - `APP_AUTH_USERNAME`, `APP_AUTH_PASSWORD`, and `OPENWEATHER_API_KEY` for the backend
 - `APP_REQUIRE_HTTPS=true` to reject plain-HTTP requests for user-auth routes (device routes stay HTTP-allowed since their auth is HMAC-signed)
-
-## Migrating old local data
-
-This version uses station-named config and SQLite storage. If an existing data
-directory still has `camera_start_time`, `camera_stop_time`, `camera.db`, or a
-`camera_images` table, run the one-time migration before starting the backend:
-
-```powershell
-python .\migrations\rename_camera_to_station.py --dry-run
-python .\migrations\rename_camera_to_station.py
-```
 
 ## 2) Open the backend folder
 
@@ -98,7 +87,7 @@ Devices authenticate every request by signing it — the shared secret never goe
 Provision the per-station secret from an authenticated admin session:
 
 ```
-POST /v1/stations/{station_id}/rotate-device-secret
+POST /stations/{station_id}/rotate-device-secret
 ```
 
 The response includes the base64url secret exactly once — flash it to the device and discard the response.
@@ -108,20 +97,21 @@ Reference signers:
 - Python: [`clients/python/eagleshot_signing.py`](../clients/python/eagleshot_signing.py)
 - MicroPython / OpenMV: [`clients/openmv/eagleshot_signing.py`](../clients/openmv/eagleshot_signing.py)
 
-Devices without an RTC can call the unauthenticated `GET /v1/server-time` once at boot and track the offset against a monotonic counter.
+Devices without an RTC can call the unauthenticated `GET /clock` once at boot and track the offset against a monotonic counter.
 
 ## 6) Test with a local image upload
 
 ```powershell
 python - <<'PY'
 import sys
+import time
 sys.path.insert(0, "../clients/python")
 import eagleshot_signing, requests
 
 STATION_ID = "{STATION_ID}"
 SECRET_B64 = "{DEVICE_SECRET_B64}"
 body = open(r"C:\path\to\test.jpg", "rb").read()
-path = f"/v1/device/stations/{STATION_ID}/images"
+path = f"/device/stations/{STATION_ID}/images"
 
 headers = eagleshot_signing.sign_request(
     station_id=STATION_ID,
@@ -130,7 +120,7 @@ headers = eagleshot_signing.sign_request(
     path=path,
     body=body,
 )
-headers.update({"Content-Type": "image/jpeg", "X-Filename": "test.jpg"})
+headers.update({"Content-Type": "image/jpeg", "X-Filename": f"{int(time.time())}-test.jpg"})
 
 response = requests.post(f"http://127.0.0.1:3000{path}", data=body, headers=headers)
 print(response.status_code, response.text)
@@ -162,7 +152,7 @@ import eagleshot_signing, requests
 
 STATION_ID = "{STATION_ID}"
 SECRET_B64 = "{DEVICE_SECRET_B64}"
-path = f"/v1/device/stations/{STATION_ID}/sensor-readings"
+path = f"/device/stations/{STATION_ID}/sensor-readings"
 body = json.dumps({
     "temperature": 21.5,
     "humidity": 58,
@@ -196,34 +186,34 @@ PY
 
 Frontend routes (session-cookie auth):
 
-- `GET /v1/stations`
-- `GET /v1/stations/{station_id}`
-- `GET /v1/stations/{station_id}/sensor-readings`
-- `GET /v1/stations/{station_id}/image-captures`
-- `GET /v1/stations/{station_id}/weather/current`
-- `GET /v1/stations/{station_id}/weather/forecast`
-- `GET /v1/stations/{station_id}/config`
-- `PUT /v1/stations/{station_id}/config`
-- `POST /v1/stations/{station_id}/rotate-device-secret`
+- `GET /stations`
+- `GET /stations/{station_id}`
+- `GET /stations/{station_id}/sensor-readings`
+- `GET /stations/{station_id}/image-captures`
+- `GET /stations/{station_id}/weather/current`
+- `GET /stations/{station_id}/weather/forecast`
+- `GET /stations/{station_id}/config`
+- `PUT /stations/{station_id}/config`
+- `POST /stations/{station_id}/rotate-device-secret`
 
 Device routes (HMAC signing, see above):
 
-- `POST /v1/device/stations/{station_id}/images`
-- `POST /v1/device/stations/{station_id}/sensor-readings`
+- `POST /device/stations/{station_id}/images`
+- `POST /device/stations/{station_id}/sensor-readings`
 
 Open:
 
-- `GET /v1/server-time`
+- `GET /clock`
 - `GET /health`
 
 ## 9) Troubleshooting
 
 - `401 Unauthorized` on a device request:
-  - timestamp is outside the +-300 s window — re-sync via `GET /v1/server-time`
+  - timestamp is outside the +-300 s window — re-sync via `GET /clock`
   - nonce was reused — generate a fresh one per request
-  - secret on device doesn't match the server — rotate via `POST /v1/stations/{station_id}/rotate-device-secret` and re-flash
+  - secret on device doesn't match the server — rotate via `POST /stations/{station_id}/rotate-device-secret` and re-flash
 - `404 Not Found`:
-  - station id doesn't exist or the URL path doesn't match `/v1/device/stations/{station_id}/images` / `.../sensor-readings`
+  - station id doesn't exist or the URL path doesn't match `/device/stations/{station_id}/images` / `.../sensor-readings`
 - `413 Payload Too Large`:
   - default upload cap is 25 MB; override with `APP_MAX_UPLOAD_BYTES`
 - `426 Upgrade Required`:

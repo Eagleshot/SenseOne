@@ -22,7 +22,7 @@ def root() -> dict:
     response_class=PlainTextResponse,
     summary="Health check",
     description=(
-        "Plain-text liveness probe for load balancers and uptime monitors. "
+        "Plain-text liveness probe. Unauthenticated. "
         "Always returns `OK` with status 200 while the process is up."
     ),
 )
@@ -31,18 +31,13 @@ def health() -> PlainTextResponse:
 
 
 @router.get(
-    "/v1/server-time",
-    summary="Server time",
+    "/clock",
+    summary="Server clock",
     description=(
-        "Return the server's current wall-clock time as unix seconds. "
-        "Unauthenticated.\n\n"
-        "Devices without a reliable RTC fetch this once at boot so they can sign "
-        "subsequent requests with a timestamp the server will accept "
-        "(the verifier allows +-300 s of skew). Devices typically capture the "
-        "server time alongside a monotonic counter and re-sync every 12 hours."
+        "Return the server's current wall-clock time as unix seconds. Unauthenticated."
     ),
 )
-def server_time() -> dict:
+def server_clock() -> dict:
     return {"unixSeconds": int(time.time())}
 
 

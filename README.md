@@ -40,7 +40,7 @@ Create a single `.env` in the project root for both frontend and backend setting
 
 ```env
 # Frontend
-VITE_API_BASE_URL=/api/v1
+VITE_API_BASE_URL=/api
 
 # Backend
 OPENWEATHER_API_KEY=your_api_key_here
@@ -55,7 +55,7 @@ APP_CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
 `APP_AUTH_PASSWORD` must be at least 12 characters when auth is enabled.
 `APP_CORS_ORIGINS` is required and should list the exact allowed frontend origins.
 Brute-force protection, login throttling, and account lockout are not built into the application code.
-Devices sign `/v1/device/stations/{station_id}/images` and `/v1/device/stations/{station_id}/sensor-readings` with the per-station HMAC secret.
+Devices sign `/device/stations/{station_id}/images` and `/device/stations/{station_id}/sensor-readings` with the per-station HMAC secret.
 Plain HTTP cannot hide payload contents from someone who can inspect the network, so use it only on a trusted LAN or put the device API behind HTTPS, a VPN, or a private tunnel.
 
 ### 2) Install backend dependencies
@@ -81,11 +81,11 @@ For the backend documentation, go to `http://localhost:3000/docs` in your browse
 
 ### 4) Point the frontend to the backend (optional)
 
-The frontend is configured to call the backend through `/api/v1`, which works in local Vite dev and in Docker.
+The frontend is configured to call the backend through `/api`, which works in local Vite dev and in Docker.
 If you need to override that, set `VITE_API_BASE_URL` in the root `.env`:
 
 ```env
-VITE_API_BASE_URL=/api/v1
+VITE_API_BASE_URL=/api
 ```
 
 ## Docker Compose
@@ -96,7 +96,7 @@ The repo includes Dockerfiles for the frontend and backend plus a `docker-compos
 
 - frontend: `http://localhost:8080`
 - backend: `http://localhost:3000`
-- frontend-to-backend browser traffic goes through `http://localhost:8080/api/v1`
+- frontend-to-backend browser traffic goes through `http://localhost:8080/api`
 
 ### 1) Edit the root env file
 

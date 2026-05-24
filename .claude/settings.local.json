@@ -16,7 +16,9 @@
       "Bash(APP_CORS_ORIGINS=\"http://localhost:5173\" python -m pytest tests/test_camera.py::TestLatestCapture::test_latest_capture_no_images --tb=long)",
       "Bash(python -m pytest tests/test_station_hmac.py -v)",
       "Bash(python -m pytest tests/test_station_hmac.py tests/test_upload_contract.py tests/test_device_routes_signed.py -v)",
-      "Bash(python -m pytest --tb=short)"
+      "Bash(python -m pytest --tb=short)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(python -m pytest tests/ -x -q --ignore=tests/test_camera_to_station_migration.py)"
     ]
   }
 }

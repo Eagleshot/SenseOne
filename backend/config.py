@@ -12,6 +12,8 @@ from models import AppConfig
 
 
 CONFIG_FIELDS = tuple(AppConfig.model_fields.keys())
+RUNTIME_STATUS_FIELDS = ("last_online", "next_online")
+EDITABLE_CONFIG_FIELDS = tuple(field for field in CONFIG_FIELDS if field not in RUNTIME_STATUS_FIELDS)
 
 _UNSET: object = object()
 
@@ -61,11 +63,13 @@ def read_station_config(base_dir: Path, station_id: str) -> AppConfig:
     """Read station configuration from file. On read or parse failure, falls back to defaults."""
     if not (base_dir / station_id / STATION_CONFIG_FILENAME).exists():
         ensure_station_dir(base_dir, station_id)
-        return AppConfig()
 
     defaults = AppConfig().model_dump()
     raw = _read_config_doc(base_dir, station_id)
     defaults.update({k: v for k, v in raw.items() if k in CONFIG_FIELDS})
+    last_online, next_online = read_station_runtime_status(base_dir, station_id)
+    defaults["last_online"] = last_online
+    defaults["next_online"] = next_online
     try:
         return AppConfig(**defaults)
     except ValidationError as exc:
@@ -77,11 +81,39 @@ def write_station_config(base_dir: Path, station_id: str, values: AppConfig) -> 
     """Write station configuration to file, preserving server-managed meta fields."""
     ensure_station_dir(base_dir, station_id)
     existing = _read_config_doc(base_dir, station_id)
-    payload = {field: getattr(values, field) for field in CONFIG_FIELDS}
+    payload = {field: getattr(values, field) for field in EDITABLE_CONFIG_FIELDS}
+    last_online, next_online = read_station_runtime_status(base_dir, station_id)
+    payload["last_online"] = last_online
+    payload["next_online"] = next_online
     for meta_key in META_FIELDS:
         if meta_key in existing:
             payload[meta_key] = existing[meta_key]
     _write_config_doc(base_dir, station_id, payload)
+
+
+def read_station_runtime_status(base_dir: Path, station_id: str) -> tuple[str | None, str | None]:
+    """Return runtime status timestamps derived from station SQLite data."""
+    from station_db import latest_status_from_db
+
+    _, _, last_online, next_online = latest_status_from_db(station_db_path(base_dir, station_id), station_id)
+    return last_online, next_online
+
+
+def write_station_runtime_status(
+    base_dir: Path,
+    station_id: str,
+    *,
+    last_online: str | None,
+    next_online: str | None,
+) -> None:
+    """Update only runtime status fields in the station config document."""
+    ensure_station_dir(base_dir, station_id)
+    existing = _read_config_doc(base_dir, station_id)
+    if not existing:
+        existing = {field: getattr(AppConfig(), field) for field in CONFIG_FIELDS}
+    existing["last_online"] = last_online
+    existing["next_online"] = next_online
+    _write_config_doc(base_dir, station_id, existing)
 
 
 def read_station_owner(base_dir: Path, station_id: str) -> str | None:

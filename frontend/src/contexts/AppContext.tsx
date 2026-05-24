@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, ReactNode, useContext } from "react";
+import React, { createContext, ReactNode, useContext, useMemo } from "react";
 
 import { TIMEZONES } from "@/data/timezones";
 import { SensorData, Webcam } from "@/data/types";
@@ -9,6 +9,7 @@ import { ColorThemeKey } from "@/lib/appThemes";
 import { MapStyleKey, useAppPreferences } from "./useAppPreferences";
 import { useAuthSession } from "./useAuthSession";
 import { useSidebarState } from "./useSidebarState";
+import { StationScheduleConfig } from "@/api/stations";
 import { useWebcamData } from "./useWebcamData";
 
 interface AppProviderProps {
@@ -52,13 +53,10 @@ export interface AppContextType {
   setIsPlaying: (playing: boolean) => void;
 
   stationStartTime: string;
-  setStationStartTime: (time: string) => void;
   stationStopTime: string;
-  setStationStopTime: (time: string) => void;
   useSunriseSunset: boolean;
-  setUseSunriseSunset: (value: boolean) => void;
   captureInterval: string;
-  setCaptureInterval: (interval: string) => void;
+  saveStationSchedule: (schedule: StationScheduleConfig) => Promise<void>;
   description: string;
   descriptionDraft: string;
   setDraftDescription: (description: string) => void;
@@ -80,16 +78,18 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   const appPreferences = useAppPreferences();
   const sidebarState = useSidebarState();
   const webcamData = useWebcamData(apiBaseUrl, authSession.isAuthenticated);
+  const value = useMemo(
+    () => ({
+      ...authSession,
+      ...appPreferences,
+      ...sidebarState,
+      ...webcamData,
+    }),
+    [appPreferences, authSession, sidebarState, webcamData]
+  );
 
   return (
-    <AppContext.Provider
-      value={{
-        ...authSession,
-        ...appPreferences,
-        ...sidebarState,
-        ...webcamData,
-      }}
-    >
+    <AppContext.Provider value={value}>
       {children}
     </AppContext.Provider>
   );

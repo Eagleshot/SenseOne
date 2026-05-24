@@ -6,7 +6,7 @@ is implemented inline so the device doesn't depend on the (sometimes
 absent) MicroPython `hmac` module.
 
 Devices need a unix timestamp the server will accept. Without an RTC,
-fetch GET /v1/server-time once at boot and track offset against
+fetch GET /clock once at boot and track offset against
 time.ticks_ms().
 """
 

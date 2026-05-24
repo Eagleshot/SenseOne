@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { getCurrentUser, loginUser, logoutUser, type AuthResult } from "@/api/auth";
 import { isAbortError } from "@/lib/apiClient";
@@ -42,16 +42,16 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
     };
   }, [apiBaseUrl]);
 
-  const login = async (username: string, password: string): Promise<AuthResult> => {
+  const login = useCallback(async (username: string, password: string): Promise<AuthResult> => {
     const result = await loginUser(apiBaseUrl, username, password);
     if (result.success && result.username) {
       setAuthenticatedUsername(result.username);
       setAuthReady(true);
     }
     return result.success ? { success: true } : { success: false, error: result.error };
-  };
+  }, [apiBaseUrl]);
 
-  const logout = async (): Promise<void> => {
+  const logout = useCallback(async (): Promise<void> => {
     try {
       await logoutUser(apiBaseUrl);
     } catch {
@@ -60,14 +60,14 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
 
     setAuthenticatedUsername(null);
     setAuthReady(true);
-  };
+  }, [apiBaseUrl]);
 
-  return {
+  return useMemo(() => ({
     isAuthenticated,
     authenticatedUsername,
     authReady,
     login,
     logout,
-  };
+  }), [authReady, authenticatedUsername, isAuthenticated, login, logout]);
 };
 

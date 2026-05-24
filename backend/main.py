@@ -8,16 +8,16 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from constants import API_V1_PREFIX, DEVICE_API_PREFIX
+from constants import API_PREFIX, DEVICE_API_PREFIX
 from routes import auth, device_ingestion, stations, stations_images_weather, system
 from users import has_any_user, init_users_db
 
 
 # Routes that are allowed to be served over plain HTTP even when HTTPS is
 # enforced for everything else. Device ingestion uses HMAC signing for its
-# auth, which is safe over HTTP. Health/server-time endpoints carry no secrets.
+# auth, which is safe over HTTP. Health/clock endpoints carry no secrets.
 HTTP_ALLOWED_PATH_PREFIXES = (f"{DEVICE_API_PREFIX}/",)
-HTTP_ALLOWED_EXACT_PATHS = {"/", "/health", "/favicon.ico", f"{API_V1_PREFIX}/server-time"}
+HTTP_ALLOWED_EXACT_PATHS = {"/", "/health", "/favicon.ico", "/clock"}
 
 
 def parse_cors_origins() -> list[str]:
@@ -100,8 +100,8 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(system.router)
-    app.include_router(auth.router, prefix=API_V1_PREFIX)
-    app.include_router(stations.router, prefix=API_V1_PREFIX)
-    app.include_router(stations_images_weather.router, prefix=API_V1_PREFIX)
+    app.include_router(auth.router, prefix=API_PREFIX)
+    app.include_router(stations.router, prefix=API_PREFIX)
+    app.include_router(stations_images_weather.router, prefix=API_PREFIX)
     app.include_router(device_ingestion.router, prefix=DEVICE_API_PREFIX)
     return app

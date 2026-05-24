@@ -10,7 +10,7 @@
 # unix timestamp + random nonce, replayed once at the server. Safe over plain
 # HTTP because the modem can't reliably do TLS on this network.
 #
-# Provisioning: in the server admin UI, POST /v1/stations/<id>/rotate-device-secret
+# Provisioning: in the server admin UI, POST /stations/<id>/rotate-device-secret
 # and paste the returned secret into STATION_SECRET_B64 below.
 
 import gc
@@ -135,19 +135,19 @@ def expect_ok(response):
 
 
 def upload_path():
-    return "/v1/device/stations/%s/images" % STATION_ID
+    return "/device/stations/%s/images" % STATION_ID
 
 
 def upload_url():
     return "%s://%s%s" % (API_SCHEME, API_HOST, upload_path())
 
 
-def server_time_path():
-    return "/v1/server-time"
+def clock_path():
+    return "/clock"
 
 
-def server_time_url():
-    return "%s://%s%s" % (API_SCHEME, API_HOST, server_time_path())
+def clock_url():
+    return "%s://%s%s" % (API_SCHEME, API_HOST, clock_path())
 
 
 def payload_size(data):
@@ -351,13 +351,13 @@ def extract_json_payload(raw_body):
     return raw_body[start : end + 1]
 
 
-def fetch_server_time(uart):
-    """Fetch the server's current unix timestamp."""
+def fetch_clock(uart):
+    """Fetch the server clock as a unix timestamp."""
     import json
 
-    status, body = http_request(uart, HTTP_ACTION_GET, server_time_url(), None, None, None)
+    status, body = http_request(uart, HTTP_ACTION_GET, clock_url(), None, None, None)
     if status is None or not 200 <= status < 300:
-        raise OSError("server-time fetch failed with HTTP status %s" % status)
+        raise OSError("clock fetch failed with HTTP status %s" % status)
 
     payload = json.loads(extract_json_payload(body))
     return int(payload["unixSeconds"])
@@ -371,9 +371,9 @@ class ServerClock:
         self._ticks_ms_at_sync = None
 
     def sync(self, uart):
-        self._server_seconds_at_sync = fetch_server_time(uart)
+        self._server_seconds_at_sync = fetch_clock(uart)
         self._ticks_ms_at_sync = time.ticks_ms()
-        print("Clock synced. Server time =", self._server_seconds_at_sync)
+        print("Clock synced. Unix seconds =", self._server_seconds_at_sync)
 
     def now_unix_seconds(self):
         if self._server_seconds_at_sync is None:
@@ -399,6 +399,7 @@ def upload_image(uart, jpeg, clock):
         body=body,
         timestamp=timestamp,
     )
+    headers["X-Filename"] = "%d-capture.jpg" % timestamp
     status, _ = http_request(uart, HTTP_ACTION_POST, upload_url(), headers, "image/jpeg", body)
     success = status is not None and 200 <= status < 300
     return success, status

@@ -1,4 +1,4 @@
-﻿"""Tests for v1 API routing and public wire schemas."""
+"""Tests for API routing and public wire schemas."""
 
 import importlib.util
 import sys
@@ -61,11 +61,11 @@ def _station(tmp_data_dir, station_id: str = "station-1") -> str:
     return station_id
 
 
-def test_v1_auth_uses_camel_case_response(tmp_data_dir, monkeypatch):
+def test_auth_uses_camel_case_response(tmp_data_dir, monkeypatch):
     client = _client(tmp_data_dir, monkeypatch)
 
     response = client.post(
-        "/v1/auth/login",
+        "/auth/login",
         json={"username": TEST_USERNAME, "password": TEST_PASSWORD},
     )
 
@@ -77,12 +77,12 @@ def test_v1_auth_uses_camel_case_response(tmp_data_dir, monkeypatch):
     assert "is_admin" not in payload
 
 
-def test_v1_station_responses_use_camel_case(tmp_data_dir, monkeypatch):
+def test_station_responses_use_camel_case(tmp_data_dir, monkeypatch):
     station_id = _station(tmp_data_dir)
     client = _client(tmp_data_dir, monkeypatch)
 
-    list_response = client.get("/v1/stations")
-    detail_response = client.get(f"/v1/stations/{station_id}")
+    list_response = client.get("/stations")
+    detail_response = client.get(f"/stations/{station_id}")
 
     assert list_response.status_code == 200
     summary = list_response.json()[0]
@@ -95,12 +95,12 @@ def test_v1_station_responses_use_camel_case(tmp_data_dir, monkeypatch):
     assert "is_public" not in detail
 
 
-def test_v1_station_config_accepts_and_returns_camel_case(tmp_data_dir, monkeypatch):
+def test_station_config_accepts_and_returns_camel_case(tmp_data_dir, monkeypatch):
     station_id = _station(tmp_data_dir)
     client = _client(tmp_data_dir, monkeypatch)
     headers = _auth_headers()
 
-    get_response = client.get(f"/v1/stations/{station_id}/config", headers=headers)
+    get_response = client.get(f"/stations/{station_id}/config", headers=headers)
     assert get_response.status_code == 200
     config = get_response.json()
     assert config["stationStartTime"] == "06:00"
@@ -112,7 +112,7 @@ def test_v1_station_config_accepts_and_returns_camel_case(tmp_data_dir, monkeypa
     config["stationStartTime"] = "07:00"
     config["stationStopTime"] = "19:00"
     config["isPublic"] = False
-    put_response = client.put(f"/v1/stations/{station_id}/config", json=config, headers=headers)
+    put_response = client.put(f"/stations/{station_id}/config", json=config, headers=headers)
 
     assert put_response.status_code == 200
     updated = put_response.json()
@@ -121,12 +121,12 @@ def test_v1_station_config_accepts_and_returns_camel_case(tmp_data_dir, monkeypa
     assert updated["isPublic"] is False
 
 
-def test_v1_rotate_key_route_is_gone(tmp_data_dir, monkeypatch):
+def test_rotate_key_route_is_gone(tmp_data_dir, monkeypatch):
     """The legacy API-key rotation endpoint has been removed in favour of HMAC."""
     station_id = _station(tmp_data_dir)
     client = _client(tmp_data_dir, monkeypatch)
 
-    response = client.post(f"/v1/stations/{station_id}/rotate-key", headers=_auth_headers())
+    response = client.post(f"/stations/{station_id}/rotate-key", headers=_auth_headers())
     assert response.status_code == 404
 
 
@@ -136,13 +136,13 @@ _JPEG_BODY = (
 )
 
 
-def test_v1_device_image_route_accepts_signed_request(tmp_data_dir, monkeypatch):
+def test_device_image_route_accepts_signed_request(tmp_data_dir, monkeypatch):
     station_id = _station(tmp_data_dir)
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
     secret_b64 = provision_device_hmac_secret(station_id)
     client = _client(tmp_data_dir, monkeypatch)
 
-    path = f"/v1/device/stations/{station_id}/images"
+    path = f"/device/stations/{station_id}/images"
     signed_headers = eagleshot_signing.sign_request(
         station_id=station_id,
         secret_b64=secret_b64,
@@ -162,23 +162,23 @@ def test_v1_device_image_route_accepts_signed_request(tmp_data_dir, monkeypatch)
     assert payload["url"] == f"/stations/{station_id}/images/{payload['filename']}"
 
 
-def test_v1_sensor_device_route_is_registered(tmp_data_dir, monkeypatch):
+def test_sensor_device_route_is_registered(tmp_data_dir, monkeypatch):
     station_id = _station(tmp_data_dir)
     client = _client(tmp_data_dir, monkeypatch)
 
-    response = client.post(f"/v1/device/stations/{station_id}/sensor-readings", json={})
+    response = client.post(f"/device/stations/{station_id}/sensor-readings", json={})
 
     assert response.status_code in (401, 422)
 
 
-def test_v1_sensor_reading_accepts_signed_request(tmp_data_dir, monkeypatch):
+def test_sensor_reading_accepts_signed_request(tmp_data_dir, monkeypatch):
     import json as _json
     station_id = _station(tmp_data_dir)
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
     secret_b64 = provision_device_hmac_secret(station_id)
     client = _client(tmp_data_dir, monkeypatch)
 
-    path = f"/v1/device/stations/{station_id}/sensor-readings"
+    path = f"/device/stations/{station_id}/sensor-readings"
     body = _json.dumps({
         "timestamp": "2026-05-23T12:00:00Z",
         "temperature": 21.5,
@@ -213,16 +213,16 @@ def test_v1_sensor_reading_accepts_signed_request(tmp_data_dir, monkeypatch):
     assert "wind_speed" not in payload
 
 
-def test_v1_sensor_reading_rejects_session_cookie_without_hmac_signature(tmp_data_dir, monkeypatch):
+def test_sensor_reading_rejects_session_cookie_without_hmac_signature(tmp_data_dir, monkeypatch):
     station_id = _station(tmp_data_dir)
     client = _client(tmp_data_dir, monkeypatch)
     login_response = client.post(
-        "/v1/auth/login",
+        "/auth/login",
         json={"username": TEST_USERNAME, "password": TEST_PASSWORD},
     )
 
     response = client.post(
-        f"/v1/device/stations/{station_id}/sensor-readings",
+        f"/device/stations/{station_id}/sensor-readings",
         json={
             "temperature": 21.5,
             "humidity": 58,
@@ -245,13 +245,13 @@ def test_renamed_station_data_routes_are_registered(tmp_data_dir, monkeypatch):
     station_id = _station(tmp_data_dir)
     client = _client(tmp_data_dir, monkeypatch)
 
-    assert client.get(f"/v1/stations/{station_id}/image-captures").status_code == 200
-    assert client.get(f"/v1/stations/{station_id}/sensor-readings").status_code == 200
-    assert client.get(f"/v1/stations/{station_id}/sensor-series").status_code == 404
+    assert client.get(f"/stations/{station_id}/image-captures").status_code == 200
+    assert client.get(f"/stations/{station_id}/sensor-readings").status_code == 200
+    assert client.get(f"/stations/{station_id}/sensor-series").status_code == 404
 
-    assert client.get(f"/v1/stations/{station_id}/timeline").status_code == 404
-    assert client.get(f"/v1/stations/{station_id}/history").status_code == 404
-    assert client.get(f"/v1/stations/{station_id}/chart-data-sources").status_code == 404
+    assert client.get(f"/stations/{station_id}/timeline").status_code == 404
+    assert client.get(f"/stations/{station_id}/history").status_code == 404
+    assert client.get(f"/stations/{station_id}/chart-data-sources").status_code == 404
 
 
 def test_image_captures_do_not_fall_back_to_filesystem(tmp_data_dir, monkeypatch):
@@ -260,25 +260,26 @@ def test_image_captures_do_not_fall_back_to_filesystem(tmp_data_dir, monkeypatch
     images_dir.joinpath("20240101_1200Z-orphan.jpg").write_bytes(_JPEG_BODY)
     client = _client(tmp_data_dir, monkeypatch)
 
-    response = client.get(f"/v1/stations/{station_id}/image-captures")
+    response = client.get(f"/stations/{station_id}/image-captures")
 
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_unversioned_application_routes_are_not_registered(tmp_data_dir, monkeypatch):
+def test_removed_legacy_routes_are_not_registered(tmp_data_dir, monkeypatch):
     station_id = _station(tmp_data_dir)
     client = _client(tmp_data_dir, monkeypatch)
 
     for method, path in (
-        ("post", "/auth/login"),
-        ("get", "/stations"),
         ("post", "/upload"),
         ("post", f"/upload/{station_id}"),
         ("post", f"/sensors/{station_id}/readings"),
+        ("post", "/v1/auth/login"),
+        ("get", "/v1/stations"),
         ("post", "/v1/upload"),
         ("post", f"/v1/upload/{station_id}"),
         ("post", f"/v1/sensors/{station_id}/readings"),
+        ("post", f"/v1/device/stations/{station_id}/sensor-readings"),
     ):
         response = getattr(client, method)(path)
         assert response.status_code == 404
@@ -297,23 +298,25 @@ def test_openapi_lists_frontend_and_device_paths(tmp_data_dir, monkeypatch):
     paths = client.get("/openapi.json").json()["paths"]
 
     assert "/health" in paths
-    assert "/v1/auth/login" in paths
-    assert "/v1/stations" in paths
-    assert "/v1/stations/{station_id}/image-captures" in paths
-    assert "/v1/stations/{station_id}/sensor-readings" in paths
-    assert "/v1/stations/{station_id}/sensor-series" not in paths
-    assert "/v1/server-time" in paths
-    assert "/v1/device/stations/{station_id}/images" in paths
-    assert "/v1/device/stations/{station_id}/sensor-readings" in paths
-    assert "/auth/login" not in paths
-    assert "/stations" not in paths
-    assert "/v1/stations/{station_id}/timeline" not in paths
-    assert "/v1/stations/{station_id}/history" not in paths
-    assert "/v1/stations/{station_id}/chart-data-sources" not in paths
-    assert "/v1/stations/{station_id}/rotate-key" not in paths
-    assert "/v1/upload" not in paths
-    assert "/v1/upload/{station_id}" not in paths
-    assert "/v1/sensors/{station_id}/readings" not in paths
+    assert "/auth/login" in paths
+    assert "/stations" in paths
+    assert "/stations/{station_id}/image-captures" in paths
+    assert "/stations/{station_id}/sensor-readings" in paths
+    assert "/stations/{station_id}/sensor-series" not in paths
+    assert "/clock" in paths
+    assert "/server-time" not in paths
+    assert "/v1/clock" not in paths
+    assert "/device/stations/{station_id}/images" in paths
+    assert "/device/stations/{station_id}/sensor-readings" in paths
+    assert "/v1/auth/login" not in paths
+    assert "/v1/stations" not in paths
+    assert "/stations/{station_id}/timeline" not in paths
+    assert "/stations/{station_id}/history" not in paths
+    assert "/stations/{station_id}/chart-data-sources" not in paths
+    assert "/stations/{station_id}/rotate-key" not in paths
+    assert "/upload" not in paths
+    assert "/upload/{station_id}" not in paths
+    assert "/sensors/{station_id}/readings" not in paths
     assert "/upload/{station_id}" not in paths
     assert "/sensors/{station_id}/readings" not in paths
 

@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from utils import (
+    image_timestamp_from_filename,
     sanitize_filename,
     sanitize_station_id,
     normalize_content_type,
@@ -85,6 +86,21 @@ class TestTimestampParsing:
     def test_iso_utc_formatting(self):
         dt = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
         assert iso_utc(dt) == "2024-01-01T12:30:00Z"
+
+    def test_image_timestamp_from_filename_parses_epoch_milliseconds(self):
+        result = image_timestamp_from_filename("1772974092396-image0.png")
+
+        assert result is not None
+        assert result.isoformat().startswith("2026-03-08T")
+
+    def test_image_timestamp_from_filename_parses_epoch_seconds(self):
+        result = image_timestamp_from_filename("1772974092-image0.png")
+
+        assert result is not None
+        assert result.isoformat().startswith("2026-03-08T")
+
+    def test_image_timestamp_from_filename_rejects_untimestamped_name(self):
+        assert image_timestamp_from_filename("capture.jpg") is None
 
 
 class TestHumanization:

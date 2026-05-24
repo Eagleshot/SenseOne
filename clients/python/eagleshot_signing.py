@@ -11,7 +11,7 @@ Usage:
         station_id="silvretta-glacier",
         secret_b64=secret_b64,
         method="POST",
-        path="/v1/device/stations/silvretta-glacier/images",
+        path="/device/stations/silvretta-glacier/images",
         body=jpeg_bytes,
     )
     requests.post(url, data=jpeg_bytes, headers={**headers, "Content-Type": "image/jpeg"})
@@ -99,7 +99,7 @@ if __name__ == "__main__":
         station_id="silvretta-glacier",
         secret_b64="this-would-come-from-provisioning",
         method="POST",
-        path="/v1/device/stations/silvretta-glacier/images",
+        path="/device/stations/silvretta-glacier/images",
         body=b"\xff\xd8\xff\xe0fake-jpeg",
     )
     print(json.dumps(example, indent=2))

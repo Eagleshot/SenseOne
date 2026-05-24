@@ -32,7 +32,7 @@ from station_access import (
     require_station_edit,
     require_station_view,
 )
-from station_db import history_from_db, image_captures_from_db, latest_battery_from_db
+from station_db import history_from_db, image_captures_from_db, latest_status_from_db
 from utils import humanize_station_id, iso_utc, parse_iso_timestamp, sanitize_station_id
 
 
@@ -56,48 +56,42 @@ def list_station_ids(base_dir: Path) -> list[str]:
     return station_ids
 
 
-def _is_station_online(base_dir: Path, station_id: str, config: AppConfig) -> bool:
-    """Return online status, skipping the DB when next_online is authoritative."""
+def is_station_online(last_online: str | None, next_online: str | None, config: AppConfig) -> bool:
+    """Return station online status from DB-backed runtime timestamps."""
     now = datetime.now(timezone.utc)
-    next_online_at = parse_iso_timestamp(config.next_online)
+    next_online_at = parse_iso_timestamp(next_online)
     if next_online_at is not None:
         return now <= next_online_at + timedelta(minutes=NEXT_ONLINE_STATUS_BUFFER_MINUTES)
 
-    captures = image_captures_from_db(station_db_path(base_dir, station_id), station_id, count=1)
-    if not captures:
-        return False
-    captured_at = parse_iso_timestamp(captures[-1]["timestamp"])
-    if captured_at is None:
+    last_online_at = parse_iso_timestamp(last_online)
+    if last_online_at is None:
         return False
     threshold_minutes = max(config.capture_interval_minutes * 2, DEFAULT_ONLINE_THRESHOLD_MINUTES)
-    return (now - captured_at).total_seconds() <= threshold_minutes * 60
+    return (now - last_online_at).total_seconds() <= threshold_minutes * 60
 
 
 def station_status(
     base_dir: Path,
     station_id: str,
     config: AppConfig,
-) -> tuple[bool, str | None, str | None, str | None]:
-    """Get the current online/image status for a station."""
+) -> tuple[bool, str | None, str | None, str | None, int | None]:
+    """Get full station status. Returns (is_online, current_image, last_update, next_update, battery)."""
+    capture, battery, last_online, next_online = latest_status_from_db(station_db_path(base_dir, station_id), station_id)
+
     latest = None
-    captures = image_captures_from_db(station_db_path(base_dir, station_id), station_id, count=1)
-    if captures:
-        timestamp = parse_iso_timestamp(captures[-1]["timestamp"])
+    if capture:
+        timestamp = parse_iso_timestamp(capture["timestamp"])
         if timestamp is not None:
-            latest = (timestamp, captures[-1]["url"])
+            latest = (timestamp, capture["url"])
 
     current_image = latest[1] if latest else None
-    last_update = None
-    next_update = None
-    now = datetime.now(timezone.utc)
+    next_update = next_online
 
-    if latest:
+    if latest and next_update is None:
         captured_at, _ = latest
-        last_update = iso_utc(captured_at)
         next_update = iso_utc(captured_at + timedelta(minutes=config.capture_interval_minutes))
 
-    is_online = _is_station_online(base_dir, station_id, config)
-    return is_online, current_image, config.last_online or last_update, config.next_online or next_update
+    return is_station_online(last_online, next_online, config), current_image, last_online, next_update, battery
 
 
 @router.get(
@@ -112,11 +106,12 @@ def station_status(
 )
 def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummaryResponse]:
     data_dir = get_data_dir()
-    visible = [station_id for station_id in list_station_ids(data_dir) if can_view_station(station_id, user)]
     stations = []
-    for station_id in visible:
+    for station_id in list_station_ids(data_dir):
         config = read_station_config(data_dir, station_id)
-        is_online = _is_station_online(data_dir, station_id, config)
+        if not can_view_station(station_id, user, config):
+            continue
+        _, _, last_online, next_online = latest_status_from_db(station_db_path(data_dir, station_id), station_id)
         stations.append(
             StationSummaryResponse(
                 id=station_id,
@@ -126,7 +121,7 @@ def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummar
                 country_emoji=config.country_emoji,
                 coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
                 is_public=config.is_public,
-                is_online=is_online,
+                is_online=is_station_online(last_online, next_online, config),
             )
         )
     return stations
@@ -169,7 +164,7 @@ def get_station(
     require_station_view(station_id, user)
     data_dir = get_data_dir()
     config = read_station_config(data_dir, station_id)
-    is_online, current_image, last_update, next_update = station_status(data_dir, station_id, config)
+    is_online, current_image, last_update, next_update, battery = station_status(data_dir, station_id, config)
     return StationDetailResponse(
         id=station_id,
         name=config.title or humanize_station_id(station_id),
@@ -180,7 +175,7 @@ def get_station(
         is_public=config.is_public,
         is_online=is_online,
         description=config.description,
-        battery=latest_battery_from_db(station_db_path(data_dir, station_id), station_id),
+        battery=battery,
         current_image=current_image,
         last_update=last_update,
         next_update=next_update,
