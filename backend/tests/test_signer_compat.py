@@ -8,6 +8,7 @@ fixed inputs catches any drift.
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,11 +22,19 @@ def _load(name, path):
     return mod
 
 
+def _load_openmv_main():
+    repo = Path(__file__).resolve().parents[2]
+    sys.modules.setdefault("sensor", SimpleNamespace(RGB565=1, VGA=2))
+    sys.modules.setdefault("pyb", SimpleNamespace(UART=lambda *a, **kw: None))
+    sys.modules.setdefault("machine", SimpleNamespace())
+    return _load("openmv_main_for_signer_test", repo / "clients" / "openmv" / "main.py")
+
+
 @pytest.fixture(scope="module")
 def signers():
     repo = Path(__file__).resolve().parents[2]
     cpy = _load("eagleshot_signing_cpy", repo / "clients" / "python" / "eagleshot_signing.py")
-    mpy = _load("eagleshot_signing_mpy", repo / "clients" / "openmv" / "eagleshot_signing.py")
+    mpy = _load_openmv_main()
     return cpy, mpy
 
 
@@ -81,5 +90,3 @@ def test_hmac_implementation_matches_stdlib(signers):
     msg = b"sample message"
     expected = hmac.new(key, msg, hashlib.sha256).digest()
     assert mpy.hmac_sha256(key, msg) == expected
-
-
