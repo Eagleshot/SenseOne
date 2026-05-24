@@ -22,6 +22,7 @@ import {
   updateStationConfig,
 } from "@/api/stations";
 import { isAbortError } from "@/lib/apiClient";
+import { getStationIdFromLocation, pushStationUrl } from "@/lib/stationLinks";
 
 export type WebcamDataState = {
   activeWebcam: Webcam;
@@ -55,7 +56,10 @@ export type WebcamDataState = {
 
 export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): WebcamDataState => {
   const [webcamList, setWebcamList] = useState<Webcam[]>([]);
-  const [activeWebcam, setActiveWebcamState] = useState<Webcam>(FALLBACK_WEBCAM);
+  const [activeWebcam, setActiveWebcamState] = useState<Webcam>(() => {
+    const urlStationId = getStationIdFromLocation(window.location);
+    return urlStationId ? { ...FALLBACK_WEBCAM, id: urlStationId } : FALLBACK_WEBCAM;
+  });
   const [historicalData, setHistoricalData] = useState<SensorData[]>([]);
   const [imageTimeline, setImageTimeline] = useState<TimelineImage[]>([]);
   const [currentImageIndex, setCurrentImageIndexState] = useState(0);
@@ -479,7 +483,10 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     };
   }, [imageTimeline.length, isPlaying]);
 
-  const setActiveWebcam = useCallback((webcam: Webcam) => setActiveWebcamState(webcam), []);
+  const setActiveWebcam = useCallback((webcam: Webcam) => {
+    pushStationUrl(webcam.id);
+    setActiveWebcamState(webcam);
+  }, []);
   const setCurrentImageIndex = useCallback((index: number) => setCurrentImageIndexState(index), []);
   const setIsPlaying = useCallback((playing: boolean) => setIsPlayingState(playing), []);
   const setDraftDescription = useCallback((description: string) => {

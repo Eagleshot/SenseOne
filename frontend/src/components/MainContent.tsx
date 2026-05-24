@@ -9,6 +9,7 @@ import { DESCRIPTION_MAX_LENGTH } from "@/api/stations";
 
 import { HeroImage } from "./HeroImage";
 import { useApp } from "@/contexts/AppContext";
+import { createStationUrl } from "@/lib/stationLinks";
 
 const WeatherDetail = lazy(() => import("./WeatherDetail").then((module) => ({ default: module.WeatherDetail })));
 const SensorHistoryPanel = lazy(() =>
@@ -65,7 +66,7 @@ export const MainContent: React.FC = () => {
     if (!activeWebcam.id) return;
 
     try {
-      await navigator.clipboard.writeText(activeWebcam.id);
+      await navigator.clipboard.writeText(createStationUrl(activeWebcam.id));
       setStationIdCopied(true);
       window.setTimeout(() => setStationIdCopied(false), 1500);
     } catch {
@@ -195,10 +196,10 @@ export const MainContent: React.FC = () => {
                     size="sm"
                     onClick={() => void handleCopyStationId()}
                     className="btn-inline-muted gap-1 text-xs underline underline-offset-4"
-                    aria-label={`Copy station ID ${activeWebcam.id}`}
+                    aria-label={`Copy link for station ${activeWebcam.id}`}
                   >
                     <Copy className="h-3 w-3" />
-                    {stationIdCopied ? "Copied" : "Copy"}
+                    {stationIdCopied ? "Copied" : "Copy Link"}
                   </Button>
                 </>
               )}

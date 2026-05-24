@@ -1,4 +1,4 @@
-* Unique link for each station
+* Auto get the location from coordinates
 
 * Fix the Charts
     * Make default Icon depending on the unit
