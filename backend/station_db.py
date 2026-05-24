@@ -7,11 +7,78 @@ from pathlib import Path
 
 from utils import iso_utc, parse_iso_timestamp
 
+SENSOR_HISTORY_COLUMNS = (
+    "temperature",
+    "humidity",
+    "pressure",
+    "battery",
+    "wind_speed",
+    "wind_direction",
+    "visibility",
+    "uv_index",
+    "dew_point",
+    "feels_like",
+    "voltage",
+    "device_temperature",
+    "firmware_version",
+    "next_start",
+    "camera_name",
+    "wake_reason",
+)
+
+_SENSOR_HISTORY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sensor_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    temperature REAL,
+    humidity INTEGER,
+    pressure INTEGER,
+    battery INTEGER,
+    wind_speed REAL,
+    wind_direction INTEGER,
+    visibility REAL,
+    uv_index INTEGER,
+    dew_point REAL,
+    feels_like REAL,
+    voltage REAL,
+    device_temperature REAL,
+    firmware_version TEXT,
+    next_start TEXT,
+    camera_name TEXT,
+    wake_reason TEXT,
+    next_online TEXT
+)
+"""
+
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+
+
+def _sensor_history_needs_rebuild(connection: sqlite3.Connection) -> bool:
+    columns = {row[1]: row for row in connection.execute("PRAGMA table_info(sensor_history)")}
+    expected = {"id", "timestamp", "next_online", *SENSOR_HISTORY_COLUMNS}
+    if not expected.issubset(columns):
+        return True
+    return any(columns[column][3] for column in SENSOR_HISTORY_COLUMNS)
+
+
+def _rebuild_sensor_history(connection: sqlite3.Connection) -> None:
+    existing = {row[1] for row in connection.execute("PRAGMA table_info(sensor_history)")}
+    connection.execute("ALTER TABLE sensor_history RENAME TO sensor_history_old")
+    connection.execute(_SENSOR_HISTORY_SCHEMA)
+    copy_columns = [column for column in ("id", "timestamp", *SENSOR_HISTORY_COLUMNS, "next_online") if column in existing]
+    quoted_columns = ", ".join(copy_columns)
+    connection.execute(
+        f"""
+        INSERT INTO sensor_history ({quoted_columns})
+        SELECT {quoted_columns}
+        FROM sensor_history_old
+        """
+    )
+    connection.execute("DROP TABLE sensor_history_old")
 
 
 def ensure_station_db(db_path: Path) -> None:
@@ -32,28 +99,12 @@ def ensure_station_db(db_path: Path) -> None:
             "CREATE INDEX IF NOT EXISTS idx_station_images_created_at ON station_images(created_at)"
         )
         _ensure_column(connection, "station_images", "next_online", "next_online TEXT")
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sensor_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                temperature REAL NOT NULL,
-                humidity INTEGER NOT NULL,
-                pressure INTEGER NOT NULL,
-                battery INTEGER NOT NULL,
-                wind_speed REAL NOT NULL,
-                wind_direction INTEGER NOT NULL,
-                visibility REAL NOT NULL,
-                uv_index INTEGER NOT NULL,
-                dew_point REAL NOT NULL,
-                feels_like REAL NOT NULL
-            )
-            """
-        )
+        connection.execute(_SENSOR_HISTORY_SCHEMA)
+        if _sensor_history_needs_rebuild(connection):
+            _rebuild_sensor_history(connection)
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_sensor_history_timestamp ON sensor_history(timestamp)"
         )
-        _ensure_column(connection, "sensor_history", "next_online", "next_online TEXT")
         connection.commit()
 
 
@@ -61,6 +112,7 @@ def image_captures_from_db(db_path: Path, station_id: str, count: int) -> list[d
     """Return recent image capture rows from a station DB, oldest-to-newest."""
     if not db_path.exists():
         return []
+    ensure_station_db(db_path)
 
     try:
         with sqlite3.connect(db_path) as connection:
@@ -97,6 +149,7 @@ def append_station_image(
     next_online: str | None = None,
 ) -> None:
     """Insert a stored station image row."""
+    ensure_station_db(db_path)
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             """
@@ -115,18 +168,17 @@ def append_sensor_reading(
     next_online: str | None = None,
 ) -> None:
     """Insert a station sensor reading row."""
+    ensure_station_db(db_path)
+    values = {column: fields.get(column) for column in SENSOR_HISTORY_COLUMNS}
+    values["timestamp"] = timestamp
+    values["next_online"] = next_online
+    insert_columns = ("timestamp", *SENSOR_HISTORY_COLUMNS, "next_online")
+    placeholders = ", ".join(f":{column}" for column in insert_columns)
+    column_list = ", ".join(insert_columns)
     with sqlite3.connect(db_path) as connection:
         connection.execute(
-            """
-            INSERT INTO sensor_history (
-                timestamp, temperature, humidity, pressure, battery,
-                wind_speed, wind_direction, visibility, uv_index, dew_point, feels_like, next_online
-            ) VALUES (
-                :timestamp, :temperature, :humidity, :pressure, :battery,
-                :wind_speed, :wind_direction, :visibility, :uv_index, :dew_point, :feels_like, :next_online
-            )
-            """,
-            {"timestamp": timestamp, "next_online": next_online, **fields},
+            f"INSERT INTO sensor_history ({column_list}) VALUES ({placeholders})",
+            values,
         )
         connection.commit()
 
@@ -135,6 +187,7 @@ def history_from_db(db_path: Path, station_id: str, hours: int) -> list[dict[str
     """Load sensor history rows from a station DB."""
     if not db_path.exists():
         return []
+    ensure_station_db(db_path)
 
     cutoff = iso_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
     try:
@@ -153,7 +206,13 @@ def history_from_db(db_path: Path, station_id: str, hours: int) -> list[dict[str
                     visibility,
                     uv_index,
                     dew_point,
-                    feels_like
+                    feels_like,
+                    voltage,
+                    device_temperature,
+                    firmware_version,
+                    next_start,
+                    camera_name,
+                    wake_reason
                 FROM sensor_history
                 WHERE timestamp >= ?
                 ORDER BY timestamp ASC
@@ -173,6 +232,7 @@ def latest_status_from_db(
     """Return latest image, battery, last online, and next online in one DB connection."""
     if not db_path.exists():
         return None, None, None, None
+    ensure_station_db(db_path)
 
     try:
         with sqlite3.connect(db_path) as connection:
@@ -200,7 +260,7 @@ def latest_status_from_db(
         parsed = parse_iso_timestamp(row[timestamp_key])
         if parsed is None:
             continue
-        if latest_timestamp is None or parsed > latest_timestamp:
+        if latest_timestamp is None or parsed > latest_timestamp or (parsed == latest_timestamp and row["next_online"]):
             latest_timestamp = parsed
             next_online = row["next_online"]
 

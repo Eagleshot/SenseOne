@@ -207,16 +207,24 @@ class ImageUploadResponse(ApiModel):
 class _SensorFields(ApiModel):
     """Shared sensor measurement fields (metric units)."""
 
-    temperature: float = Field(description="Air temperature in degrees Celsius.")
-    humidity: int = Field(ge=0, le=100, description="Relative humidity in percent (0-100).")
-    pressure: int = Field(gt=0, description="Atmospheric pressure in hPa.")
-    battery: int = Field(ge=0, le=100, description="Battery level in percent (0-100).")
-    wind_speed: float = Field(ge=0, description="Wind speed in m/s.")
-    wind_direction: int = Field(ge=0, le=360, description="Wind direction in degrees, 0=N clockwise.")
-    visibility: float = Field(ge=0, description="Visibility in km.")
-    uv_index: int = Field(ge=0, description="UV index (0+).")
-    dew_point: float = Field(description="Dew point in degrees Celsius.")
-    feels_like: float = Field(description="Apparent ('feels like') temperature in degrees Celsius.")
+    temperature: float | None = Field(default=None, description="Air temperature in degrees Celsius.")
+    humidity: int | None = Field(default=None, ge=0, le=100, description="Relative humidity in percent (0-100).")
+    pressure: int | None = Field(default=None, gt=0, description="Atmospheric pressure in hPa.")
+    battery: int | None = Field(default=None, ge=0, le=100, description="Battery level in percent (0-100).")
+    wind_speed: float | None = Field(default=None, ge=0, description="Wind speed in m/s.")
+    wind_direction: int | None = Field(
+        default=None, ge=0, le=360, description="Wind direction in degrees, 0=N clockwise."
+    )
+    visibility: float | None = Field(default=None, ge=0, description="Visibility in km.")
+    uv_index: int | None = Field(default=None, ge=0, description="UV index (0+).")
+    dew_point: float | None = Field(default=None, description="Dew point in degrees Celsius.")
+    feels_like: float | None = Field(default=None, description="Apparent ('feels like') temperature in degrees Celsius.")
+    voltage: float | None = Field(default=None, description="Device supply or battery voltage, if reported.")
+    device_temperature: float | None = Field(default=None, description="Device internal temperature, if reported.")
+    firmware_version: str | None = Field(default=None, max_length=120, description="Firmware version string.")
+    next_start: str | None = Field(default=None, description="ISO 8601 timestamp for the device's next scheduled start.")
+    camera_name: str | None = Field(default=None, max_length=120, description="Camera name used in the image filename.")
+    wake_reason: str | None = Field(default=None, max_length=120, description="Optional reason the device woke.")
 
 
 class SensorHistoryResponse(_SensorFields):
@@ -235,12 +243,9 @@ class SensorReadingRequest(_SensorFields):
             "row with the current UTC time on receipt."
         ),
     )
-    next_online: str | None = Field(
-        default=None,
-        description="Optional ISO 8601 timestamp when the station expects to check in next.",
-    )
+    next_online: str | None = Field(default=None, description="Legacy alias for nextStart.")
 
-    @field_validator("timestamp", "next_online")
+    @field_validator("timestamp", "next_online", "next_start")
     @classmethod
     def validate_timestamp_field(cls, value: str | None) -> str | None:
         if value is None:
@@ -249,4 +254,3 @@ class SensorReadingRequest(_SensorFields):
         if parsed is None:
             raise ValueError("Timestamp must be ISO 8601.")
         return iso_utc(parsed)
-

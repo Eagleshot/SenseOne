@@ -104,7 +104,6 @@ Devices without an RTC can call the unauthenticated `GET /clock` once at boot an
 ```powershell
 python - <<'PY'
 import sys
-import time
 sys.path.insert(0, "../clients/python")
 import eagleshot_signing, requests
 
@@ -120,7 +119,7 @@ headers = eagleshot_signing.sign_request(
     path=path,
     body=body,
 )
-headers.update({"Content-Type": "image/jpeg", "X-Filename": f"{int(time.time())}-test.jpg"})
+headers.update({"Content-Type": "image/jpeg", "X-Filename": "20260524_1430Z_front.jpg"})
 
 response = requests.post(f"http://127.0.0.1:3000{path}", data=body, headers=headers)
 print(response.status_code, response.text)
@@ -131,8 +130,8 @@ Expected response:
 
 ```json
 {
-  "filename": "1763900000000-test.jpg",
-  "url": "/stations/{STATION_ID}/images/1763900000000-test.jpg"
+  "filename": "20260524_1430Z_front.jpg",
+  "url": "/stations/{STATION_ID}/images/20260524_1430Z_front.jpg"
 }
 ```
 
@@ -154,16 +153,12 @@ STATION_ID = "{STATION_ID}"
 SECRET_B64 = "{DEVICE_SECRET_B64}"
 path = f"/device/stations/{STATION_ID}/sensor-readings"
 body = json.dumps({
-    "temperature": 21.5,
-    "humidity": 58,
-    "pressure": 1012,
-    "battery": 87,
-    "windSpeed": 4.2,
-    "windDirection": 225,
-    "visibility": 9.5,
-    "uvIndex": 3,
-    "dewPoint": 13.1,
-    "feelsLike": 20.9,
+    "timestamp": "2026-05-24T14:30:00Z",
+    "firmwareVersion": "openmv-n6-2026.05",
+    "nextStart": "2026-05-24T15:00:00Z",
+    "cameraName": "front",
+    "wakeReason": "timer",
+    "voltage": 3.9,
 }).encode("utf-8")
 
 headers = eagleshot_signing.sign_request(
@@ -180,7 +175,7 @@ print(response.status_code, response.text)
 PY
 ```
 
-`timestamp` is optional; the backend records the current server time when it is omitted.
+For the OpenMV flow, `timestamp` is the adjusted UTC image capture minute and should match the `YYYYMMDD_HHMMZ` prefix in `X-Filename`. Weather-like fields are optional; log fields such as `firmwareVersion`, `nextStart`, `cameraName`, `wakeReason`, `voltage`, and `deviceTemperature` can be sent sparsely.
 
 ## 8) Endpoints
 
@@ -200,6 +195,7 @@ Device routes (HMAC signing, see above):
 
 - `POST /device/stations/{station_id}/images`
 - `POST /device/stations/{station_id}/sensor-readings`
+- `GET /device/stations/{station_id}/config`
 
 Open:
 
@@ -213,7 +209,9 @@ Open:
   - nonce was reused — generate a fresh one per request
   - secret on device doesn't match the server — rotate via `POST /stations/{station_id}/rotate-device-secret` and re-flash
 - `404 Not Found`:
-  - station id doesn't exist or the URL path doesn't match `/device/stations/{station_id}/images` / `.../sensor-readings`
+  - station id doesn't exist or the URL path doesn't match `/device/stations/{station_id}/images` / `.../sensor-readings` / `.../config`
+- `422 Unprocessable Entity` on image upload:
+  - `X-Filename` must be a real UTC capture name such as `20260524_1430Z_front.jpg`
 - `413 Payload Too Large`:
   - default upload cap is 25 MB; override with `APP_MAX_UPLOAD_BYTES`
 - `426 Upgrade Required`:

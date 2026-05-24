@@ -14,12 +14,18 @@
 # and paste the returned secret into STATION_SECRET_B64 below.
 
 import gc
+import json
 import sensor
 import time
 
 from pyb import UART
 
 import eagleshot_signing
+
+try:
+    import machine
+except ImportError:
+    machine = None
 
 
 UART_BUS = 3
@@ -30,9 +36,9 @@ API_HOST = "api.eagleshot.org"
 API_SCHEME = "http"
 STATION_ID = "silvretta-glacier"
 STATION_SECRET_B64 = "REPLACE-WITH-PROVISIONED-DEVICE-SECRET"
+CAMERA_NAME = "front"
+FIRMWARE_VERSION = "openmv-n6-2026.05"
 
-UPLOAD_INTERVAL_MS = 10 * 60 * 1000
-SERVER_TIME_REFRESH_MS = 12 * 60 * 60 * 1000  # Re-sync clock every 12h.
 JPEG_QUALITY = 70
 JPEG_MIN_QUALITY = 35
 JPEG_QUALITY_STEP = 10
@@ -140,6 +146,22 @@ def upload_path():
 
 def upload_url():
     return "%s://%s%s" % (API_SCHEME, API_HOST, upload_path())
+
+
+def sensor_readings_path():
+    return "/device/stations/%s/sensor-readings" % STATION_ID
+
+
+def sensor_readings_url():
+    return "%s://%s%s" % (API_SCHEME, API_HOST, sensor_readings_path())
+
+
+def config_path():
+    return "/device/stations/%s/config" % STATION_ID
+
+
+def config_url():
+    return "%s://%s%s" % (API_SCHEME, API_HOST, config_path())
 
 
 def clock_path():
@@ -351,6 +373,128 @@ def extract_json_payload(raw_body):
     return raw_body[start : end + 1]
 
 
+def sanitize_camera_name(value):
+    safe = []
+    for char in value.strip():
+        if char.isalnum() or char in ("-", "_", "."):
+            safe.append(char)
+        else:
+            safe.append("_")
+    return "".join(safe) or "camera"
+
+
+def round_down_to_minute(unix_seconds):
+    return int(unix_seconds) - (int(unix_seconds) % 60)
+
+
+def format_iso_utc(unix_seconds):
+    parts = time.gmtime(int(unix_seconds))
+    year, month, day, hour, minute, second = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+    return "%04d-%02d-%02dT%02d:%02d:%02dZ" % (year, month, day, hour, minute, second)
+
+
+def format_capture_filename(unix_seconds, camera_name):
+    parts = time.gmtime(round_down_to_minute(unix_seconds))
+    year, month, day, hour, minute = parts[0], parts[1], parts[2], parts[3], parts[4]
+    return "%04d%02d%02d_%02d%02dZ_%s.jpg" % (
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        sanitize_camera_name(camera_name),
+    )
+
+
+def parse_hhmm(value, fallback):
+    if not value:
+        value = fallback
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise ValueError("invalid schedule time: %s" % value)
+    hour = int(parts[0])
+    minute = int(parts[1])
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise ValueError("invalid schedule time: %s" % value)
+    return hour, minute
+
+
+def days_from_civil(year, month, day):
+    year -= 1 if month <= 2 else 0
+    era = (year if year >= 0 else year - 399) // 400
+    yoe = year - era * 400
+    month_offset = month - 3 if month > 2 else month + 9
+    doy = (153 * month_offset + 2) // 5 + day - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+
+def utc_epoch_seconds(year, month, day, hour, minute, second=0):
+    days = days_from_civil(year, month, day)
+    return days * 86400 + hour * 3600 + minute * 60 + second
+
+
+def daily_time_epoch(reference_seconds, hhmm):
+    parts = time.gmtime(int(reference_seconds))
+    year, month, day = parts[0], parts[1], parts[2]
+    hour, minute = hhmm
+    return utc_epoch_seconds(year, month, day, hour, minute)
+
+
+def compute_next_start(config, now_seconds):
+    interval_minutes = int(config.get("captureIntervalMinutes") or 30)
+    if interval_minutes < 1:
+        interval_minutes = 1
+
+    # When useSunriseSunset is true, the backend-provided start/stop values
+    # are treated as the effective active window for this firmware.
+    start_hhmm = parse_hhmm(config.get("stationStartTime"), "06:00")
+    stop_hhmm = parse_hhmm(config.get("stationStopTime"), "20:00")
+    today_start = daily_time_epoch(now_seconds, start_hhmm)
+    today_stop = daily_time_epoch(now_seconds, stop_hhmm)
+    tomorrow_start = today_start + 86400
+
+    now_minute = round_down_to_minute(now_seconds)
+    interval_seconds = interval_minutes * 60
+
+    if now_seconds < today_start:
+        return today_start
+    if now_seconds >= today_stop:
+        return tomorrow_start
+
+    candidate = now_minute + interval_seconds
+    if candidate <= today_stop:
+        return candidate
+    return tomorrow_start
+
+
+def read_voltage():
+    """Override with board-specific voltage sensing when available."""
+    return None
+
+
+def read_device_temperature():
+    """Override with board-specific device temperature sensing when available."""
+    return None
+
+
+def read_sensor_data():
+    """Hook for local telemetry captured immediately after the image."""
+    data = {}
+    voltage = read_voltage()
+    if voltage is not None:
+        data["voltage"] = voltage
+    device_temperature = read_device_temperature()
+    if device_temperature is not None:
+        data["deviceTemperature"] = device_temperature
+    if machine is not None and hasattr(machine, "reset_cause"):
+        try:
+            data["wakeReason"] = str(machine.reset_cause())
+        except Exception:
+            pass
+    return data
+
+
 def fetch_clock(uart):
     """Fetch the server clock as a unix timestamp."""
     import json
@@ -381,62 +525,117 @@ class ServerClock:
         elapsed_ms = time.ticks_diff(time.ticks_ms(), self._ticks_ms_at_sync)
         return self._server_seconds_at_sync + (elapsed_ms // 1000)
 
+    def unix_seconds_at_ticks(self, ticks_ms):
+        if self._server_seconds_at_sync is None:
+            raise OSError("clock has never been synced")
+        elapsed_ms = time.ticks_diff(ticks_ms, self._ticks_ms_at_sync)
+        return self._server_seconds_at_sync + (elapsed_ms // 1000)
+
     def ms_since_sync(self):
         if self._ticks_ms_at_sync is None:
             return None
         return time.ticks_diff(time.ticks_ms(), self._ticks_ms_at_sync)
 
 
-def upload_image(uart, jpeg, clock):
+def fetch_station_config(uart, clock):
+    body = b""
+    headers = eagleshot_signing.sign_request(
+        station_id=STATION_ID,
+        secret_b64=STATION_SECRET_B64,
+        method="GET",
+        path=config_path(),
+        body=body,
+        timestamp=clock.now_unix_seconds(),
+    )
+    status, raw_body = http_request(uart, HTTP_ACTION_GET, config_url(), headers, None, None)
+    if status is None or not 200 <= status < 300:
+        raise OSError("config fetch failed with HTTP status %s" % status)
+    return json.loads(extract_json_payload(raw_body))
+
+
+def upload_sensor_reading(uart, payload, clock):
+    body = json.dumps(payload).encode("utf-8")
+    headers = eagleshot_signing.sign_request(
+        station_id=STATION_ID,
+        secret_b64=STATION_SECRET_B64,
+        method="POST",
+        path=sensor_readings_path(),
+        body=body,
+        timestamp=clock.now_unix_seconds(),
+    )
+    headers["Content-Type"] = "application/json"
+    status, _ = http_request(uart, HTTP_ACTION_POST, sensor_readings_url(), headers, "application/json", body)
+    return status is not None and 200 <= status < 300, status
+
+
+def upload_image(uart, jpeg, clock, filename, next_start_iso):
     """Sign and upload a single image. Returns (success, http_status)."""
     body = bytes(jpeg.bytearray()) if hasattr(jpeg, "bytearray") else bytes(jpeg)
-    timestamp = clock.now_unix_seconds()
     headers = eagleshot_signing.sign_request(
         station_id=STATION_ID,
         secret_b64=STATION_SECRET_B64,
         method="POST",
         path=upload_path(),
         body=body,
-        timestamp=timestamp,
+        timestamp=clock.now_unix_seconds(),
     )
-    headers["X-Filename"] = "%d-capture.jpg" % timestamp
+    headers["X-Filename"] = filename
+    headers["X-Next-Online"] = next_start_iso
     status, _ = http_request(uart, HTTP_ACTION_POST, upload_url(), headers, "image/jpeg", body)
     success = status is not None and 200 <= status < 300
     return success, status
 
 
+def deep_sleep_ms(duration_ms):
+    if machine is None or not hasattr(machine, "deepsleep"):
+        raise OSError("timed deep sleep API is unavailable")
+    machine.deepsleep(max(0, int(duration_ms)))
+
+
+def deep_sleep_until(clock, next_start_seconds):
+    sleep_seconds = int(next_start_seconds) - int(clock.now_unix_seconds())
+    deep_sleep_ms(max(0, sleep_seconds * 1000))
+
+
 def main():
     setup_camera()
+    capture_ticks_ms = time.ticks_ms()
+    jpeg = capture_jpeg()
+    telemetry = read_sensor_data()
+
     uart = init_modem()
     activate_data(uart)
     clock = ServerClock()
     clock.sync(uart)
 
-    while True:
-        try:
-            if (clock.ms_since_sync() or 0) > SERVER_TIME_REFRESH_MS:
-                clock.sync(uart)
+    config = fetch_station_config(uart, clock)
+    capture_seconds = round_down_to_minute(clock.unix_seconds_at_ticks(capture_ticks_ms))
+    capture_iso = format_iso_utc(capture_seconds)
+    next_start_seconds = compute_next_start(config, clock.now_unix_seconds())
+    next_start_iso = format_iso_utc(next_start_seconds)
+    camera_name = sanitize_camera_name(CAMERA_NAME)
 
-            jpeg = capture_jpeg()
-            success, status = upload_image(uart, jpeg, clock)
-            if success:
-                print("Image uploaded successfully.")
-            else:
-                print("Image upload failed. HTTP status:", status)
-                # 401 most likely means our clock drifted past the window.
-                if status == 401:
-                    print("Re-syncing clock.")
-                    clock.sync(uart)
-        except Exception as exc:
-            print("Upload error:", exc)
-            gc.collect()
-            try:
-                activate_data(uart)
-                clock.sync(uart)
-            except Exception as reconnect_exc:
-                print("Reconnect error:", reconnect_exc)
+    payload = {
+        "timestamp": capture_iso,
+        "firmwareVersion": FIRMWARE_VERSION,
+        "nextStart": next_start_iso,
+        "cameraName": camera_name,
+    }
+    payload.update(telemetry)
 
-        time.sleep_ms(UPLOAD_INTERVAL_MS)
+    success, status = upload_sensor_reading(uart, payload, clock)
+    if not success:
+        raise OSError("sensor/log upload failed with HTTP status %s" % status)
+
+    filename = format_capture_filename(capture_seconds, camera_name)
+    success, status = upload_image(uart, jpeg, clock, filename, next_start_iso)
+    if not success:
+        raise OSError("image upload failed with HTTP status %s" % status)
+
+    print("Capture cycle uploaded:", filename)
+    gc.collect()
+    deep_sleep_until(clock, next_start_seconds)
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -90,17 +90,70 @@ def _post_signed(
     return client.post(path, content=body, headers=headers)
 
 
+def _get_signed(
+    client: TestClient,
+    secret_b64: str,
+    station_id: str,
+    path: str,
+):
+    headers = eagleshot_signing.sign_request(
+        station_id=station_id,
+        secret_b64=secret_b64,
+        method="GET",
+        path=path,
+        body=b"",
+    )
+    return client.get(path, headers=headers)
+
+
+def test_signed_device_config_succeeds(signed_client):
+    client, station_id, secret_b64 = signed_client
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/config"
+    response = _get_signed(client, secret_b64, station_id, path)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["stationStartTime"] == "06:00"
+    assert body["stationStopTime"] == "20:00"
+    assert body["captureIntervalMinutes"] == 30
+
+
+def test_signed_device_config_rejects_missing_signature(signed_client):
+    client, station_id, _ = signed_client
+    response = client.get(f"{DEVICE_API_PREFIX}/stations/{station_id}/config")
+    assert response.status_code == 401
+
+
+def test_signed_device_config_rejects_wrong_secret(signed_client):
+    client, station_id, _ = signed_client
+    bogus_secret = generate_device_hmac_secret_b64()
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/config"
+    response = _get_signed(client, bogus_secret, station_id, path)
+    assert response.status_code == 401
+
+
 def test_signed_image_upload_succeeds(signed_client):
+    client, station_id, secret_b64 = signed_client
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
+    response = _post_signed(
+        client, secret_b64, station_id, path, _JPEG_BODY,
+        extra_headers={"Content-Type": "image/jpeg", "X-Filename": "20260524_1430Z_front.jpg"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["filename"] == "20260524_1430Z_front.jpg"
+    assert body["url"].endswith(body["filename"])
+
+
+def test_signed_image_upload_rejects_malformed_filename(signed_client):
     client, station_id, secret_b64 = signed_client
     path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
     response = _post_signed(
         client, secret_b64, station_id, path, _JPEG_BODY,
         extra_headers={"Content-Type": "image/jpeg", "X-Filename": "capture.jpg"},
     )
-    assert response.status_code == 201, response.text
-    body = response.json()
-    assert body["filename"].endswith("-capture.jpg")
-    assert body["url"].endswith(body["filename"])
+
+    assert response.status_code == 422
 
 
 def test_signed_image_upload_persists_next_online(signed_client):
@@ -111,7 +164,7 @@ def test_signed_image_upload_persists_next_online(signed_client):
         client, secret_b64, station_id, path, _JPEG_BODY,
         extra_headers={
             "Content-Type": "image/jpeg",
-            "X-Filename": "capture.jpg",
+            "X-Filename": "20260524_1430Z_front.jpg",
             "X-Next-Online": _NEXT_ONLINE,
         },
     )
@@ -165,7 +218,7 @@ def test_signed_sensor_reading_persists_next_online(signed_client):
     client, station_id, secret_b64 = signed_client
     data_dir = os.environ["APP_DATA_DIR"]
     path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
-    body = json.dumps({**_SENSOR_PAYLOAD, "nextOnline": _NEXT_ONLINE}).encode("utf-8")
+    body = json.dumps({**_SENSOR_PAYLOAD, "nextStart": _NEXT_ONLINE}).encode("utf-8")
     response = _post_signed(
         client, secret_b64, station_id, path, body,
         extra_headers={"Content-Type": "application/json"},
@@ -183,6 +236,58 @@ def test_signed_sensor_reading_persists_next_online(signed_client):
     config_doc = yaml.safe_load((Path(data_dir) / station_id / STATION_CONFIG_FILENAME).read_text())
     assert config_doc["last_online"] == row[0]
     assert config_doc["next_online"] == _NEXT_ONLINE
+
+
+def test_signed_sparse_sensor_log_succeeds(signed_client):
+    import json
+
+    client, station_id, secret_b64 = signed_client
+    data_dir = os.environ["APP_DATA_DIR"]
+    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
+    body = json.dumps(
+        {
+            "timestamp": "2026-05-24T14:30:00Z",
+            "firmwareVersion": "openmv-test",
+            "nextStart": "2026-05-24T15:00:00Z",
+            "cameraName": "front",
+            "wakeReason": "timer",
+            "voltage": 3.92,
+        }
+    ).encode("utf-8")
+    response = _post_signed(
+        client, secret_b64, station_id, path, body,
+        extra_headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 201, response.text
+    parsed = response.json()
+    assert parsed["timestamp"] == "2026-05-24T14:30:00Z"
+    assert parsed["temperature"] is None
+    assert parsed["firmwareVersion"] == "openmv-test"
+    assert parsed["nextStart"] == "2026-05-24T15:00:00Z"
+    assert parsed["cameraName"] == "front"
+    assert parsed["wakeReason"] == "timer"
+    assert parsed["voltage"] == 3.92
+
+    with sqlite3.connect(station_db_path(Path(data_dir), station_id)) as connection:
+        row = connection.execute(
+            """
+            SELECT timestamp, voltage, firmware_version, next_start, camera_name, wake_reason, next_online
+            FROM sensor_history
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert row == (
+        "2026-05-24T14:30:00Z",
+        3.92,
+        "openmv-test",
+        "2026-05-24T15:00:00Z",
+        "front",
+        "timer",
+        "2026-05-24T15:00:00Z",
+    )
 
 
 def test_sensor_reading_without_signature_is_rejected(signed_client):

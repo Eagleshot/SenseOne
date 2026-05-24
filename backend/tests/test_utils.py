@@ -87,20 +87,16 @@ class TestTimestampParsing:
         dt = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
         assert iso_utc(dt) == "2024-01-01T12:30:00Z"
 
-    def test_image_timestamp_from_filename_parses_epoch_milliseconds(self):
-        result = image_timestamp_from_filename("1772974092396-image0.png")
+    def test_image_timestamp_from_filename_parses_utc_capture_name(self):
+        result = image_timestamp_from_filename("20260524_1430Z_front.jpg")
 
-        assert result is not None
-        assert result.isoformat().startswith("2026-03-08T")
-
-    def test_image_timestamp_from_filename_parses_epoch_seconds(self):
-        result = image_timestamp_from_filename("1772974092-image0.png")
-
-        assert result is not None
-        assert result.isoformat().startswith("2026-03-08T")
+        assert result == datetime(2026, 5, 24, 14, 30, tzinfo=timezone.utc)
 
     def test_image_timestamp_from_filename_rejects_untimestamped_name(self):
         assert image_timestamp_from_filename("capture.jpg") is None
+
+    def test_image_timestamp_from_filename_rejects_invalid_date(self):
+        assert image_timestamp_from_filename("20260231_1430Z_front.jpg") is None
 
 
 class TestHumanization:

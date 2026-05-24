@@ -152,13 +152,13 @@ def test_device_image_route_accepts_signed_request(tmp_data_dir, monkeypatch):
     )
     response = client.post(
         path,
-        headers={**signed_headers, "X-Filename": "capture.jpg", "Content-Type": "image/jpeg"},
+        headers={**signed_headers, "X-Filename": "20260524_1430Z_front.jpg", "Content-Type": "image/jpeg"},
         content=_JPEG_BODY,
     )
 
     assert response.status_code == 201, response.text
     payload = response.json()
-    assert payload["filename"].endswith("-capture.jpg")
+    assert payload["filename"] == "20260524_1430Z_front.jpg"
     assert payload["url"] == f"/stations/{station_id}/images/{payload['filename']}"
 
 
@@ -307,6 +307,7 @@ def test_openapi_lists_frontend_and_device_paths(tmp_data_dir, monkeypatch):
     assert "/server-time" not in paths
     assert "/v1/clock" not in paths
     assert "/device/stations/{station_id}/images" in paths
+    assert "/device/stations/{station_id}/config" in paths
     assert "/device/stations/{station_id}/sensor-readings" in paths
     assert "/v1/auth/login" not in paths
     assert "/v1/stations" not in paths

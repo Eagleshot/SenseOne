@@ -20,16 +20,22 @@ export interface Webcam {
 
 export interface SensorData {
   timestamp: Date;
-  temperature: number;
-  humidity: number;
-  pressure: number;
-  battery: number;
-  windSpeed: number;
-  windDirection: number;
-  visibility: number;
-  uvIndex: number;
-  dewPoint: number;
-  feelsLike: number;
+  temperature: number | null;
+  humidity: number | null;
+  pressure: number | null;
+  battery: number | null;
+  windSpeed: number | null;
+  windDirection: number | null;
+  visibility: number | null;
+  uvIndex: number | null;
+  dewPoint: number | null;
+  feelsLike: number | null;
+  voltage?: number | null;
+  deviceTemperature?: number | null;
+  firmwareVersion?: string | null;
+  nextStart?: string | null;
+  cameraName?: string | null;
+  wakeReason?: string | null;
 }
 
 export interface TimezoneOption {

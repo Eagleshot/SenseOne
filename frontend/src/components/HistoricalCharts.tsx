@@ -137,7 +137,8 @@ const getColorSelection = (value: string): ChartColorSelection => {
   return chartThemeColorOptions[0].value;
 };
 
-const formatMetricValue = (metric: MetricType, value: number) => {
+const formatMetricValue = (metric: MetricType, value: number | null | undefined) => {
+  if (typeof value !== "number") return "—";
   const unit = metricConfig[metric].unit;
   return unit ? `${value} ${unit}` : `${value}`;
 };
@@ -147,7 +148,7 @@ const ChartTooltip = ({
   payload,
 }: {
   active?: boolean;
-  payload?: Array<{ dataKey: string; value: number; color: string; payload: { fullTime: string } }>;
+  payload?: Array<{ dataKey: string; value: number | null; color: string; payload: { fullTime: string } }>;
 }) => {
   if (!active || !payload || payload.length === 0) return null;
   return (

@@ -40,6 +40,9 @@ const SortableHeader = memo<SortableHeaderProps>(({ field, activeField, onSort, 
   </TableHead>
 ));
 
+const formatMetric = (value: number | null | undefined, unit = "") =>
+  typeof value === "number" ? `${value}${unit === "%" ? "%" : unit ? ` ${unit}` : ""}` : "—";
+
 interface RawDataTableProps {
   data: SensorData[];
 }
@@ -162,22 +165,22 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                   paginatedData.map((row) => (
                     <TableRow key={rowKeys.get(row) ?? row.timestamp.toISOString()} className="hover:bg-[hsl(var(--sidebar-background))]">
                       <TableCell className="font-medium">{formattedTimestamps.get(row)}</TableCell>
-                      <TableCell>{row.temperature} {TEMPERATURE_UNIT}</TableCell>
-                      <TableCell>{row.humidity}%</TableCell>
+                      <TableCell>{formatMetric(row.temperature, TEMPERATURE_UNIT)}</TableCell>
+                      <TableCell>{formatMetric(row.humidity, "%")}</TableCell>
                       <TableCell>
                         <span
                           className={cn(
                             "px-2 py-0.5 rounded-full text-xs font-medium",
-                            row.battery >= 60 && "badge-success",
-                            row.battery < 60 && "badge-warning",
-                            row.battery < 30 && "badge-error"
+                            typeof row.battery === "number" && row.battery >= 60 && "badge-success",
+                            typeof row.battery === "number" && row.battery < 60 && "badge-warning",
+                            typeof row.battery === "number" && row.battery < 30 && "badge-error"
                           )}
                         >
-                          {row.battery}%
+                          {formatMetric(row.battery, "%")}
                         </span>
                       </TableCell>
-                      <TableCell>{row.windSpeed} km/h</TableCell>
-                      <TableCell>{row.pressure} hPa</TableCell>
+                      <TableCell>{formatMetric(row.windSpeed, "km/h")}</TableCell>
+                      <TableCell>{formatMetric(row.pressure, "hPa")}</TableCell>
                     </TableRow>
                   ))
                 )}

@@ -7,6 +7,10 @@ import { TEMPERATURE_UNIT } from "@/lib/units";
 export type SortField = "timestamp" | "temperature" | "humidity" | "battery" | "windSpeed" | "pressure";
 export type SortDirection = "asc" | "desc";
 
+const displayValue = (value: number | string | null | undefined) => value ?? "";
+const numericSortValue = (value: number | null | undefined, direction: SortDirection) =>
+  typeof value === "number" ? value : direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+
 export const createFormattedTimestampMap = (data: SensorData[], timezone: string) =>
   new Map(data.map((row) => [row, formatDateTimeLabel(row.timestamp, timezone)]));
 
@@ -33,15 +37,19 @@ export const filterAndSortSensorRows = ({
     working = working.filter((row) => {
       const dateStr = (formattedTimestamps.get(row) ?? "").toLowerCase();
       const values = [row.temperature, row.humidity, row.battery, row.windSpeed, row.pressure]
-        .map(String)
+        .map(displayValue)
         .join(" ");
       return dateStr.includes(query) || values.includes(query);
     });
   }
 
   working.sort((a, b) => {
-    const aVal = sortField === "timestamp" ? a.timestamp.getTime() : a[sortField];
-    const bVal = sortField === "timestamp" ? b.timestamp.getTime() : b[sortField];
+    const aVal = sortField === "timestamp"
+      ? a.timestamp.getTime()
+      : numericSortValue(a[sortField], sortDirection);
+    const bVal = sortField === "timestamp"
+      ? b.timestamp.getTime()
+      : numericSortValue(b[sortField], sortDirection);
     return sortDirection === "asc" ? aVal - bVal : bVal - aVal;
   });
 
@@ -62,11 +70,11 @@ export const buildSensorCsv = (data: SensorData[], timezone: string) => {
   ];
   const rows = data.map((row) => [
     formatCsvTimestamp(row.timestamp, timezone),
-    row.temperature,
-    row.humidity,
-    row.battery,
-    row.windSpeed,
-    row.pressure,
+    displayValue(row.temperature),
+    displayValue(row.humidity),
+    displayValue(row.battery),
+    displayValue(row.windSpeed),
+    displayValue(row.pressure),
   ]);
 
   return [headers, ...rows].map((row) => row.join(",")).join("\n");

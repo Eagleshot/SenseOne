@@ -57,6 +57,20 @@ def test_signatures_match_for_sensor_reading(signers):
     assert cpy.sign_request(**args) == mpy.sign_request(**args)
 
 
+def test_signatures_match_for_empty_body_config_get(signers):
+    cpy, mpy = signers
+    args = dict(
+        station_id="alp-grimsel",
+        secret_b64="ZDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAx",
+        method="GET",
+        path="/device/stations/alp-grimsel/config",
+        body=b"",
+        timestamp=1748123456,
+        nonce_hex="11111111111111111111111111111111",
+    )
+    assert cpy.sign_request(**args) == mpy.sign_request(**args)
+
+
 def test_hmac_implementation_matches_stdlib(signers):
     """The MicroPython port reimplements HMAC inline — verify it matches CPython's hmac."""
     import hmac

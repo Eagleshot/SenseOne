@@ -63,7 +63,7 @@ def test_station_detail_includes_latest_image(station_with_sample_images, monkey
     assert body["id"] == station_id
     assert body["currentImage"] == f"/stations/{station_id}/images/0-test.jpg"
     assert body["lastUpdate"] is not None
-    assert body["nextUpdate"] is not None
+    assert body["nextUpdate"] is None
 
 
 def test_station_detail_includes_latest_battery(station_with_history, monkeypatch):

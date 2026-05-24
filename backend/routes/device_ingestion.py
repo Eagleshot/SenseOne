@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from config import get_data_dir, station_db_path, write_station_runtime_status
+from config import get_data_dir, read_station_config, station_db_path, write_station_runtime_status
 from constants import ALLOWED_IMAGE_EXTENSIONS
-from models import ImageUploadResponse, SensorHistoryResponse, SensorReadingRequest
+from models import AppConfig, ImageUploadResponse, SensorHistoryResponse, SensorReadingRequest
 from routes import ValidStationId
 from station_access import require_station_exists
 from station_db import append_sensor_reading, append_station_image, latest_status_from_db
@@ -90,15 +90,12 @@ def store_uploaded_image(
     images_dir.mkdir(parents=True, exist_ok=True)
     image_timestamp = image_timestamp_from_filename(filename)
     if image_timestamp is None:
-        timestamp_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        stored_filename = f"{timestamp_ms}-{filename}"
-        image_timestamp = image_timestamp_from_filename(stored_filename)
-    else:
-        stored_filename = filename
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="X-Filename must match YYYYMMDD_HHMMZ_<camera>.jpg.",
+        )
 
-    if image_timestamp is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image timestamp.")
-
+    stored_filename = filename
     file_path = images_dir / stored_filename
 
     try:
@@ -124,6 +121,20 @@ def store_uploaded_image(
     )
     sync_station_runtime_status(data_dir, station_id)
     return stored_filename, f"/stations/{station_id}/images/{stored_filename}"
+
+
+@router.get(
+    "/{station_id}/config",
+    response_model=AppConfig,
+    summary="Get station config for a device",
+    description="Return the station config to a device after validating its HMAC signature.",
+)
+async def get_device_station_config(
+    station_id: ValidStationId,
+    request: Request,
+) -> AppConfig:
+    await verify_station_signature(station_id, request)
+    return read_station_config(get_data_dir(), station_id)
 
 
 @router.post(
@@ -178,12 +189,13 @@ async def create_sensor_reading(
     await verify_station_signature(station_id, request)
     timestamp = payload.timestamp or iso_utc(datetime.now(timezone.utc))
     fields = payload.model_dump(exclude={"timestamp", "next_online"})
+    next_online = payload.next_start or payload.next_online
     data_dir = get_data_dir()
     append_sensor_reading(
         station_db_path(data_dir, station_id),
         timestamp,
         fields,
-        next_online=payload.next_online,
+        next_online=next_online,
     )
     sync_station_runtime_status(data_dir, station_id)
     return SensorHistoryResponse(timestamp=timestamp, **fields)

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query
 
-from constants import DEFAULT_ONLINE_THRESHOLD_MINUTES, NEXT_ONLINE_STATUS_BUFFER_MINUTES
+from constants import NEXT_ONLINE_STATUS_BUFFER_MINUTES
 from models import (
     AppConfig,
     SensorHistoryResponse,
@@ -33,7 +33,7 @@ from station_access import (
     require_station_view,
 )
 from station_db import history_from_db, image_captures_from_db, latest_status_from_db
-from utils import humanize_station_id, iso_utc, parse_iso_timestamp, sanitize_station_id
+from utils import humanize_station_id, parse_iso_timestamp, sanitize_station_id
 
 
 router = APIRouter(prefix="/stations", tags=["Stations"])
@@ -56,42 +56,22 @@ def list_station_ids(base_dir: Path) -> list[str]:
     return station_ids
 
 
-def is_station_online(last_online: str | None, next_online: str | None, config: AppConfig) -> bool:
-    """Return station online status from DB-backed runtime timestamps."""
-    now = datetime.now(timezone.utc)
+def is_station_online(next_online: str | None) -> bool:
+    """Determine if a station is currently online based on its next_online timestamp."""
     next_online_at = parse_iso_timestamp(next_online)
-    if next_online_at is not None:
-        return now <= next_online_at + timedelta(minutes=NEXT_ONLINE_STATUS_BUFFER_MINUTES)
-
-    last_online_at = parse_iso_timestamp(last_online)
-    if last_online_at is None:
+    if next_online_at is None:
         return False
-    threshold_minutes = max(config.capture_interval_minutes * 2, DEFAULT_ONLINE_THRESHOLD_MINUTES)
-    return (now - last_online_at).total_seconds() <= threshold_minutes * 60
+    return datetime.now(timezone.utc) <= next_online_at + timedelta(minutes=NEXT_ONLINE_STATUS_BUFFER_MINUTES)
 
 
 def station_status(
     base_dir: Path,
     station_id: str,
-    config: AppConfig,
 ) -> tuple[bool, str | None, str | None, str | None, int | None]:
     """Get full station status. Returns (is_online, current_image, last_update, next_update, battery)."""
     capture, battery, last_online, next_online = latest_status_from_db(station_db_path(base_dir, station_id), station_id)
-
-    latest = None
-    if capture:
-        timestamp = parse_iso_timestamp(capture["timestamp"])
-        if timestamp is not None:
-            latest = (timestamp, capture["url"])
-
-    current_image = latest[1] if latest else None
-    next_update = next_online
-
-    if latest and next_update is None:
-        captured_at, _ = latest
-        next_update = iso_utc(captured_at + timedelta(minutes=config.capture_interval_minutes))
-
-    return is_station_online(last_online, next_online, config), current_image, last_online, next_update, battery
+    current_image = capture["url"] if capture else None
+    return is_station_online(next_online), current_image, last_online, next_online, battery
 
 
 @router.get(
@@ -111,7 +91,7 @@ def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummar
         config = read_station_config(data_dir, station_id)
         if not can_view_station(station_id, user, config):
             continue
-        _, _, last_online, next_online = latest_status_from_db(station_db_path(data_dir, station_id), station_id)
+        _, _, _, next_online = latest_status_from_db(station_db_path(data_dir, station_id), station_id)
         stations.append(
             StationSummaryResponse(
                 id=station_id,
@@ -121,7 +101,7 @@ def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummar
                 country_emoji=config.country_emoji,
                 coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
                 is_public=config.is_public,
-                is_online=is_station_online(last_online, next_online, config),
+                is_online=is_station_online(next_online),
             )
         )
     return stations
@@ -133,7 +113,7 @@ def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummar
     summary="Rotate station device HMAC secret",
     description=(
         "Mint a fresh 256-bit HMAC secret for the device(s) of this station and "
-        "invalidate any previous one. Owner or admin only.\n\n"
+        "invalidate any previous one. Owner only.\n\n"
         "The returned `deviceHmacSecret` is shown **exactly once** — flash it to "
         "the device and discard the response. Subsequent device requests must "
         "sign each call with this secret (see the `hmacSignature` auth scheme)."
@@ -164,7 +144,7 @@ def get_station(
     require_station_view(station_id, user)
     data_dir = get_data_dir()
     config = read_station_config(data_dir, station_id)
-    is_online, current_image, last_update, next_update, battery = station_status(data_dir, station_id, config)
+    is_online, current_image, last_update, next_update, battery = station_status(data_dir, station_id)
     return StationDetailResponse(
         id=station_id,
         name=config.title or humanize_station_id(station_id),

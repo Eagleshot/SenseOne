@@ -13,7 +13,10 @@ _EXTENSION_TO_MEDIA_TYPE: dict[str, str] = {
     ".webp": "image/webp",
 }
 
-_IMAGE_TIMESTAMP_PREFIX = re.compile(r"^(\d{10}|\d{13})(?=[-_.])")
+_IMAGE_CAPTURE_NAME = re.compile(
+    r"^(\d{8})_(\d{4})Z_[A-Za-z0-9._-]+\.(?:jpe?g|png|webp)$",
+    re.IGNORECASE,
+)
 
 
 def sanitize_filename(raw_name: str) -> str:
@@ -76,16 +79,15 @@ def iso_utc(value: datetime) -> str:
 
 
 def image_timestamp_from_filename(filename: str) -> datetime | None:
-    """Parse a leading epoch timestamp from an image filename."""
-    match = _IMAGE_TIMESTAMP_PREFIX.match(filename)
+    """Parse a UTC capture timestamp from YYYYMMDD_HHMMZ_<camera> image names."""
+    match = _IMAGE_CAPTURE_NAME.match(filename)
     if not match:
         return None
 
-    raw_timestamp = match.group(1)
-    divisor = 1000 if len(raw_timestamp) == 13 else 1
+    raw_date, raw_time = match.group(1), match.group(2)
     try:
-        return datetime.fromtimestamp(int(raw_timestamp) / divisor, tz=timezone.utc)
-    except (OSError, OverflowError, ValueError):
+        return datetime.strptime(raw_date + raw_time, "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+    except ValueError:
         return None
 
 
