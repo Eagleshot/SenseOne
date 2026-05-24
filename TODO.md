@@ -1,5 +1,5 @@
-* Add unique link for each station
-* Add link to station description
+* Unique link for each station
+
 * Fix the Charts
     * Make default Icon depending on the unit
     * Save the charts
@@ -27,4 +27,5 @@
 
 * Add the page as a PWA
 
+* User can add an external link in the frontend.
 * Change Units from Metric to Imperial and vice versa

@@ -71,6 +71,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 8,
         "nextUpdateMinutesIn": 22,
         "is_public": False,
+        "owner": "alice",
     },
     {
         "id": "reykjavik-harbor",
@@ -84,6 +85,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 12,
         "nextUpdateMinutesIn": 18,
         "is_public": False,
+        "owner": "bob",
     },
     {
         "id": "yosemite-valley",
@@ -124,6 +126,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 11,
         "nextUpdateMinutesIn": 19,
         "is_public": False,
+        "owner": "alice",
     },
     {
         "id": "bangkok-river",
@@ -154,7 +157,9 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def generate_historical_data(hours: int = 24, station_id: str | None = None) -> list[dict[str, Any]]:
+def generate_historical_data(
+    hours: int = 24, station_id: str | None = None
+) -> list[dict[str, Any]]:
     station_id = station_id or "default"
     seed = int(hashlib.sha256(station_id.encode("utf-8")).hexdigest()[:16], 16)
     rng = random.Random(seed)
@@ -171,21 +176,33 @@ def generate_historical_data(hours: int = 24, station_id: str | None = None) -> 
         hour_of_day = timestamp.hour
         base_temp = 8 + 6 * math.sin((hour_of_day - 6) * math.pi / 12) + temp_offset / 5
         temp_variation = (rng.random() - 0.5) * 2
+        battery_level = max(20, round(battery_base - i * 0.8 + rng.random() * 5))
         data.append(
             {
                 "timestamp": _iso(timestamp),
                 "temperature": round((base_temp + temp_variation) * 10) / 10,
                 "humidity": round(
-                    55 + 20 * math.sin(hour_of_day * math.pi / 12) + humidity_offset + (rng.random() - 0.5) * 10
+                    55
+                    + 20 * math.sin(hour_of_day * math.pi / 12)
+                    + humidity_offset
+                    + (rng.random() - 0.5) * 10
                 ),
                 "pressure": round(1013 + pressure_offset + (rng.random() - 0.5) * 20),
-                "battery": max(20, round(battery_base - i * 0.8 + rng.random() * 5)),
+                "battery": battery_level,
                 "windSpeed": round((5 + rng.random() * 15) * 10) / 10,
                 "windDirection": round((rng.random() * 360 + wind_direction_offset) % 360),
                 "visibility": round((8 + rng.random() * 12 + visibility_offset) * 10) / 10,
                 "uvIndex": round(rng.random() * 8) if 6 <= hour_of_day <= 18 else 0,
                 "dewPoint": round((base_temp - 5 + (rng.random() - 0.5) * 3) * 10) / 10,
                 "feelsLike": round((base_temp - 2 + (rng.random() - 0.5) * 2) * 10) / 10,
+                "voltage": round(
+                    (3.3 + 0.9 * battery_level / 100 + (rng.random() - 0.5) * 0.05) * 100
+                ) / 100,
+                "deviceTemperature": round((base_temp + 7 + (rng.random() - 0.5) * 4) * 10) / 10,
+                "firmwareVersion": None,
+                "nextStart": None,
+                "cameraName": None,
+                "wakeReason": "timer",
             }
         )
     return data

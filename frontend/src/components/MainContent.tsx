@@ -183,7 +183,7 @@ export const MainContent: React.FC = () => {
               >
                 Eagleshot
               </a>{" "}
-              in Switzerland ðŸ‡¨ðŸ‡­
+              in Switzerland &#x1F1E8;&#x1F1ED;
             </p>
             <div className="flex items-center justify-center gap-2 md:justify-end">
               {activeWebcam.id && (
