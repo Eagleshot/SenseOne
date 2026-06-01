@@ -1,14 +1,19 @@
 import { format } from "date-fns";
 
-import type { SensorData } from "@/data/types";
+import type { SensorData, SensorMetricValue } from "@/data/types";
 import { formatCsvTimestamp, formatDateTimeLabel } from "@/lib/datetime";
-import { TEMPERATURE_UNIT } from "@/lib/units";
+import { collectMetricKeys, metricLabel, metricUnit } from "@/lib/metricCatalog";
 
-export type SortField = "timestamp" | "temperature" | "humidity" | "battery" | "windSpeed" | "pressure";
+// "timestamp" or any metric key present in the data.
+export type SortField = string;
 export type SortDirection = "asc" | "desc";
 
-const displayValue = (value: number | string | null | undefined) => value ?? "";
-const numericSortValue = (value: number | null | undefined, direction: SortDirection) =>
+export { collectMetricKeys };
+
+const cellValue = (value: SensorMetricValue | Date | undefined): string =>
+  value === null || value === undefined || value instanceof Date ? "" : `${value}`;
+
+const numericSortValue = (value: SensorMetricValue | Date | undefined, direction: SortDirection) =>
   typeof value === "number" ? value : direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
 
 export const createFormattedTimestampMap = (data: SensorData[], timezone: string) =>
@@ -23,12 +28,14 @@ export const filterAndSortSensorRows = ({
   searchQuery,
   sortField,
   sortDirection,
+  columns,
 }: {
   data: SensorData[];
   formattedTimestamps: Map<SensorData, string>;
   searchQuery: string;
   sortField: SortField;
   sortDirection: SortDirection;
+  columns: string[];
 }) => {
   let working = [...data];
 
@@ -36,20 +43,14 @@ export const filterAndSortSensorRows = ({
     const query = searchQuery.toLowerCase();
     working = working.filter((row) => {
       const dateStr = (formattedTimestamps.get(row) ?? "").toLowerCase();
-      const values = [row.temperature, row.humidity, row.battery, row.windSpeed, row.pressure]
-        .map(displayValue)
-        .join(" ");
+      const values = columns.map((column) => cellValue(row[column])).join(" ").toLowerCase();
       return dateStr.includes(query) || values.includes(query);
     });
   }
 
   working.sort((a, b) => {
-    const aVal = sortField === "timestamp"
-      ? a.timestamp.getTime()
-      : numericSortValue(a[sortField], sortDirection);
-    const bVal = sortField === "timestamp"
-      ? b.timestamp.getTime()
-      : numericSortValue(b[sortField], sortDirection);
+    const aVal = sortField === "timestamp" ? a.timestamp.getTime() : numericSortValue(a[sortField], sortDirection);
+    const bVal = sortField === "timestamp" ? b.timestamp.getTime() : numericSortValue(b[sortField], sortDirection);
     return sortDirection === "asc" ? aVal - bVal : bVal - aVal;
   });
 
@@ -59,26 +60,19 @@ export const filterAndSortSensorRows = ({
 export const paginateRows = <T,>(data: T[], page: number, itemsPerPage: number) =>
   data.slice((page - 1) * itemsPerPage, page * itemsPerPage);
 
-export const buildSensorCsv = (data: SensorData[], timezone: string) => {
-  const headers = [
-    "Timestamp",
-    `Temperature (${TEMPERATURE_UNIT})`,
-    "Humidity (%)",
-    "Battery (%)",
-    "Wind (km/h)",
-    "Pressure (hPa)",
-  ];
+const csvHeader = (column: string): string => {
+  const unit = metricUnit(column);
+  return unit ? `${metricLabel(column)} (${unit})` : metricLabel(column);
+};
+
+export const buildSensorCsv = (data: SensorData[], timezone: string, columns: string[]) => {
+  const headers = ["Timestamp", ...columns.map(csvHeader)];
   const rows = data.map((row) => [
     formatCsvTimestamp(row.timestamp, timezone),
-    displayValue(row.temperature),
-    displayValue(row.humidity),
-    displayValue(row.battery),
-    displayValue(row.windSpeed),
-    displayValue(row.pressure),
+    ...columns.map((column) => cellValue(row[column])),
   ]);
 
   return [headers, ...rows].map((row) => row.join(",")).join("\n");
 };
 
 export const sensorCsvFilename = (date = new Date()) => `sensor-data-${format(date, "yyyy-MM-dd")}.csv`;
-

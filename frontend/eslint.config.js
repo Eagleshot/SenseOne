@@ -19,6 +19,13 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // react-hooks v7 promoted these React-Compiler-aware rules to errors in
+      // its recommended preset. They flag working patterns rather than bugs, so
+      // we keep them as warnings for now; promote to "error" after addressing
+      // the existing call sites if you want to adopt the Compiler rules fully.
+      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/refs": "warn",
+      "react-hooks/preserve-manual-memoization": "warn",
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
     },

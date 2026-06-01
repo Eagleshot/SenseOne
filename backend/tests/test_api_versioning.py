@@ -1,9 +1,5 @@
 """Tests for API routing and public wire schemas."""
 
-import importlib.util
-import sys
-from pathlib import Path
-
 from fastapi.testclient import TestClient
 
 from main import create_app
@@ -13,15 +9,7 @@ from models import AppConfig
 from station_hmac import provision_device_hmac_secret
 from users import create_user
 
-
-_CLIENT_SIGNER_PATH = (
-    Path(__file__).resolve().parents[2] / "clients" / "python" / "eagleshot_signing.py"
-)
-_spec = importlib.util.spec_from_file_location("eagleshot_signing", _CLIENT_SIGNER_PATH)
-assert _spec and _spec.loader
-eagleshot_signing = importlib.util.module_from_spec(_spec)
-sys.modules["eagleshot_signing"] = eagleshot_signing
-_spec.loader.exec_module(eagleshot_signing)
+from tests import _signing as eagleshot_signing
 
 
 TEST_USERNAME = "api-test-admin"

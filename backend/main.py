@@ -105,3 +105,27 @@ def create_app() -> FastAPI:
     app.include_router(stations_images_weather.router, prefix=API_PREFIX)
     app.include_router(device_ingestion.router, prefix=DEVICE_API_PREFIX)
     return app
+
+
+if __name__ == "__main__":
+    # Local dev entrypoint: `python main.py`. BACKEND_PORT (from ../.env, default
+    # 3000) is the single source of truth for the bind port; uvicorn loads the
+    # rest of the config from the same .env, in both the reloader parent and its
+    # child processes.
+    from pathlib import Path
+
+    import uvicorn
+    from dotenv import dotenv_values
+
+    env_file = Path(__file__).resolve().parent.parent / ".env"
+    env_values = dotenv_values(env_file) if env_file.exists() else {}
+    port = int(env_values.get("BACKEND_PORT") or os.getenv("BACKEND_PORT") or 3000)
+
+    uvicorn.run(
+        "main:create_app",
+        factory=True,
+        host="0.0.0.0",
+        port=port,
+        reload=True,
+        env_file=str(env_file) if env_file.exists() else None,
+    )

@@ -44,15 +44,7 @@ export const useAppPreferences = (): AppPreferencesState => {
   const [brandLogoUrl, setBrandLogoUrlState] = useState<string | null>(() => getStoredOptionalString("brandLogoUrl"));
   const [mapStyle, setMapStyleState] = useState<MapStyleKey>(() => {
     const storedStyle = getStoredOptionalString("mapStyle");
-    if (isMapStyleKey(storedStyle)) {
-      return storedStyle;
-    }
-    // Migrate legacy keys (smoothBright/smoothDark â†’ abstract) and persist
-    // the migrated value so we don't repeat this on every load.
-    if (storedStyle === "smoothBright" || storedStyle === "smoothDark") {
-      setStoredString("mapStyle", "abstract");
-    }
-    return "abstract";
+    return isMapStyleKey(storedStyle) ? storedStyle : "abstract";
   });
   const [timezone, setTimezoneState] = useState(() => getStoredString("timezone", "Europe/Zurich"));
 

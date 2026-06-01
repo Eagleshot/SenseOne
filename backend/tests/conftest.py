@@ -82,39 +82,30 @@ def station_with_sample_images(setup_station_dir):
 
 @pytest.fixture
 def station_with_history(setup_station_dir):
-    """Set up station with sample sensor history."""
+    """Set up station with sample sensor history (device-physical metrics only)."""
     data_dir, station_id = setup_station_dir
-    
+
+    import json
     from config import station_db_path
     db_path = station_db_path(data_dir, station_id)
-    
+
     now = datetime.now(timezone.utc)
     with sqlite3.connect(db_path) as conn:
         for i in range(10):
             timestamp = (now - timedelta(hours=i)).isoformat()
+            metrics = {
+                "temperature": 20.0 + i * 0.5,
+                "humidity": 65 - i,
+                "pressure": 1013,
+                "battery": 95 - i,
+                "reception": 80 - i,
+            }
             conn.execute(
-                """
-                INSERT INTO sensor_history
-                (timestamp, temperature, humidity, pressure, battery, wind_speed, 
-                 wind_direction, visibility, uv_index, dew_point, feels_like)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    timestamp,
-                    20.0 + i * 0.5,  # temperature
-                    65 - i,  # humidity
-                    1013,  # pressure
-                    95 - i,  # battery
-                    5.0 + i * 0.1,  # wind_speed
-                    180,  # wind_direction
-                    10.0,  # visibility
-                    5 + i,  # uv_index
-                    15.0,  # dew_point
-                    19.0,  # feels_like
-                ),
+                "INSERT INTO sensor_history (timestamp, metrics) VALUES (?, ?)",
+                (timestamp, json.dumps(metrics)),
             )
         conn.commit()
-    
+
     return data_dir, station_id
 
 

@@ -18,7 +18,24 @@
       "Bash(python -m pytest tests/test_station_hmac.py tests/test_upload_contract.py tests/test_device_routes_signed.py -v)",
       "Bash(python -m pytest --tb=short)",
       "Bash(python -m pytest tests/ -x -q)",
-      "Bash(python -m pytest tests/ -x -q --ignore=tests/test_camera_to_station_migration.py)"
+      "Bash(python -m pytest tests/ -x -q --ignore=tests/test_camera_to_station_migration.py)",
+      "Bash(python -m pytest backend/tests/test_openmv_client_flow.py -v)",
+      "Bash(python -m pytest -q --ignore=tests/test_api_versioning.py --ignore=tests/test_device_routes_signed.py --ignore=tests/test_python_sdk.py --ignore=tests/test_station_hmac.py)",
+      "Bash(python -c \"import config, routes.device_ingestion; print\\('imports OK'\\)\")",
+      "Bash(grep -rn \"write_station_runtime_status\\\\|sync_station_runtime_status\" backend/ --include=*.py)",
+      "Bash(grep -iA3 -B1 \"sensor\\\\|history\")",
+      "Bash(python -m pytest tests/test_models.py tests/test_station_db.py tests/test_upload_contract.py tests/test_station_routes.py tests/test_openmv_client_flow.py -q)",
+      "Bash(python -m pytest -q --ignore=tests/test_api_versioning.py --ignore=tests/test_device_routes_signed.py --ignore=tests/test_python_sdk.py --ignore=tests/test_station_hmac.py --ignore=tests/test_signer_compat.py)",
+      "Bash(python -m seed.seed_mock_data --overwrite)",
+      "Bash(python \"C:/Users/Noel/Desktop/SenseOne2/backend/seed/seed_mock_data.py\" --overwrite)",
+      "Bash(python -c \"import uvicorn, inspect; sig=inspect.signature\\(uvicorn.Config.__init__\\); print\\('env_file' in sig.parameters, 'reload' in sig.parameters, 'factory' in sig.parameters\\)\")",
+      "Bash(python -c \"from dotenv import dotenv_values; print\\('dotenv_values OK'\\)\")",
+      "Bash(npm uninstall *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(grep -rIl \"_owner\\\\|_device_hmac_secret_b64\" backend/data/)",
+      "Bash(python -c 'import sqlite3,sys; c=sqlite3.connect\\('\\\\''__TRACKED_VAR__'\\\\''\\); cols=[r[1] for r in c.execute\\('\\\\''PRAGMA table_info\\(sensor_history\\)'\\\\''\\)]; print\\('\\\\''__TRACKED_VAR__'\\\\''.split\\('\\\\''/'\\\\''\\)[-2], '\\\\''->'\\\\'', '\\\\''JSON'\\\\'' if '\\\\''metrics'\\\\'' in cols else '\\\\''LEGACY-TYPED'\\\\'', cols\\)')"
     ]
   }
 }

@@ -1,5 +1,12 @@
-"""Station configuration management."""
+"""Station configuration management.
 
+A station's user-editable settings live in ``config.yaml`` (an ``AppConfig``
+document). Server-managed metadata — the owning username and the device HMAC
+secret — lives in a separate ``meta.json`` so the two never have to be merged
+on every write.
+"""
+
+import json
 import logging
 import os
 from pathlib import Path
@@ -7,7 +14,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from constants import STATION_CONFIG_FILENAME, STATION_DB_FILENAME
+from constants import STATION_CONFIG_FILENAME, STATION_DB_FILENAME, STATION_META_FILENAME
 from models import AppConfig
 
 
@@ -17,9 +24,8 @@ EDITABLE_CONFIG_FIELDS = tuple(field for field in CONFIG_FIELDS if field not in 
 
 _UNSET: object = object()
 
-META_OWNER_KEY = "_owner"
-META_DEVICE_HMAC_SECRET_KEY = "_device_hmac_secret_b64"
-META_FIELDS = (META_OWNER_KEY, META_DEVICE_HMAC_SECRET_KEY)
+META_OWNER_KEY = "owner"
+META_DEVICE_HMAC_SECRET_KEY = "device_hmac_secret_b64"
 
 
 def get_data_dir() -> Path:
@@ -59,6 +65,32 @@ def _write_config_doc(base_dir: Path, station_id: str, document: dict) -> None:
     )
 
 
+def _meta_path(base_dir: Path, station_id: str) -> Path:
+    return base_dir / station_id / STATION_META_FILENAME
+
+
+def _read_meta_file(base_dir: Path, station_id: str) -> dict:
+    """Read meta.json, returning {} when absent or unreadable."""
+    meta_path = _meta_path(base_dir, station_id)
+    if not meta_path.exists():
+        return {}
+    try:
+        parsed = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logging.error("Failed to read station meta for %s: %s", station_id, exc)
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _write_meta_doc(base_dir: Path, station_id: str, meta: dict) -> None:
+    station_root = base_dir / station_id
+    station_root.mkdir(parents=True, exist_ok=True)
+    _meta_path(base_dir, station_id).write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def read_station_config(base_dir: Path, station_id: str) -> AppConfig:
     """Read station configuration from file. On read or parse failure, falls back to defaults."""
     if not (base_dir / station_id / STATION_CONFIG_FILENAME).exists():
@@ -78,16 +110,14 @@ def read_station_config(base_dir: Path, station_id: str) -> AppConfig:
 
 
 def write_station_config(base_dir: Path, station_id: str, values: AppConfig) -> None:
-    """Write station configuration to file, preserving server-managed meta fields."""
+    """Write the user-editable station configuration to config.yaml.
+
+    Server metadata lives in meta.json, and runtime status (last_online /
+    next_online) is derived from SQLite on read, so config.yaml stays a clean
+    AppConfig document with neither.
+    """
     ensure_station_dir(base_dir, station_id)
-    existing = _read_config_doc(base_dir, station_id)
     payload = {field: getattr(values, field) for field in EDITABLE_CONFIG_FIELDS}
-    last_online, next_online = read_station_runtime_status(base_dir, station_id)
-    payload["last_online"] = last_online
-    payload["next_online"] = next_online
-    for meta_key in META_FIELDS:
-        if meta_key in existing:
-            payload[meta_key] = existing[meta_key]
     _write_config_doc(base_dir, station_id, payload)
 
 
@@ -95,41 +125,22 @@ def read_station_runtime_status(base_dir: Path, station_id: str) -> tuple[str | 
     """Return runtime status timestamps derived from station SQLite data."""
     from station_db import latest_status_from_db
 
-    _, _, last_online, next_online = latest_status_from_db(station_db_path(base_dir, station_id), station_id)
-    return last_online, next_online
+    status = latest_status_from_db(station_db_path(base_dir, station_id), station_id)
+    return status.last_online, status.next_online
 
 
-def write_station_runtime_status(
-    base_dir: Path,
-    station_id: str,
-    *,
-    last_online: str | None,
-    next_online: str | None,
-) -> None:
-    """Update only runtime status fields in the station config document."""
-    ensure_station_dir(base_dir, station_id)
-    existing = _read_config_doc(base_dir, station_id)
-    if not existing:
-        existing = {field: getattr(AppConfig(), field) for field in CONFIG_FIELDS}
-    existing["last_online"] = last_online
-    existing["next_online"] = next_online
-    _write_config_doc(base_dir, station_id, existing)
+def _meta_string(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def read_station_owner(base_dir: Path, station_id: str) -> str | None:
     """Return the username that owns this station, or None if unowned."""
-    value = _read_config_doc(base_dir, station_id).get(META_OWNER_KEY)
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
+    return _meta_string(_read_meta_file(base_dir, station_id).get(META_OWNER_KEY))
 
 
 def read_station_device_hmac_secret_b64(base_dir: Path, station_id: str) -> str | None:
     """Return the base64url-encoded device HMAC secret for this station, or None."""
-    value = _read_config_doc(base_dir, station_id).get(META_DEVICE_HMAC_SECRET_KEY)
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
+    return _meta_string(_read_meta_file(base_dir, station_id).get(META_DEVICE_HMAC_SECRET_KEY))
 
 
 def write_station_meta(
@@ -139,22 +150,20 @@ def write_station_meta(
     owner: str | None = _UNSET,
     device_hmac_secret_b64: str | None = _UNSET,
 ) -> None:
-    """Update server-managed meta fields without touching user-editable config."""
+    """Update server-managed metadata (meta.json) without touching config.yaml."""
     ensure_station_dir(base_dir, station_id)
-    existing = _read_config_doc(base_dir, station_id)
-    if not existing:
-        existing = {field: getattr(AppConfig(), field) for field in CONFIG_FIELDS}
+    meta = _read_meta_file(base_dir, station_id)
     if owner is not _UNSET:
         if owner is None:
-            existing.pop(META_OWNER_KEY, None)
+            meta.pop(META_OWNER_KEY, None)
         else:
-            existing[META_OWNER_KEY] = owner
+            meta[META_OWNER_KEY] = owner
     if device_hmac_secret_b64 is not _UNSET:
         if device_hmac_secret_b64 is None:
-            existing.pop(META_DEVICE_HMAC_SECRET_KEY, None)
+            meta.pop(META_DEVICE_HMAC_SECRET_KEY, None)
         else:
-            existing[META_DEVICE_HMAC_SECRET_KEY] = device_hmac_secret_b64
-    _write_config_doc(base_dir, station_id, existing)
+            meta[META_DEVICE_HMAC_SECRET_KEY] = device_hmac_secret_b64
+    _write_meta_doc(base_dir, station_id, meta)
 
 
 def ensure_station_dir(base_dir: Path, station_id: str) -> None:
@@ -169,7 +178,7 @@ def ensure_station_dir(base_dir: Path, station_id: str) -> None:
         defaults = AppConfig()
         config_file.write_text(
             yaml.safe_dump(
-                {field: getattr(defaults, field) for field in CONFIG_FIELDS},
+                {field: getattr(defaults, field) for field in EDITABLE_CONFIG_FIELDS},
                 sort_keys=False,
                 allow_unicode=True,
             ),

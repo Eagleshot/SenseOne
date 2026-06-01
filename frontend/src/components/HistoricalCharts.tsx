@@ -6,6 +6,7 @@ import {
   ArrowDown,
   ArrowUp,
   Battery,
+  ChevronDown,
   Download,
   Droplets,
   Eye,
@@ -29,11 +30,19 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { formatDateTimeLabel, formatTimeLabel } from "@/lib/datetime";
-import { TEMPERATURE_UNIT } from "@/lib/units";
 import { useApp } from "@/contexts/AppContext";
+import {
+  CHART_PALETTE,
+  collectNumericMetricKeys,
+  formatMetricValue,
+  metricLabel,
+  metricUnit,
+  orderMetricKeys,
+} from "@/lib/metricCatalog";
 import type { SensorData } from "@/data/types";
 import { exportChartAsImage } from "./historicalChartExport";
 import type { ChartIconKey, MetricType } from "./historicalChartUtils";
@@ -48,17 +57,7 @@ type ChartConfig = {
 
 type ChartDraft = Omit<ChartConfig, "id">;
 
-const metricConfig: Record<MetricType, { label: string; unit: string; color: string }> = {
-  temperature: { label: "Temperature", unit: TEMPERATURE_UNIT, color: "hsl(var(--chart-1))" },
-  battery: { label: "Battery Level", unit: "%", color: "hsl(var(--chart-2))" },
-  humidity: { label: "Humidity", unit: "%", color: "hsl(var(--chart-3))" },
-  windSpeed: { label: "Wind Speed", unit: "km/h", color: "hsl(var(--chart-1))" },
-  pressure: { label: "Pressure", unit: "hPa", color: "hsl(var(--chart-2))" },
-  visibility: { label: "Visibility", unit: "km", color: "hsl(var(--chart-3))" },
-  uvIndex: { label: "UV Index", unit: "", color: "hsl(var(--chart-1))" },
-  dewPoint: { label: "Dew Point", unit: TEMPERATURE_UNIT, color: "hsl(var(--chart-2))" },
-  feelsLike: { label: "Feels Like", unit: TEMPERATURE_UNIT, color: "hsl(var(--chart-3))" },
-};
+const metricColor = (index: number) => CHART_PALETTE[index % CHART_PALETTE.length];
 
 const chartIconConfig: Record<ChartIconKey, React.ComponentType<{ className?: string }>> = {
   line: LineChartIcon,
@@ -86,7 +85,7 @@ const ADD_CHART_LABEL = "Add Chart";
 const CHART_SETTINGS_LABEL = "Chart Settings";
 
 const getAutoChartTitle = (metrics: MetricType[]) =>
-  metrics.map((metric) => metricConfig[metric].label).join(" + ") || "Custom Chart";
+  metrics.map((metric) => metricLabel(metric)).join(" + ") || "Custom Chart";
 const chartThemeColorOptions = [
   { value: "hsl(var(--chart-1))", label: "Theme Chart 1" },
   { value: "hsl(var(--chart-2))", label: "Theme Chart 2" },
@@ -97,30 +96,25 @@ type ChartColorSelection = ChartThemeColorValue | "custom";
 
 const createChartId = () => `chart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const ALL_METRICS: MetricType[] = [
-  "temperature",
-  "battery",
-  "humidity",
-  "windSpeed",
-  "pressure",
-  "visibility",
-  "uvIndex",
-  "dewPoint",
-  "feelsLike",
-];
+// Default metric for a new chart: prefer temperature, else the first available
+// metric in the current data (empty when the station has no numeric metrics).
+const getDefaultMetrics = (available: MetricType[]): MetricType[] => {
+  if (available.includes("temperature")) return ["temperature"];
+  return available.length > 0 ? [available[0]] : [];
+};
 
-const getDefaultMetrics = (): MetricType[] => ["temperature"];
+const orderMetrics = (selectedMetrics: MetricType[]) => orderMetricKeys(selectedMetrics);
 
-const orderMetrics = (selectedMetrics: MetricType[]) =>
-  ALL_METRICS.filter((metric) => selectedMetrics.includes(metric));
-
-const createDefaultChart = (): ChartConfig => ({
-  id: createChartId(),
-  title: getAutoChartTitle(getDefaultMetrics()),
-  icon: "line",
-  color: chartThemeColorOptions[0].value,
-  metrics: getDefaultMetrics(),
-});
+const createDefaultChart = (available: MetricType[]): ChartConfig => {
+  const metrics = getDefaultMetrics(available);
+  return {
+    id: createChartId(),
+    title: getAutoChartTitle(metrics),
+    icon: "line",
+    color: chartThemeColorOptions[0].value,
+    metrics,
+  };
+};
 
 const DEFAULT_CUSTOM_COLOR = "#f97316";
 const isValidHexColor = (value: string) => /^#[0-9a-fA-F]{6}$/.test(value);
@@ -137,12 +131,6 @@ const getColorSelection = (value: string): ChartColorSelection => {
   return chartThemeColorOptions[0].value;
 };
 
-const formatMetricValue = (metric: MetricType, value: number | null | undefined) => {
-  if (typeof value !== "number") return "—";
-  const unit = metricConfig[metric].unit;
-  return unit ? `${value} ${unit}` : `${value}`;
-};
-
 const ChartTooltip = ({
   active,
   payload,
@@ -156,13 +144,12 @@ const ChartTooltip = ({
       <p className="text-xs text-muted-foreground">{payload[0]?.payload?.fullTime}</p>
       <div className="mt-2 space-y-1">
         {payload.map((item) => {
-          const metric = item.dataKey as MetricType;
-          if (!(metric in metricConfig)) return null;
+          const metric = item.dataKey;
           return (
             <div key={metric} className="flex items-center justify-between gap-4 text-xs">
               <span className="flex items-center gap-2 text-muted-foreground">
                 <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
-                {metricConfig[metric].label}
+                {metricLabel(metric)}
               </span>
               <span className="font-semibold text-foreground">{formatMetricValue(metric, item.value)}</span>
             </div>
@@ -176,6 +163,7 @@ const ChartTooltip = ({
 type ChartCardProps = {
   config: ChartConfig;
   data: SensorData[];
+  availableMetrics: MetricType[];
   timezone: string;
   isDarkMode: boolean;
   isSettingsOpen: boolean;
@@ -190,6 +178,7 @@ type ChartCardProps = {
 const ChartCard: React.FC<ChartCardProps> = ({
   config,
   data,
+  availableMetrics,
   timezone,
   isDarkMode,
   isSettingsOpen,
@@ -208,7 +197,6 @@ const ChartCard: React.FC<ChartCardProps> = ({
     color: config.color,
     metrics: config.metrics,
   });
-  const [metricsDropdownOpen, setMetricsDropdownOpen] = useState(false);
   const [colorSelection, setColorSelection] = useState<ChartColorSelection>(() => getColorSelection(config.color));
   const [customColor, setCustomColor] = useState<string>(
     isValidHexColor(config.color) ? config.color : DEFAULT_CUSTOM_COLOR
@@ -224,23 +212,14 @@ const ChartCard: React.FC<ChartCardProps> = ({
     });
     setColorSelection(getColorSelection(config.color));
     setCustomColor(isValidHexColor(config.color) ? config.color : DEFAULT_CUSTOM_COLOR);
-    setMetricsDropdownOpen(false);
   }, [config, isSettingsOpen]);
 
   const chartData = useMemo(
     () =>
-      data.map((row) => ({
-        time: formatTimeLabel(row.timestamp, timezone),
-        fullTime: formatDateTimeLabel(row.timestamp, timezone),
-        temperature: row.temperature,
-        battery: row.battery,
-        humidity: row.humidity,
-        windSpeed: row.windSpeed,
-        pressure: row.pressure,
-        visibility: row.visibility,
-        uvIndex: row.uvIndex,
-        dewPoint: row.dewPoint,
-        feelsLike: row.feelsLike,
+      data.map(({ timestamp, ...metrics }) => ({
+        ...metrics,
+        time: formatTimeLabel(timestamp, timezone),
+        fullTime: formatDateTimeLabel(timestamp, timezone),
       })),
     [data, timezone]
   );
@@ -274,7 +253,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
   const handleSave = () => {
     const nextColor =
       colorSelection === "custom" ? (isValidHexColor(customColor) ? customColor : DEFAULT_CUSTOM_COLOR) : draft.color;
-    const nextMetrics = draft.metrics.length > 0 ? orderMetrics(draft.metrics) : getDefaultMetrics();
+    const nextMetrics = draft.metrics.length > 0 ? orderMetrics(draft.metrics) : getDefaultMetrics(availableMetrics);
     onUpdate(config.id, {
       title: draft.title.trim() || getAutoChartTitle(nextMetrics),
       icon: draft.icon,
@@ -295,12 +274,18 @@ const ChartCard: React.FC<ChartCardProps> = ({
   };
 
   const yAxisUnit = useMemo(() => {
-    const units = Array.from(new Set(config.metrics.map((metric) => metricConfig[metric].unit).filter(Boolean)));
+    const units = Array.from(new Set(config.metrics.map((metric) => metricUnit(metric)).filter(Boolean)));
     return units.length === 1 ? units[0] : "";
   }, [config.metrics]);
   const metricsLabel = useMemo(
-    () => config.metrics.map((metric) => metricConfig[metric].label).join(" + "),
+    () => config.metrics.map((metric) => metricLabel(metric)).join(" + "),
     [config.metrics]
+  );
+  // Offer every metric in the current data, plus any the chart already uses
+  // (so a saved metric that's momentarily absent can still be toggled off).
+  const metricOptions = useMemo(
+    () => orderMetricKeys([...availableMetrics, ...draft.metrics]),
+    [availableMetrics, draft.metrics]
   );
 
   const formatYAxisTick = (value: number | string) => {
@@ -363,42 +348,45 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm text-muted-foreground">Metrics</label>
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setMetricsDropdownOpen(!metricsDropdownOpen)}
-                      className="inline-flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <span className="text-left">
-                        {draft.metrics.length > 0
-                          ? draft.metrics.map((m) => metricConfig[m].label).join(", ")
-                          : "Select metrics..."}
-                      </span>
-                      <span className="ml-2 opacity-50">â–¼</span>
-                    </button>
-                    {metricsDropdownOpen && (
-                      <div className="absolute z-50 mt-1 w-full rounded-md border border-input bg-popover shadow-md">
-                        {ALL_METRICS.map((metric, index) => (
-                          <label
-                            key={metric}
-                            className={`flex items-center gap-3 px-3 py-2 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground transition-colors ${
-                              index < ALL_METRICS.length - 1 ? 'border-b border-border/50' : ''
-                            }`}
-                          >
-                            <Checkbox
-                              checked={draft.metrics.includes(metric)}
-                              onCheckedChange={(checked) => handleMetricToggle(metric, checked)}
-                              disabled={draft.metrics.length === 1 && draft.metrics.includes(metric)}
-                            />
-                            <span className="flex flex-1 items-center justify-between gap-2">
-                              <span className="font-medium text-foreground">{metricConfig[metric].label}</span>
-                              <span className="text-xs text-muted-foreground">{metricConfig[metric].unit || "Value"}</span>
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="chrome-shell-stroke flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 data-[state=open]:border-ring disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <span className="line-clamp-1 text-left">
+                          {draft.metrics.length > 0
+                            ? draft.metrics.map((m) => metricLabel(m)).join(", ")
+                            : "Select metrics..."}
+                        </span>
+                        <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+                      {metricOptions.length === 0 ? (
+                        <div className="px-3 py-2 text-sm text-muted-foreground">No metrics in this range.</div>
+                      ) : (
+                        <div className="max-h-64 overflow-auto py-1">
+                          {metricOptions.map((metric) => (
+                            <label
+                              key={metric}
+                              className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                            >
+                              <Checkbox
+                                checked={draft.metrics.includes(metric)}
+                                onCheckedChange={(checked) => handleMetricToggle(metric, checked)}
+                                disabled={draft.metrics.length === 1 && draft.metrics.includes(metric)}
+                              />
+                              <span className="flex flex-1 items-center justify-between gap-2">
+                                <span className="font-medium text-foreground">{metricLabel(metric)}</span>
+                                <span className="text-xs text-muted-foreground">{metricUnit(metric) || "Value"}</span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-2">
@@ -544,20 +532,23 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 width={72}
               />
               <Tooltip content={<ChartTooltip />} />
-              {config.metrics.map((metric, metricIndex) => (
-                <Line
-                  key={`${config.id}-${metric}`}
-                  type="monotone"
-                  dataKey={metric}
-                  stroke={metricIndex === 0 ? config.color : metricConfig[metric].color}
-                  strokeWidth={2.2}
-                  dot={false}
-                  activeDot={{ r: 4, fill: metricIndex === 0 ? config.color : metricConfig[metric].color }}
-                  isAnimationActive
-                  animationDuration={400}
-                  animationEasing="ease-out"
-                />
-              ))}
+              {config.metrics.map((metric, metricIndex) => {
+                const stroke = metricIndex === 0 ? config.color : metricColor(metricIndex);
+                return (
+                  <Line
+                    key={`${config.id}-${metric}`}
+                    type="monotone"
+                    dataKey={metric}
+                    stroke={stroke}
+                    strokeWidth={2.2}
+                    dot={false}
+                    activeDot={{ r: 4, fill: stroke }}
+                    isAnimationActive
+                    animationDuration={400}
+                    animationEasing="ease-out"
+                  />
+                );
+              })}
             </ComposedChart>
           </ResponsiveContainer>
         )}
@@ -583,8 +574,13 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({
   const previousAddSignal = useRef<number | undefined>(addChartSignal);
   const previousStationId = useRef(activeStationId);
 
+  const availableMetrics = useMemo(() => collectNumericMetricKeys(data), [data]);
+  // Read inside the add-chart effect without adding it to that effect's deps.
+  const availableMetricsRef = useRef(availableMetrics);
+  availableMetricsRef.current = availableMetrics;
+
   const addChart = () => {
-    const nextChart = createDefaultChart();
+    const nextChart = createDefaultChart(availableMetricsRef.current);
     setCharts((prev) => [...prev, nextChart]);
     setActiveSettingsChartId(nextChart.id);
   };
@@ -605,7 +601,7 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({
       return;
     }
     if (addChartSignal !== previousAddSignal.current) {
-      const nextChart = createDefaultChart();
+      const nextChart = createDefaultChart(availableMetricsRef.current);
       setCharts((prev) => [...prev, nextChart]);
       setActiveSettingsChartId(nextChart.id);
       previousAddSignal.current = addChartSignal;
@@ -663,6 +659,7 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({
             key={chart.id}
             config={chart}
             data={data}
+            availableMetrics={availableMetrics}
             timezone={timezone}
             isDarkMode={isDarkMode}
             isSettingsOpen={activeSettingsChartId === chart.id}

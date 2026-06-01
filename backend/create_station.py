@@ -8,7 +8,7 @@ from pathlib import Path
 
 from config import ensure_station_dir, get_data_dir, write_station_config, write_station_meta
 from models import AppConfig
-from utils import sanitize_station_id
+from utils import sanitize_station_id, unique_station_id
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,19 +34,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def unique_station_id(data_dir: Path, requested_id: str) -> str:
-    station_id = sanitize_station_id(requested_id)
-    if not (data_dir / station_id).exists():
-        return station_id
-
-    for index in range(2, 1000):
-        candidate = sanitize_station_id(f"{station_id}-{index}")
-        if not (data_dir / candidate).exists():
-            return candidate
-
-    raise SystemExit("Could not create a unique station id.")
-
-
 def validate_coordinates(lat: float, lon: float) -> None:
     if not -90 <= lat <= 90:
         raise SystemExit("--lat must be between -90 and 90.")
@@ -68,7 +55,12 @@ def main() -> None:
     data_dir = get_data_dir()
     owner = args.owner.strip() if args.owner else ""
     requested_id = args.station_id or title
-    station_id = unique_station_id(data_dir, requested_id) if args.auto_suffix else sanitize_station_id(requested_id)
+    if args.auto_suffix:
+        station_id = unique_station_id(data_dir, requested_id)
+        if station_id is None:
+            raise SystemExit("Could not create a unique station id.")
+    else:
+        station_id = sanitize_station_id(requested_id)
     station_root = data_dir / station_id
 
     if station_root.exists():

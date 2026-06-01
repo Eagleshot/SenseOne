@@ -16,26 +16,19 @@ export interface Webcam {
   lastUpdate?: Date | null;
   nextUpdate?: Date | null;
   isPublic?: boolean;
+  firmwareVersion?: string | null;
+  wakeReason?: string | null;
 }
 
+export type SensorMetricValue = number | string | null;
+
+// A reading is a timestamp plus whatever metrics the device reported. Metric
+// keys are not fixed: a station can send any field (battery, reception, soil
+// moisture, …) and it is rendered from the metric catalog. Weather-derived
+// values are not part of readings — they come live from the weather proxy.
 export interface SensorData {
   timestamp: Date;
-  temperature: number | null;
-  humidity: number | null;
-  pressure: number | null;
-  battery: number | null;
-  windSpeed: number | null;
-  windDirection: number | null;
-  visibility: number | null;
-  uvIndex: number | null;
-  dewPoint: number | null;
-  feelsLike: number | null;
-  voltage?: number | null;
-  deviceTemperature?: number | null;
-  firmwareVersion?: string | null;
-  nextStart?: string | null;
-  cameraName?: string | null;
-  wakeReason?: string | null;
+  [metric: string]: SensorMetricValue | Date | undefined;
 }
 
 export interface TimezoneOption {

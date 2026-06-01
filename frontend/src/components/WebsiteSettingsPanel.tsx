@@ -20,6 +20,7 @@ import {
 
 export const WebsiteSettingsPanel: React.FC = () => {
   const {
+    activeWebcam,
     colorTheme,
     setColorTheme,
     brandLogoUrl,
@@ -176,9 +177,16 @@ export const WebsiteSettingsPanel: React.FC = () => {
       className="panel-shell"
     >
       <div className="p-6 space-y-6">
-        <div className="flex items-center gap-2">
-          <Settings className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-2xl font-bold text-foreground">Settings</h2>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Settings className="h-5 w-5 text-muted-foreground" />
+            <h2 className="text-2xl font-bold text-foreground">Settings</h2>
+          </div>
+          {activeWebcam.firmwareVersion ? (
+            <span className="text-xs text-muted-foreground" title="Firmware version reported by the device">
+              Firmware: V{activeWebcam.firmwareVersion}
+            </span>
+          ) : null}
         </div>
 
         <Accordion type="multiple" defaultValue={[]} className="space-y-2">

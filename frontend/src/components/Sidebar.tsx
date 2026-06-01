@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  Check,
   ChevronDown,
+  Copy,
   ExternalLink,
   Globe,
   Lock,
@@ -11,6 +13,7 @@ import {
   MapPin,
   Menu,
   Moon,
+  Plus,
   Search,
   Settings,
   Sun,
@@ -18,14 +21,23 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { CoordinatePicker } from "@/components/CoordinatePicker";
 
 import { useApp } from "@/contexts/AppContext";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { formatLocationWithFlag } from "@/lib/location";
+import { formatLocationWithFlag, getCountryOptions, getFlagEmojiFromCountryName } from "@/lib/location";
 import { OPEN_FULLSCREEN_MAP_EVENT } from "@/lib/mapEvents";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +60,8 @@ export const Sidebar: React.FC = () => {
     authReady,
     login,
     logout,
+    createStation,
+    rotateDeviceSecret,
   } = useApp();
   const isMobile = useIsMobile();
   const [searchQuery, setSearchQuery] = useState("");
@@ -57,6 +71,28 @@ export const Sidebar: React.FC = () => {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isCreateStationOpen, setIsCreateStationOpen] = useState(false);
+  const [newStationTitle, setNewStationTitle] = useState("");
+  const [newStationLocation, setNewStationLocation] = useState("");
+  const [newStationCountry, setNewStationCountry] = useState("");
+  const [newStationLat, setNewStationLat] = useState<number | null>(null);
+  const [newStationLon, setNewStationLon] = useState<number | null>(null);
+  const [newStationAlt, setNewStationAlt] = useState("");
+  const [newStationIsPublic, setNewStationIsPublic] = useState(false);
+  const [createStationError, setCreateStationError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ title?: string; coordinates?: string }>({});
+  const [isCreatingStation, setIsCreatingStation] = useState(false);
+  // Post-create one-time device secret view.
+  const [createdStationId, setCreatedStationId] = useState<string | null>(null);
+  const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+  const [createdSecretError, setCreatedSecretError] = useState<string | null>(null);
+  const [isProvisioningSecret, setIsProvisioningSecret] = useState(false);
+  const [secretCopied, setSecretCopied] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const latInputRef = useRef<HTMLInputElement>(null);
+
+  const newStationFlag = getFlagEmojiFromCountryName(newStationCountry.trim());
+  const countryOptions = useMemo(() => getCountryOptions(), []);
 
   const sidebarInsetFocusClass =
     "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/35 focus-visible:ring-offset-0";
@@ -98,6 +134,98 @@ export const Sidebar: React.FC = () => {
     await logout();
     setLoginPassword("");
     setLoginError(null);
+  };
+
+  const resetCreateStationForm = () => {
+    setNewStationTitle("");
+    setNewStationLocation("");
+    setNewStationCountry("");
+    setNewStationLat(null);
+    setNewStationLon(null);
+    setNewStationAlt("");
+    setNewStationIsPublic(false);
+    setCreateStationError(null);
+    setFieldErrors({});
+    setCreatedStationId(null);
+    setCreatedSecret(null);
+    setCreatedSecretError(null);
+    setIsProvisioningSecret(false);
+    setSecretCopied(false);
+  };
+
+  const handleCreateStationSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCreateStationError(null);
+
+    const title = newStationTitle.trim();
+    const errors: { title?: string; coordinates?: string } = {};
+    if (!title) {
+      errors.title = "Station name is required.";
+    }
+    if (newStationLat === null || newStationLon === null) {
+      errors.coordinates = "Pick the station location on the map.";
+    }
+    if (errors.title || errors.coordinates) {
+      setFieldErrors(errors);
+      if (errors.title) titleInputRef.current?.focus();
+      else latInputRef.current?.focus();
+      return;
+    }
+    setFieldErrors({});
+
+    const altValue = newStationAlt.trim();
+    const alt = altValue ? Number(altValue) : 0;
+    if (!Number.isFinite(alt)) {
+      setFieldErrors({ coordinates: "Altitude must be a valid number." });
+      return;
+    }
+
+    setIsCreatingStation(true);
+    const result = await createStation({
+      title,
+      location: newStationLocation.trim(),
+      country: newStationCountry.trim(),
+      countryEmoji: newStationFlag ?? "",
+      lat: newStationLat as number,
+      lon: newStationLon as number,
+      alt,
+      isPublic: newStationIsPublic,
+    });
+    setIsCreatingStation(false);
+
+    if (!result.success || !result.stationId) {
+      setCreateStationError(result.error ?? "Unable to create station.");
+      return;
+    }
+
+    // Station exists; switch to the success view and provision its one-time
+    // device secret so the camera can start sending data.
+    setCreatedStationId(result.stationId);
+    setIsProvisioningSecret(true);
+    const secretResult = await rotateDeviceSecret(result.stationId);
+    setIsProvisioningSecret(false);
+    if (secretResult.success && secretResult.secret) {
+      setCreatedSecret(secretResult.secret);
+    } else {
+      setCreatedSecretError(secretResult.error ?? "Unable to provision a device secret.");
+    }
+    if (isMobile) setSidebarOpen(false);
+  };
+
+  const handleCopySecret = async () => {
+    if (!createdSecret) return;
+    try {
+      await navigator.clipboard.writeText(createdSecret);
+      setSecretCopied(true);
+      window.setTimeout(() => setSecretCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable; the secret is still selectable in the field.
+    }
+  };
+
+  const handleCloseCreateStation = () => {
+    resetCreateStationForm();
+    setIsCreateStationOpen(false);
   };
 
   const handleOpenFullscreenMap = () => {
@@ -282,6 +410,241 @@ export const Sidebar: React.FC = () => {
               <p className="text-xs text-muted-foreground">
                 Signed in as <span className="font-medium text-sidebar-foreground">{authenticatedUsername}</span>
               </p>
+              <Dialog
+                open={isCreateStationOpen}
+                onOpenChange={(open) => {
+                  setIsCreateStationOpen(open);
+                  if (!open) {
+                    setCreateStationError(null);
+                    setFieldErrors({});
+                    if (createdStationId) resetCreateStationForm();
+                  }
+                }}
+              >
+                <DialogTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className={cn(
+                      "w-full justify-center gap-2 border-sidebar-border/90 bg-background/60 text-sidebar-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] hover:border-primary/25 hover:bg-background/80",
+                      sidebarInsetFocusClass
+                    )}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    New station
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-2xl">
+                  <DialogHeader>
+                    <DialogTitle>{createdStationId ? "Station created" : "New station"}</DialogTitle>
+                  </DialogHeader>
+
+                  {createdStationId ? (
+                    <div className="space-y-4">
+                      <p className="text-sm text-muted-foreground">
+                        Your station is ready. Add this one-time device secret to the camera so it can start sending
+                        data — it won&apos;t be shown again.
+                      </p>
+                      {isProvisioningSecret ? (
+                        <p className="text-sm text-muted-foreground">Generating device secret…</p>
+                      ) : createdSecret ? (
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium text-muted-foreground" htmlFor="new-station-secret">
+                            Device secret
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              id="new-station-secret"
+                              readOnly
+                              value={createdSecret}
+                              onFocus={(event) => event.target.select()}
+                              className="font-mono text-xs"
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={handleCopySecret}
+                              aria-label="Copy device secret"
+                              className="btn-panel shrink-0"
+                            >
+                              {secretCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p role="alert" className="text-sm text-destructive">
+                          {createdSecretError ?? "Unable to provision a device secret."} You can generate one later
+                          from the station settings.
+                        </p>
+                      )}
+                      <DialogFooter>
+                        <Button type="button" onClick={handleCloseCreateStation}>
+                          Done
+                        </Button>
+                      </DialogFooter>
+                    </div>
+                  ) : (
+                    <form className="space-y-4" onSubmit={handleCreateStationSubmit}>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium text-muted-foreground" htmlFor="new-station-title">
+                          Name
+                        </label>
+                        <Input
+                          id="new-station-title"
+                          ref={titleInputRef}
+                          value={newStationTitle}
+                          onChange={(event) => setNewStationTitle(event.target.value)}
+                          placeholder="Ridge station"
+                          maxLength={120}
+                          required
+                          aria-invalid={fieldErrors.title ? true : undefined}
+                          aria-describedby={fieldErrors.title ? "new-station-title-error" : undefined}
+                        />
+                        {fieldErrors.title && (
+                          <p id="new-station-title-error" role="alert" className="text-xs text-destructive">
+                            {fieldErrors.title}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-[1fr_0.7fr]">
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium text-muted-foreground" htmlFor="new-station-location">
+                            Location
+                          </label>
+                          <Input
+                            id="new-station-location"
+                            value={newStationLocation}
+                            onChange={(event) => setNewStationLocation(event.target.value)}
+                            placeholder="Davos"
+                            maxLength={160}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium text-muted-foreground" htmlFor="new-station-country">
+                            Country
+                          </label>
+                          <Select value={newStationCountry} onValueChange={setNewStationCountry}>
+                            <SelectTrigger id="new-station-country">
+                              <SelectValue placeholder="Select country" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {countryOptions.map((country) => (
+                                <SelectItem key={country.code} value={country.name}>
+                                  <span className="flex items-center gap-2">
+                                    {country.flag && <span aria-hidden="true">{country.flag}</span>}
+                                    {country.name}
+                                  </span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium text-muted-foreground">Location on map</label>
+                        <CoordinatePicker
+                          lat={newStationLat}
+                          lon={newStationLon}
+                          onChange={(lat, lon) => {
+                            setNewStationLat(lat);
+                            setNewStationLon(lon);
+                          }}
+                        />
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="space-y-2">
+                            <label className="text-xs font-medium text-muted-foreground" htmlFor="new-station-lat">
+                              Lat
+                            </label>
+                            <Input
+                              id="new-station-lat"
+                              ref={latInputRef}
+                              type="number"
+                              inputMode="decimal"
+                              value={newStationLat ?? ""}
+                              onChange={(event) =>
+                                setNewStationLat(event.target.value === "" ? null : Number(event.target.value))
+                              }
+                              min={-90}
+                              max={90}
+                              step="any"
+                              placeholder="47.376"
+                              aria-invalid={fieldErrors.coordinates ? true : undefined}
+                              aria-describedby={fieldErrors.coordinates ? "new-station-coords-error" : undefined}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-medium text-muted-foreground" htmlFor="new-station-lon">
+                              Lon
+                            </label>
+                            <Input
+                              id="new-station-lon"
+                              type="number"
+                              inputMode="decimal"
+                              value={newStationLon ?? ""}
+                              onChange={(event) =>
+                                setNewStationLon(event.target.value === "" ? null : Number(event.target.value))
+                              }
+                              min={-180}
+                              max={180}
+                              step="any"
+                              placeholder="8.541"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-medium text-muted-foreground" htmlFor="new-station-alt">
+                              Alt (m)
+                            </label>
+                            <Input
+                              id="new-station-alt"
+                              type="number"
+                              inputMode="decimal"
+                              value={newStationAlt}
+                              onChange={(event) => setNewStationAlt(event.target.value)}
+                              step="any"
+                              placeholder="1200"
+                            />
+                          </div>
+                        </div>
+                        {fieldErrors.coordinates && (
+                          <p id="new-station-coords-error" role="alert" className="text-xs text-destructive">
+                            {fieldErrors.coordinates}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+                        <label className="text-sm font-medium text-foreground" htmlFor="new-station-public">
+                          Public station
+                        </label>
+                        <Switch
+                          id="new-station-public"
+                          checked={newStationIsPublic}
+                          onCheckedChange={setNewStationIsPublic}
+                        />
+                      </div>
+
+                      {createStationError && (
+                        <p role="alert" className="text-sm text-destructive">
+                          {createStationError}
+                        </p>
+                      )}
+
+                      <DialogFooter>
+                        <Button type="button" variant="outline" className="btn-panel" onClick={handleCloseCreateStation}>
+                          Cancel
+                        </Button>
+                        <Button type="submit" disabled={isCreatingStation}>
+                          {isCreatingStation ? "Creating..." : "Create station"}
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  )}
+                </DialogContent>
+              </Dialog>
               <Button
                 type="button"
                 variant="outline"

@@ -5,10 +5,7 @@ drift between the two implementations fails the build.
 """
 
 import asyncio
-import importlib.util
-import sys
 import time
-from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -22,17 +19,7 @@ from station_hmac import (
     verify_station_signature,
 )
 
-
-# Load the reference client signer from the clients/python directory without
-# requiring it to be on the Python path during normal app runs.
-_CLIENT_SIGNER_PATH = (
-    Path(__file__).resolve().parents[2] / "clients" / "python" / "eagleshot_signing.py"
-)
-_spec = importlib.util.spec_from_file_location("eagleshot_signing", _CLIENT_SIGNER_PATH)
-assert _spec and _spec.loader
-eagleshot_signing = importlib.util.module_from_spec(_spec)
-sys.modules["eagleshot_signing"] = eagleshot_signing
-_spec.loader.exec_module(eagleshot_signing)
+from tests import _signing as eagleshot_signing
 
 
 def _build_request(method: str, path: str, headers: dict[str, str], body: bytes) -> Request:

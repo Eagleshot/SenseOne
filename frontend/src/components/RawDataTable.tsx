@@ -8,11 +8,12 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 import { cn } from "@/lib/utils";
-import { TEMPERATURE_UNIT } from "@/lib/units";
 import { useApp } from "@/contexts/AppContext";
+import { formatMetricValue, metricLabel } from "@/lib/metricCatalog";
 import type { SensorData } from "@/data/types";
 import {
   buildSensorCsv,
+  collectMetricKeys,
   createFormattedTimestampMap,
   createSensorRowKeyMap,
   filterAndSortSensorRows,
@@ -40,9 +41,6 @@ const SortableHeader = memo<SortableHeaderProps>(({ field, activeField, onSort, 
   </TableHead>
 ));
 
-const formatMetric = (value: number | null | undefined, unit = "") =>
-  typeof value === "number" ? `${value}${unit === "%" ? "%" : unit ? ` ${unit}` : ""}` : "—";
-
 interface RawDataTableProps {
   data: SensorData[];
 }
@@ -56,6 +54,8 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
+  const columns = useMemo(() => collectMetricKeys(data), [data]);
+
   const formattedTimestamps = useMemo(
     () => createFormattedTimestampMap(data, timezone),
     [data, timezone]
@@ -66,8 +66,8 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
   );
 
   const filteredAndSortedData = useMemo(
-    () => filterAndSortSensorRows({ data, formattedTimestamps, searchQuery, sortField, sortDirection }),
-    [data, formattedTimestamps, searchQuery, sortDirection, sortField]
+    () => filterAndSortSensorRows({ data, formattedTimestamps, searchQuery, sortField, sortDirection, columns }),
+    [data, formattedTimestamps, searchQuery, sortDirection, sortField, columns]
   );
 
   const totalPages = Math.max(1, Math.ceil(filteredAndSortedData.length / itemsPerPage));
@@ -84,7 +84,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
   }, [sortField, sortDirection]);
 
   const handleDownloadCSV = useCallback(() => {
-    const csv = buildSensorCsv(filteredAndSortedData, timezone);
+    const csv = buildSensorCsv(filteredAndSortedData, timezone, columns);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -94,10 +94,29 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [filteredAndSortedData, timezone]);
+  }, [filteredAndSortedData, timezone, columns]);
 
   const startIndex = filteredAndSortedData.length === 0 ? 0 : (page - 1) * itemsPerPage + 1;
   const endIndex = Math.min(page * itemsPerPage, filteredAndSortedData.length);
+
+  const renderCell = (row: SensorData, column: string) => {
+    const value = row[column];
+    if (column === "battery") {
+      return (
+        <span
+          className={cn(
+            "px-2 py-0.5 rounded-full text-xs font-medium",
+            typeof value === "number" && value >= 60 && "badge-success",
+            typeof value === "number" && value < 60 && "badge-warning",
+            typeof value === "number" && value < 30 && "badge-error"
+          )}
+        >
+          {formatMetricValue(column, value)}
+        </span>
+      );
+    }
+    return formatMetricValue(column, value);
+  };
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -147,17 +166,17 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
               <TableHeader>
                 <TableRow className="bg-[hsl(var(--sidebar-background))] dark:bg-muted">
                   <SortableHeader field="timestamp" activeField={sortField} onSort={handleSort}>Timestamp</SortableHeader>
-                  <SortableHeader field="temperature" activeField={sortField} onSort={handleSort}>Temp</SortableHeader>
-                  <SortableHeader field="humidity" activeField={sortField} onSort={handleSort}>Humidity</SortableHeader>
-                  <SortableHeader field="battery" activeField={sortField} onSort={handleSort}>Battery</SortableHeader>
-                  <SortableHeader field="windSpeed" activeField={sortField} onSort={handleSort}>Wind</SortableHeader>
-                  <SortableHeader field="pressure" activeField={sortField} onSort={handleSort}>Pressure</SortableHeader>
+                  {columns.map((column) => (
+                    <SortableHeader key={column} field={column} activeField={sortField} onSort={handleSort}>
+                      {metricLabel(column)}
+                    </SortableHeader>
+                  ))}
                 </TableRow>
               </TableHeader>
               <TableBody className="bg-muted/70 dark:bg-transparent">
                 {paginatedData.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-8">
+                    <TableCell colSpan={columns.length + 1} className="text-center text-sm text-muted-foreground py-8">
                       No data available for the selected range.
                     </TableCell>
                   </TableRow>
@@ -165,22 +184,9 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                   paginatedData.map((row) => (
                     <TableRow key={rowKeys.get(row) ?? row.timestamp.toISOString()} className="hover:bg-[hsl(var(--sidebar-background))]">
                       <TableCell className="font-medium">{formattedTimestamps.get(row)}</TableCell>
-                      <TableCell>{formatMetric(row.temperature, TEMPERATURE_UNIT)}</TableCell>
-                      <TableCell>{formatMetric(row.humidity, "%")}</TableCell>
-                      <TableCell>
-                        <span
-                          className={cn(
-                            "px-2 py-0.5 rounded-full text-xs font-medium",
-                            typeof row.battery === "number" && row.battery >= 60 && "badge-success",
-                            typeof row.battery === "number" && row.battery < 60 && "badge-warning",
-                            typeof row.battery === "number" && row.battery < 30 && "badge-error"
-                          )}
-                        >
-                          {formatMetric(row.battery, "%")}
-                        </span>
-                      </TableCell>
-                      <TableCell>{formatMetric(row.windSpeed, "km/h")}</TableCell>
-                      <TableCell>{formatMetric(row.pressure, "hPa")}</TableCell>
+                      {columns.map((column) => (
+                        <TableCell key={column}>{renderCell(row, column)}</TableCell>
+                      ))}
                     </TableRow>
                   ))
                 )}
@@ -223,5 +229,3 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
     </Collapsible>
   );
 };
-
-

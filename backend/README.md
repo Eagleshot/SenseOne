@@ -64,14 +64,16 @@ python -m pip install -r .\requirements.txt
 From `backend/`:
 
 ```powershell
-uvicorn main:create_app --factory --reload --port 3000 --env-file ..\.env
+python main.py
 ```
+
+This reads `BACKEND_PORT` (and the rest of the config) from `..\.env`, defaulting to `3000` if unset. To override for a single run, set the env var first, e.g. `$env:BACKEND_PORT=4000; python main.py`.
 
 Expected behavior:
 
-- server starts on `0.0.0.0:3000`
+- server starts on `0.0.0.0:<BACKEND_PORT>` (default `3000`)
 - `backend/data/` is created automatically (if missing)
-- `http://127.0.0.1:3000/docs` serves the OpenAPI docs
+- `http://127.0.0.1:3000/docs` serves the OpenAPI docs (use your `BACKEND_PORT` if you changed it)
 
 ## Device auth (HMAC)
 

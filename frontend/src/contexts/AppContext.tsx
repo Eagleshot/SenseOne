@@ -9,7 +9,7 @@ import { ColorThemeKey } from "@/lib/appThemes";
 import { MapStyleKey, useAppPreferences } from "./useAppPreferences";
 import { useAuthSession } from "./useAuthSession";
 import { useSidebarState } from "./useSidebarState";
-import { StationScheduleConfig } from "@/api/stations";
+import { StationCreatePayload, StationScheduleConfig } from "@/api/stations";
 import { useWebcamData } from "./useWebcamData";
 
 interface AppProviderProps {
@@ -48,6 +48,8 @@ export interface AppContextType {
   currentImageIndex: number;
   setCurrentImageIndex: (index: number) => void;
   refreshImageTimeline: () => Promise<void>;
+  createStation: (payload: StationCreatePayload) => Promise<{ success: boolean; stationId?: string; error?: string }>;
+  rotateDeviceSecret: (stationId: string) => Promise<{ success: boolean; secret?: string; error?: string }>;
 
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;

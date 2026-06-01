@@ -6,32 +6,20 @@ catch any drift between the verifier, the dependency ordering, and the
 Pydantic body parsing that could weaken authentication.
 """
 
-import importlib.util
 import os
-import sys
 from pathlib import Path
 
 import pytest
 import sqlite3
-import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from config import station_db_path
-from constants import STATION_CONFIG_FILENAME
 from constants import DEVICE_API_PREFIX
 from routes import device_ingestion
 from station_hmac import generate_device_hmac_secret_b64, provision_device_hmac_secret
 
-
-_CLIENT_SIGNER_PATH = (
-    Path(__file__).resolve().parents[2] / "clients" / "python" / "eagleshot_signing.py"
-)
-_spec = importlib.util.spec_from_file_location("eagleshot_signing", _CLIENT_SIGNER_PATH)
-assert _spec and _spec.loader
-eagleshot_signing = importlib.util.module_from_spec(_spec)
-sys.modules["eagleshot_signing"] = eagleshot_signing
-_spec.loader.exec_module(eagleshot_signing)
+from tests import _signing as eagleshot_signing
 
 
 # Real JPEG header bytes so the server's content-sniff accepts the upload.
@@ -233,10 +221,6 @@ def test_signed_sensor_reading_persists_next_online(signed_client):
     assert row is not None
     assert row[1] == _NEXT_ONLINE
 
-    config_doc = yaml.safe_load((Path(data_dir) / station_id / STATION_CONFIG_FILENAME).read_text())
-    assert config_doc["last_online"] == row[0]
-    assert config_doc["next_online"] == _NEXT_ONLINE
-
 
 def test_signed_sparse_sensor_log_succeeds(signed_client):
     import json
@@ -262,32 +246,27 @@ def test_signed_sparse_sensor_log_succeeds(signed_client):
     assert response.status_code == 201, response.text
     parsed = response.json()
     assert parsed["timestamp"] == "2026-05-24T14:30:00Z"
-    assert parsed["temperature"] is None
+    # Unsent measurements are absent; nextStart is reserved (consumed as next_online).
+    assert "temperature" not in parsed
+    assert "nextStart" not in parsed
     assert parsed["firmwareVersion"] == "openmv-test"
-    assert parsed["nextStart"] == "2026-05-24T15:00:00Z"
     assert parsed["cameraName"] == "front"
     assert parsed["wakeReason"] == "timer"
     assert parsed["voltage"] == 3.92
 
     with sqlite3.connect(station_db_path(Path(data_dir), station_id)) as connection:
         row = connection.execute(
-            """
-            SELECT timestamp, voltage, firmware_version, next_start, camera_name, wake_reason, next_online
-            FROM sensor_history
-            ORDER BY id DESC
-            LIMIT 1
-            """
+            "SELECT timestamp, next_online, metrics FROM sensor_history ORDER BY id DESC LIMIT 1"
         ).fetchone()
 
-    assert row == (
-        "2026-05-24T14:30:00Z",
-        3.92,
-        "openmv-test",
-        "2026-05-24T15:00:00Z",
-        "front",
-        "timer",
-        "2026-05-24T15:00:00Z",
-    )
+    assert row[0] == "2026-05-24T14:30:00Z"
+    assert row[1] == "2026-05-24T15:00:00Z"
+    assert json.loads(row[2]) == {
+        "firmwareVersion": "openmv-test",
+        "cameraName": "front",
+        "wakeReason": "timer",
+        "voltage": 3.92,
+    }
 
 
 def test_sensor_reading_without_signature_is_rejected(signed_client):

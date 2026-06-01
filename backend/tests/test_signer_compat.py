@@ -1,8 +1,11 @@
-"""Verify the OpenMV (MicroPython) signer matches the CPython reference.
+"""Verify the OpenMV (MicroPython) device signer matches the server reference.
 
-If these implementations ever diverge, device-signed requests will be rejected
-by the server. Loading both modules into CPython and comparing outputs on
-fixed inputs catches any drift.
+The device firmware in ``clients/openmv/main.py`` reimplements HMAC-SHA256 and
+the v1 canonical signing string by hand. If it ever drifts from what the
+server's ``station_hmac`` verifier expects, device-signed requests will be
+rejected. Loading the OpenMV module into CPython and comparing its output
+against the reference signer (which builds on the server's own canonical
+string) catches any such drift.
 """
 
 import importlib.util
@@ -12,14 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+from tests import _signing as reference
 
 
 def _load_openmv_main():
@@ -27,19 +23,22 @@ def _load_openmv_main():
     sys.modules.setdefault("sensor", SimpleNamespace(RGB565=1, VGA=2))
     sys.modules.setdefault("pyb", SimpleNamespace(UART=lambda *a, **kw: None))
     sys.modules.setdefault("machine", SimpleNamespace())
-    return _load("openmv_main_for_signer_test", repo / "clients" / "openmv" / "main.py")
+    spec = importlib.util.spec_from_file_location(
+        "openmv_main_for_signer_test", repo / "clients" / "openmv" / "main.py"
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["openmv_main_for_signer_test"] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 @pytest.fixture(scope="module")
-def signers():
-    repo = Path(__file__).resolve().parents[2]
-    cpy = _load("eagleshot_signing_cpy", repo / "clients" / "python" / "eagleshot_signing.py")
-    mpy = _load_openmv_main()
-    return cpy, mpy
+def openmv():
+    return _load_openmv_main()
 
 
-def test_signatures_match_for_image_upload(signers):
-    cpy, mpy = signers
+def test_signatures_match_for_image_upload(openmv):
     args = dict(
         station_id="silvretta-glacier",
         secret_b64="abcdef0123456789-_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -49,11 +48,10 @@ def test_signatures_match_for_image_upload(signers):
         timestamp=1748000000,
         nonce_hex="0123456789abcdef0123456789abcdef",
     )
-    assert cpy.sign_request(**args) == mpy.sign_request(**args)
+    assert openmv.sign_request(**args) == reference.sign_request(**args)
 
 
-def test_signatures_match_for_sensor_reading(signers):
-    cpy, mpy = signers
+def test_signatures_match_for_sensor_reading(openmv):
     args = dict(
         station_id="alp-grimsel",
         secret_b64="ZDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAx",
@@ -63,11 +61,10 @@ def test_signatures_match_for_sensor_reading(signers):
         timestamp=1748123456,
         nonce_hex="ffffffffffffffffffffffffffffffff",
     )
-    assert cpy.sign_request(**args) == mpy.sign_request(**args)
+    assert openmv.sign_request(**args) == reference.sign_request(**args)
 
 
-def test_signatures_match_for_empty_body_config_get(signers):
-    cpy, mpy = signers
+def test_signatures_match_for_empty_body_config_get(openmv):
     args = dict(
         station_id="alp-grimsel",
         secret_b64="ZDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAx",
@@ -77,16 +74,15 @@ def test_signatures_match_for_empty_body_config_get(signers):
         timestamp=1748123456,
         nonce_hex="11111111111111111111111111111111",
     )
-    assert cpy.sign_request(**args) == mpy.sign_request(**args)
+    assert openmv.sign_request(**args) == reference.sign_request(**args)
 
 
-def test_hmac_implementation_matches_stdlib(signers):
+def test_hmac_implementation_matches_stdlib(openmv):
     """The MicroPython port reimplements HMAC inline — verify it matches CPython's hmac."""
     import hmac
     import hashlib
 
-    _, mpy = signers
     key = b"x" * 100  # > 64 bytes triggers key-shortening branch
     msg = b"sample message"
     expected = hmac.new(key, msg, hashlib.sha256).digest()
-    assert mpy.hmac_sha256(key, msg) == expected
+    assert openmv.hmac_sha256(key, msg) == expected

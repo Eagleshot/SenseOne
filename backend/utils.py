@@ -30,6 +30,22 @@ def sanitize_station_id(raw_name: str | None = None, default: str = "default") -
     return re.sub(r"[^a-zA-Z0-9._-]", "-", raw).strip("._-") or default
 
 
+def unique_station_id(base_dir: Path, requested_id: str | None, default: str = "default") -> str | None:
+    """Return a sanitized station id under base_dir that does not exist yet.
+
+    Appends ``-2``, ``-3``, … when the preferred id is taken. Returns None if
+    no free id is found within a reasonable range; callers decide how to fail.
+    """
+    station_id = sanitize_station_id(requested_id, default=default)
+    if not (base_dir / station_id).exists():
+        return station_id
+    for index in range(2, 1000):
+        candidate = sanitize_station_id(f"{station_id}-{index}", default=default)
+        if not (base_dir / candidate).exists():
+            return candidate
+    return None
+
+
 def normalize_content_type(raw_content_type: str | None) -> str | None:
     """Normalize a content-type header value."""
     if not raw_content_type:

@@ -137,36 +137,13 @@ This project is built with:
 
 
 
-# SenseOne
+## Device firmware
 
-// Settings:
-// ESP32S3 Dev Module
-// Tools -> USB CDC on Boot: "Enabled"
-// Tools -> PSRAM: "QSPI PSRAM"
-//
-// SD card requirements (for this project):
-// - Interface: SD_MMC (1-bit mode)
-// - Pins: CLK=GPIO5, CMD=GPIO4, D0=GPIO6
-// - Filesystem: FAT32 (MBR partition table)
-// - Recommended allocation unit: 32KB
-// - Avoid exFAT/NTFS for best compatibility with SD_MMC
+The canonical device firmware is the OpenMV (MicroPython) client at
+[`clients/openmv/main.py`](clients/openmv/main.py). It is a single file that
+handles HMAC request signing, the cellular modem driver, server clock sync,
+capture scheduling, and deep sleep.
 
-// /home/eagleshot_drone/uploads/20251031_1529Z.jpg
-/*Verison*/
-//ESP32 Arduino 2.3.3
-//TinyGSM 0.12.0
-
-// TODOs:
-
-// Timestamp uploaded images -> different time sources?
-// Upload from SD card
-// Check GPRS - at+cops=?
-// Change modem speed - Serial1.println("AT+IPR=230400"); // TODO Change modem speed
-// EEPROM for settings etc. - #include <EEPROM.h>
-// Deep sleep/modem power down/power measurement
-// Server to docker?
-// Time sync internet/gps
-// Domain instead of ip
-// Save sensor data
-// Remote firmware update
-// Location and time - GPS und GSM
+To provision a device: create the station, then `POST
+/stations/<id>/rotate-device-secret` in the admin UI and paste the returned
+secret into `STATION_SECRET_B64` in `main.py`. Copy `main.py` to the board.

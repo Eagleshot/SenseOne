@@ -258,12 +258,43 @@ const getFlagEmojiFromCountryCode = (code: string): string => {
     .replace(/[A-Z]/g, char => String.fromCodePoint(127397 + char.charCodeAt(0)));
 };
 
-const getFlagEmojiFromCountryName = (name: string): string | null => {
+export const getFlagEmojiFromCountryName = (name: string): string | null => {
   const normalized = normalizeCountryName(name);
   const code = COUNTRY_ALIASES[normalized] ?? getCountryNameToCodeMap().get(normalized);
   if (!code) return null;
   const flag = getFlagEmojiFromCountryCode(code);
   return flag || null;
+};
+
+export type CountryOption = { code: string; name: string; flag: string };
+
+let cachedCountryOptions: CountryOption[] | null = null;
+
+// Full list of countries (English display names + flag), sorted by name, for
+// populating a country dropdown. Built from Intl region data.
+export const getCountryOptions = (): CountryOption[] => {
+  if (cachedCountryOptions) return cachedCountryOptions;
+  const options: CountryOption[] = [];
+  try {
+    if (typeof Intl === 'undefined') return options;
+    const intlAny = Intl as unknown as {
+      DisplayNames?: new (locales: string[], options: { type: string }) => { of: (code: string) => string | undefined };
+      supportedValuesOf?: (type: string) => string[];
+    };
+    if (!intlAny.DisplayNames || typeof intlAny.supportedValuesOf !== 'function') return options;
+    const displayNames = new intlAny.DisplayNames(['en'], { type: 'region' });
+    const codes = intlAny.supportedValuesOf('region').filter(code => /^[A-Z]{2}$/.test(code));
+    for (const code of codes) {
+      const name = displayNames.of(code);
+      if (!name) continue;
+      options.push({ code, name, flag: getFlagEmojiFromCountryCode(code) });
+    }
+    options.sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+  cachedCountryOptions = options;
+  return options;
 };
 
 export const formatLocationWithFlag = (

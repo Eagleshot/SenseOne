@@ -1,84 +1,41 @@
-"""SQLite persistence for station image and sensor data."""
+"""SQLite persistence for station image and sensor data.
 
+Sensor readings are stored as a flat `metrics` JSON blob keyed by the
+measurement name the device sent (e.g. ``temperature``, ``battery``,
+``reception``). Nothing about the set of measurements is fixed in the schema,
+so a station can report any field without a migration. The only sensor values
+the server reads structurally are the timestamp, the scheduling hint
+(``next_online``), and the values surfaced on the station status —
+``battery``, ``firmwareVersion`` and ``wakeReason`` — pulled from the latest
+reading via ``json_extract``.
+"""
+
+import json
 import logging
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from utils import iso_utc, parse_iso_timestamp
 
-SENSOR_HISTORY_COLUMNS = (
-    "temperature",
-    "humidity",
-    "pressure",
-    "battery",
-    "wind_speed",
-    "wind_direction",
-    "visibility",
-    "uv_index",
-    "dew_point",
-    "feels_like",
-    "voltage",
-    "device_temperature",
-    "firmware_version",
-    "next_start",
-    "camera_name",
-    "wake_reason",
-)
-
 _SENSOR_HISTORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sensor_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL,
-    temperature REAL,
-    humidity INTEGER,
-    pressure INTEGER,
-    battery INTEGER,
-    wind_speed REAL,
-    wind_direction INTEGER,
-    visibility REAL,
-    uv_index INTEGER,
-    dew_point REAL,
-    feels_like REAL,
-    voltage REAL,
-    device_temperature REAL,
-    firmware_version TEXT,
-    next_start TEXT,
-    camera_name TEXT,
-    wake_reason TEXT,
-    next_online TEXT
+    next_online TEXT,
+    metrics TEXT NOT NULL DEFAULT '{}'
 )
 """
+
+def _dump_metrics(metrics: dict) -> str:
+    return json.dumps(metrics, separators=(",", ":"), allow_nan=False)
 
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
-
-
-def _sensor_history_needs_rebuild(connection: sqlite3.Connection) -> bool:
-    columns = {row[1]: row for row in connection.execute("PRAGMA table_info(sensor_history)")}
-    expected = {"id", "timestamp", "next_online", *SENSOR_HISTORY_COLUMNS}
-    if not expected.issubset(columns):
-        return True
-    return any(columns[column][3] for column in SENSOR_HISTORY_COLUMNS)
-
-
-def _rebuild_sensor_history(connection: sqlite3.Connection) -> None:
-    existing = {row[1] for row in connection.execute("PRAGMA table_info(sensor_history)")}
-    connection.execute("ALTER TABLE sensor_history RENAME TO sensor_history_old")
-    connection.execute(_SENSOR_HISTORY_SCHEMA)
-    copy_columns = [column for column in ("id", "timestamp", *SENSOR_HISTORY_COLUMNS, "next_online") if column in existing]
-    quoted_columns = ", ".join(copy_columns)
-    connection.execute(
-        f"""
-        INSERT INTO sensor_history ({quoted_columns})
-        SELECT {quoted_columns}
-        FROM sensor_history_old
-        """
-    )
-    connection.execute("DROP TABLE sensor_history_old")
 
 
 def ensure_station_db(db_path: Path) -> None:
@@ -100,8 +57,6 @@ def ensure_station_db(db_path: Path) -> None:
         )
         _ensure_column(connection, "station_images", "next_online", "next_online TEXT")
         connection.execute(_SENSOR_HISTORY_SCHEMA)
-        if _sensor_history_needs_rebuild(connection):
-            _rebuild_sensor_history(connection)
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_sensor_history_timestamp ON sensor_history(timestamp)"
         )
@@ -164,27 +119,21 @@ def append_station_image(
 def append_sensor_reading(
     db_path: Path,
     timestamp: str,
-    fields: dict,
+    metrics: dict,
     next_online: str | None = None,
 ) -> None:
-    """Insert a station sensor reading row."""
+    """Insert a station sensor reading. `metrics` is stored verbatim as JSON."""
     ensure_station_db(db_path)
-    values = {column: fields.get(column) for column in SENSOR_HISTORY_COLUMNS}
-    values["timestamp"] = timestamp
-    values["next_online"] = next_online
-    insert_columns = ("timestamp", *SENSOR_HISTORY_COLUMNS, "next_online")
-    placeholders = ", ".join(f":{column}" for column in insert_columns)
-    column_list = ", ".join(insert_columns)
     with sqlite3.connect(db_path) as connection:
         connection.execute(
-            f"INSERT INTO sensor_history ({column_list}) VALUES ({placeholders})",
-            values,
+            "INSERT INTO sensor_history (timestamp, next_online, metrics) VALUES (?, ?, ?)",
+            (timestamp, next_online, _dump_metrics(metrics)),
         )
         connection.commit()
 
 
 def history_from_db(db_path: Path, station_id: str, hours: int) -> list[dict[str, object]]:
-    """Load sensor history rows from a station DB."""
+    """Load sensor history rows from a station DB as flat {timestamp, **metrics} dicts."""
     if not db_path.exists():
         return []
     ensure_station_db(db_path)
@@ -195,24 +144,7 @@ def history_from_db(db_path: Path, station_id: str, hours: int) -> list[dict[str
             connection.row_factory = sqlite3.Row
             rows = connection.execute(
                 """
-                SELECT
-                    timestamp,
-                    temperature,
-                    humidity,
-                    pressure,
-                    battery,
-                    wind_speed,
-                    wind_direction,
-                    visibility,
-                    uv_index,
-                    dew_point,
-                    feels_like,
-                    voltage,
-                    device_temperature,
-                    firmware_version,
-                    next_start,
-                    camera_name,
-                    wake_reason
+                SELECT timestamp, metrics
                 FROM sensor_history
                 WHERE timestamp >= ?
                 ORDER BY timestamp ASC
@@ -223,15 +155,47 @@ def history_from_db(db_path: Path, station_id: str, hours: int) -> list[dict[str
         logging.warning("Failed to read station history for %s: %s", station_id, exc)
         return []
 
-    return [dict(row) for row in rows]
+    readings: list[dict[str, object]] = []
+    for row in rows:
+        metrics = json.loads(row["metrics"] or "{}")
+        readings.append({"timestamp": row["timestamp"], **metrics})
+    return readings
 
 
-def latest_status_from_db(
-    db_path: Path, station_id: str
-) -> tuple[dict | None, int | None, str | None, str | None]:
-    """Return latest image, battery, last online, and next online in one DB connection."""
+def _coerce_battery(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+@dataclass(frozen=True)
+class StationStatus:
+    """Latest runtime status for a station, derived from its SQLite data."""
+
+    capture: dict | None = None
+    battery: int | None = None
+    last_online: str | None = None
+    next_online: str | None = None
+    firmware_version: str | None = None
+    wake_reason: str | None = None
+
+
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def latest_status_from_db(db_path: Path, station_id: str) -> StationStatus:
+    """Return latest image, battery, firmware, wake reason, and online times.
+
+    ``battery``, ``firmwareVersion`` and ``wakeReason`` are read from the most
+    recent sensor reading's metrics via ``json_extract``; everything else in
+    the metrics blob is opaque to the server.
+    """
     if not db_path.exists():
-        return None, None, None, None
+        return StationStatus()
     ensure_station_db(db_path)
 
     try:
@@ -240,12 +204,16 @@ def latest_status_from_db(
             image_row = connection.execute(
                 "SELECT filename, created_at, next_online FROM station_images ORDER BY created_at DESC LIMIT 1"
             ).fetchone()
-            battery_row = connection.execute(
-                "SELECT timestamp, battery, next_online FROM sensor_history ORDER BY timestamp DESC LIMIT 1"
+            sensor_row = connection.execute(
+                "SELECT timestamp, next_online, "
+                "json_extract(metrics, '$.battery') AS battery, "
+                "json_extract(metrics, '$.firmwareVersion') AS firmware_version, "
+                "json_extract(metrics, '$.wakeReason') AS wake_reason "
+                "FROM sensor_history ORDER BY timestamp DESC LIMIT 1"
             ).fetchone()
     except sqlite3.Error as exc:
         logging.warning("Failed to read station status for %s: %s", station_id, exc)
-        return None, None, None, None
+        return StationStatus()
 
     capture = (
         {"timestamp": image_row["created_at"], "url": f"/stations/{station_id}/images/{image_row['filename']}"}
@@ -254,7 +222,7 @@ def latest_status_from_db(
 
     latest_timestamp = None
     next_online = None
-    for row, timestamp_key in ((image_row, "created_at"), (battery_row, "timestamp")):
+    for row, timestamp_key in ((image_row, "created_at"), (sensor_row, "timestamp")):
         if row is None:
             continue
         parsed = parse_iso_timestamp(row[timestamp_key])
@@ -264,9 +232,11 @@ def latest_status_from_db(
             latest_timestamp = parsed
             next_online = row["next_online"]
 
-    return (
-        capture,
-        (None if battery_row is None else battery_row["battery"]),
-        (iso_utc(latest_timestamp) if latest_timestamp else None),
-        next_online,
+    return StationStatus(
+        capture=capture,
+        battery=(None if sensor_row is None else _coerce_battery(sensor_row["battery"])),
+        last_online=(iso_utc(latest_timestamp) if latest_timestamp else None),
+        next_online=next_online,
+        firmware_version=(None if sensor_row is None else _str_or_none(sensor_row["firmware_version"])),
+        wake_reason=(None if sensor_row is None else _str_or_none(sensor_row["wake_reason"])),
     )

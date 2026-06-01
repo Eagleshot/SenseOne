@@ -19,6 +19,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 10,
         "nextUpdateMinutesIn": 20,
         "is_public": True,
+        "owner": "alice",
     },
     {
         "id": "gries-glacier",
@@ -32,6 +33,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 5,
         "nextUpdateMinutesIn": 25,
         "is_public": True,
+        "owner": "bob",
     },
     {
         "id": "rhone-glacier",
@@ -45,6 +47,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 15,
         "nextUpdateMinutesIn": 15,
         "is_public": True,
+        "owner": "alice",
     },
     {
         "id": "jungfrau-top",
@@ -58,6 +61,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 120,
         "nextUpdateMinutesIn": 60,
         "is_public": True,
+        "owner": "bob",
     },
     {
         "id": "titlis-glacier",
@@ -99,6 +103,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 7,
         "nextUpdateMinutesIn": 23,
         "is_public": True,
+        "owner": "bob",
     },
     {
         "id": "paris-seine",
@@ -113,6 +118,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 9,
         "nextUpdateMinutesIn": 21,
         "is_public": True,
+        "owner": "alice",
     },
     {
         "id": "tokyo-skyline",
@@ -140,6 +146,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 6,
         "nextUpdateMinutesIn": 24,
         "is_public": True,
+        "owner": "bob",
     },
 ]
 
@@ -153,6 +160,11 @@ TIMEZONES = [
     {"value": "Asia/Tokyo", "label": "Tokyo (JST)"},
 ]
 
+# Mock device housekeeping values, varied across stations/readings.
+FIRMWARE_VERSIONS = ["1.0.3", "1.1.0", "1.2.0"]
+WAKE_REASONS = ["timer", "timer", "timer", "boot", "motion"]
+
+
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -160,15 +172,22 @@ def _iso(value: datetime) -> str:
 def generate_historical_data(
     hours: int = 24, station_id: str | None = None
 ) -> list[dict[str, Any]]:
+    """Generate mock device-physical sensor readings.
+
+    Only values a real sensor would measure are produced (temperature,
+    humidity, pressure, battery, reception, voltage, device temperature).
+    Weather-derived values (wind, visibility, UV, etc.) are intentionally
+    absent — those come live from the weather proxy and are never stored.
+    """
     station_id = station_id or "default"
     seed = int(hashlib.sha256(station_id.encode("utf-8")).hexdigest()[:16], 16)
     rng = random.Random(seed)
     temp_offset = ((seed % 1000) - 500) / 50
     humidity_offset = ((seed // 7) % 20) - 10
     pressure_offset = ((seed // 13) % 10) - 5
-    wind_direction_offset = (seed // 17) % 360
-    visibility_offset = ((seed // 19) % 7) - 3
+    reception_base = 55 + (seed // 29 % 41)
     battery_base = 40 + (seed // 23 % 41)
+    firmware_version = FIRMWARE_VERSIONS[seed % len(FIRMWARE_VERSIONS)]
     data: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
     for i in range(hours, -1, -1):
@@ -189,20 +208,13 @@ def generate_historical_data(
                 ),
                 "pressure": round(1013 + pressure_offset + (rng.random() - 0.5) * 20),
                 "battery": battery_level,
-                "windSpeed": round((5 + rng.random() * 15) * 10) / 10,
-                "windDirection": round((rng.random() * 360 + wind_direction_offset) % 360),
-                "visibility": round((8 + rng.random() * 12 + visibility_offset) * 10) / 10,
-                "uvIndex": round(rng.random() * 8) if 6 <= hour_of_day <= 18 else 0,
-                "dewPoint": round((base_temp - 5 + (rng.random() - 0.5) * 3) * 10) / 10,
-                "feelsLike": round((base_temp - 2 + (rng.random() - 0.5) * 2) * 10) / 10,
+                "reception": max(0, min(100, round(reception_base + (rng.random() - 0.5) * 20))),
                 "voltage": round(
                     (3.3 + 0.9 * battery_level / 100 + (rng.random() - 0.5) * 0.05) * 100
                 ) / 100,
                 "deviceTemperature": round((base_temp + 7 + (rng.random() - 0.5) * 4) * 10) / 10,
-                "firmwareVersion": None,
-                "nextStart": None,
-                "cameraName": None,
-                "wakeReason": "timer",
+                "firmwareVersion": firmware_version,
+                "wakeReason": rng.choice(WAKE_REASONS),
             }
         )
     return data

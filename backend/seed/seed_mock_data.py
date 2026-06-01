@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 import base64
 import json
-import re
 import sqlite3
+import sys
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -17,9 +17,14 @@ except ImportError:
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+from station_db import ensure_station_db  # noqa: E402  (needs BACKEND_DIR on sys.path)
+from utils import iso_utc, parse_iso_timestamp, sanitize_station_id  # noqa: E402
 DEFAULT_DATA_DIR = BACKEND_DIR / "data"
 STATION_DB_FILENAME = "station.db"
 STATION_CONFIG_FILENAME = "config.yaml"
+STATION_META_FILENAME = "meta.json"
 SAMPLE_IMAGE_FILES = ["image0.png", "image1.png", "image2.png"]
 SAMPLE_IMAGE_URLS = {
     "image0.png": "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?fm=png&fit=crop&w=1024&h=576&q=80",
@@ -30,14 +35,13 @@ SAMPLE_PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAoMBgOaI1xkAAAAASUVORK5CYII="
 )
 SENSOR_HISTORY_HOURS = 168
+# Dev-only default password for seeded owner accounts (must satisfy the 12-char
+# minimum enforced by users.create_user). Override with --owner-password.
+DEFAULT_OWNER_PASSWORD = "devpassword123"
 
 
 def _sanitize_station_id(raw_name: str) -> str:
-    if not raw_name:
-        return "station"
-    cleaned = re.sub(r"[^a-zA-Z0-9._-]", "-", raw_name.strip())
-    cleaned = cleaned.strip("._-")
-    return cleaned or "station"
+    return sanitize_station_id(raw_name, default="station")
 
 
 def _station_dir(data_dir: Path, station_id: str) -> Path:
@@ -46,19 +50,6 @@ def _station_dir(data_dir: Path, station_id: str) -> Path:
 
 def _yaml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
-
-
-def _iso_utc(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _parse_iso_utc(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 def _station_seed(station_id: str) -> dict[str, object]:
@@ -87,61 +78,8 @@ def _station_config_yaml(station_id: str) -> str:
         "use_sunrise_sunset: false",
         "capture_interval_minutes: 30",
     ]
-    owner = seed.get("owner")
-    if owner:
-        lines.append(f"_owner: {_yaml_string(str(owner))}")
     lines.append("")
     return "\n".join(lines)
-
-
-def _ensure_station_schema(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS station_images (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT NOT NULL,
-                content_type TEXT,
-                size_bytes INTEGER NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_station_images_created_at ON station_images(created_at)"
-        )
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(station_images)")}
-        if "next_online" not in columns:
-            connection.execute("ALTER TABLE station_images ADD COLUMN next_online TEXT")
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sensor_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                temperature REAL,
-                humidity INTEGER,
-                pressure INTEGER,
-                battery INTEGER,
-                wind_speed REAL,
-                wind_direction INTEGER,
-                visibility REAL,
-                uv_index INTEGER,
-                dew_point REAL,
-                feels_like REAL,
-                voltage REAL,
-                device_temperature REAL,
-                firmware_version TEXT,
-                next_start TEXT,
-                camera_name TEXT,
-                wake_reason TEXT,
-                next_online TEXT
-            )
-            """
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sensor_history_timestamp ON sensor_history(timestamp)"
-        )
-        connection.commit()
 
 
 def _download_image(url: str, path: Path, overwrite: bool) -> bool:
@@ -186,7 +124,7 @@ def _seed_station(data_dir: Path, station_id: str, count: int, overwrite: bool) 
     seed = _station_seed(station_id)
     seed_next_online = None
     if seed:
-        seed_next_online = _iso_utc(
+        seed_next_online = iso_utc(
             datetime.now(timezone.utc) + timedelta(minutes=int(seed.get("nextUpdateMinutesIn") or 0))
         )
 
@@ -194,29 +132,25 @@ def _seed_station(data_dir: Path, station_id: str, count: int, overwrite: bool) 
     if not config_file.exists() or overwrite:
         config_file.write_text(_station_config_yaml(station_id), encoding="utf-8")
 
+    owner = seed.get("owner")
+    meta_file = station_root / STATION_META_FILENAME
+    if owner and (not meta_file.exists() or overwrite):
+        meta_file.write_text(
+            json.dumps({"owner": str(owner)}, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
     db_path = station_root / STATION_DB_FILENAME
-    _ensure_station_schema(db_path)
+    ensure_station_db(db_path)
     _ensure_seed_images(images_dir, overwrite)
 
     sensor_rows = [
         (
             row["timestamp"],
-            row["temperature"],
-            row["humidity"],
-            row["pressure"],
-            row["battery"],
-            row["windSpeed"],
-            row["windDirection"],
-            row["visibility"],
-            row["uvIndex"],
-            row["dewPoint"],
-            row["feelsLike"],
-            row.get("voltage"),
-            row.get("deviceTemperature"),
-            row.get("firmwareVersion"),
-            row.get("nextStart"),
-            row.get("cameraName"),
-            row.get("wakeReason"),
+            json.dumps(
+                {key: value for key, value in row.items() if key != "timestamp"},
+                separators=(",", ":"),
+            ),
         )
         for row in generate_historical_data(SENSOR_HISTORY_HOURS, station_id=station_id)
     ]
@@ -228,7 +162,7 @@ def _seed_station(data_dir: Path, station_id: str, count: int, overwrite: bool) 
             latest_ts = connection.execute(
                 "SELECT MAX(timestamp) FROM sensor_history"
             ).fetchone()[0]
-            latest_at = _parse_iso_utc(latest_ts)
+            latest_at = parse_iso_timestamp(latest_ts)
             if latest_at is not None and latest_at >= (
                 datetime.now(timezone.utc) - timedelta(hours=24)
             ):
@@ -238,28 +172,7 @@ def _seed_station(data_dir: Path, station_id: str, count: int, overwrite: bool) 
 
         if sensor_rows:
             connection.executemany(
-                """
-                INSERT INTO sensor_history (
-                    timestamp,
-                    temperature,
-                    humidity,
-                    pressure,
-                    battery,
-                    wind_speed,
-                    wind_direction,
-                    visibility,
-                    uv_index,
-                    dew_point,
-                    feels_like,
-                    voltage,
-                    device_temperature,
-                    firmware_version,
-                    next_start,
-                    camera_name,
-                    wake_reason
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                "INSERT INTO sensor_history (timestamp, metrics) VALUES (?, ?)",
                 sensor_rows,
             )
             if seed_next_online:
@@ -297,6 +210,34 @@ def _seed_station(data_dir: Path, station_id: str, count: int, overwrite: bool) 
             connection.commit()
 
 
+def _seed_owner_users(station_ids: list[str], password: str) -> None:
+    """Create regular user accounts for every owner referenced by the seeded stations.
+
+    Owners that already exist are left untouched, so re-running is safe and never
+    clobbers a real password. Owners come from the WEBCAM_SEED ``owner`` field.
+    """
+    from users import create_user, get_user, init_users_db
+
+    init_users_db()  # ensure the users table exists before inserting
+
+    owners = sorted(
+        {
+            owner
+            for station_id in station_ids
+            if (owner := str(_station_seed(station_id).get("owner") or "").strip())
+        }
+    )
+    for owner in owners:
+        if get_user(owner) is not None:
+            print(f"Owner account {owner!r} already exists; leaving it untouched.")
+            continue
+        try:
+            create_user(owner, password)
+            print(f"Created owner account {owner!r} (password: {password!r}).")
+        except ValueError as exc:
+            print(f"Failed to create owner account {owner!r}: {exc}")
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Create sample per-station folders, config, and mock timeline DB rows."
@@ -319,6 +260,14 @@ def _parse_args() -> argparse.Namespace:
         default=[],
         help="Seed only specific station IDs (can be repeated). Defaults to all seeds.",
     )
+    parser.add_argument(
+        "--owner-password",
+        default=DEFAULT_OWNER_PASSWORD,
+        help=(
+            "Password to assign to seeded owner accounts that don't exist yet "
+            f"(default: {DEFAULT_OWNER_PASSWORD!r}). Existing accounts are left untouched."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -326,6 +275,11 @@ def main() -> None:
     args = _parse_args()
     data_dir = args.data_dir.resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
+    # users.db is resolved via config.get_data_dir(); point it at the same dir we
+    # seed into so owner accounts land beside the station folders.
+    import os
+
+    os.environ["APP_DATA_DIR"] = str(data_dir)
 
     station_ids = args.station_id or [item["id"] for item in WEBCAM_SEED]
     if not station_ids:
@@ -334,6 +288,8 @@ def main() -> None:
     for station_id in station_ids:
         normalized = _sanitize_station_id(station_id)
         _seed_station(data_dir, normalized, args.count, args.overwrite)
+
+    _seed_owner_users(station_ids, args.owner_password)
 
     print(f"Seeded {len(station_ids)} station folders into {data_dir}")
 

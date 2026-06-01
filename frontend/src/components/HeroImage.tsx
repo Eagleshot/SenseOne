@@ -9,6 +9,7 @@ import {
   Loader2,
   MapPin,
   Maximize2,
+  Minimize2,
   Pause,
   Play,
   RefreshCw,
@@ -18,7 +19,7 @@ import {
 import { FullscreenDialog } from '@/components/FullscreenDialog';
 import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogClose, DialogContent, DialogTrigger } from '@/components/ui/dialog';
 import { StatusSummary } from '@/components/StatusSummary';
 import { QuickInfoCards } from '@/components/QuickInfoCards';
 
@@ -265,6 +266,17 @@ export const HeroImage: React.FC = () => {
             }
             contentClassName="flex items-center justify-center bg-black/90"
           >
+            <DialogClose asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="btn-panel absolute top-4 right-4 z-10 h-10 px-3 text-xs sm:text-sm"
+              >
+                <Minimize2 className="h-4 w-4" />
+                Exit Fullscreen
+              </Button>
+            </DialogClose>
             {hasDisplayImage ? (
               <img src={currentImageUrl} alt={`${activeWebcam.name} webcam view`} className="h-full w-full object-contain bg-black" />
             ) : (

@@ -22,15 +22,14 @@ describe("QuickInfoCards", () => {
 
     render(<QuickInfoCards />);
 
+    expect(screen.getByText("Battery")).toBeInTheDocument();
     expect(screen.getByText("82%")).toBeInTheDocument();
   });
 
   it("falls back to the latest history battery when backend battery is unavailable", () => {
     mockUseApp.mockReturnValue({
       activeWebcam: { id: "cam-1", battery: null, isOnline: true },
-      historicalData: [
-        { battery: 61 },
-      ],
+      historicalData: [{ timestamp: new Date(), battery: 61 }],
     });
 
     render(<QuickInfoCards />);
@@ -38,26 +37,26 @@ describe("QuickInfoCards", () => {
     expect(screen.getByText("61%")).toBeInTheDocument();
   });
 
-  it("shows unavailable when the backend resolved without battery data", () => {
+  it("shows reception from the latest reading when the device reports it", () => {
+    mockUseApp.mockReturnValue({
+      activeWebcam: { id: "cam-1", battery: null, isOnline: true },
+      historicalData: [{ timestamp: new Date(), battery: 55, reception: 88 }],
+    });
+
+    render(<QuickInfoCards />);
+
+    expect(screen.getByText("Reception")).toBeInTheDocument();
+    expect(screen.getByText("88%")).toBeInTheDocument();
+  });
+
+  it("renders nothing when no status metrics are available", () => {
     mockUseApp.mockReturnValue({
       activeWebcam: { id: "cam-1", battery: null, isOnline: true },
       historicalData: [],
     });
 
-    render(<QuickInfoCards />);
+    const { container } = render(<QuickInfoCards />);
 
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
-  });
-
-  it("shows loading while station battery data is still unresolved", () => {
-    mockUseApp.mockReturnValue({
-      activeWebcam: { id: "cam-1", isOnline: true },
-      historicalData: [],
-    });
-
-    render(<QuickInfoCards />);
-
-    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    expect(container.firstChild).toBeNull();
   });
 });
-

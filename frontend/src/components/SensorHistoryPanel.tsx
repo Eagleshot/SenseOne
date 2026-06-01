@@ -74,7 +74,7 @@ export const SensorHistoryPanel: React.FC = () => {
               <PopoverContent className="w-auto p-0" align="end">
                 <div className="space-y-3 p-3 pointer-events-auto">
                   <CalendarComponent
-                    initialFocus
+                    autoFocus
                     mode="range"
                     defaultMonth={dateRange?.from}
                     selected={dateRange}

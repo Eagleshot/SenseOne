@@ -6,12 +6,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from config import get_data_dir, read_station_config, station_db_path, write_station_runtime_status
+from config import get_data_dir, read_station_config, station_db_path
 from constants import ALLOWED_IMAGE_EXTENSIONS
 from models import AppConfig, ImageUploadResponse, SensorHistoryResponse, SensorReadingRequest
 from routes import ValidStationId
 from station_access import require_station_exists
-from station_db import append_sensor_reading, append_station_image, latest_status_from_db
+from station_db import append_sensor_reading, append_station_image
 from station_hmac import verify_station_signature
 from utils import (
     image_timestamp_from_filename,
@@ -49,16 +49,6 @@ def parse_next_online(value: str | None) -> str | None:
             detail="X-Next-Online must be an ISO 8601 timestamp.",
         )
     return iso_utc(parsed)
-
-
-def sync_station_runtime_status(data_dir, station_id: str) -> None:
-    _, _, last_online, next_online = latest_status_from_db(station_db_path(data_dir, station_id), station_id)
-    write_station_runtime_status(
-        data_dir,
-        station_id,
-        last_online=last_online,
-        next_online=next_online,
-    )
 
 
 def store_uploaded_image(
@@ -119,7 +109,6 @@ def store_uploaded_image(
         captured_at=iso_utc(image_timestamp),
         next_online=next_online,
     )
-    sync_station_runtime_status(data_dir, station_id)
     return stored_filename, f"/stations/{station_id}/images/{stored_filename}"
 
 
@@ -188,14 +177,13 @@ async def create_sensor_reading(
 ) -> SensorHistoryResponse:
     await verify_station_signature(station_id, request)
     timestamp = payload.timestamp or iso_utc(datetime.now(timezone.utc))
-    fields = payload.model_dump(exclude={"timestamp", "next_online"})
-    next_online = payload.next_start or payload.next_online
+    metrics = payload.metrics
+    next_online = payload.next_start
     data_dir = get_data_dir()
     append_sensor_reading(
         station_db_path(data_dir, station_id),
         timestamp,
-        fields,
+        metrics,
         next_online=next_online,
     )
-    sync_station_runtime_status(data_dir, station_id)
-    return SensorHistoryResponse(timestamp=timestamp, **fields)
+    return SensorHistoryResponse(timestamp=timestamp, **metrics)

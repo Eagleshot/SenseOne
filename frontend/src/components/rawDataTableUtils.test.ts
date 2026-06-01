@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildSensorCsv,
+  collectMetricKeys,
   createFormattedTimestampMap,
   filterAndSortSensorRows,
   paginateRows,
@@ -14,12 +15,7 @@ const row = (timestamp: string, temperature: number, battery: number): SensorDat
   humidity: 50,
   pressure: 1010,
   battery,
-  windSpeed: 5,
-  windDirection: 180,
-  visibility: 10,
-  uvIndex: 2,
-  dewPoint: 3,
-  feelsLike: temperature,
+  reception: 70,
 });
 
 describe("rawDataTableUtils", () => {
@@ -27,6 +23,11 @@ describe("rawDataTableUtils", () => {
     row("2026-01-01T10:00:00Z", 4, 80),
     row("2026-01-01T11:00:00Z", 8, 30),
   ];
+  const columns = collectMetricKeys(rows);
+
+  it("derives display columns from the metrics present", () => {
+    expect(columns).toEqual(["temperature", "humidity", "pressure", "battery", "reception"]);
+  });
 
   it("filters and sorts sensor rows", () => {
     const formattedTimestamps = createFormattedTimestampMap(rows, "UTC");
@@ -36,6 +37,7 @@ describe("rawDataTableUtils", () => {
       searchQuery: "30",
       sortField: "temperature",
       sortDirection: "desc",
+      columns,
     });
 
     expect(result).toEqual([rows[1]]);
@@ -43,8 +45,7 @@ describe("rawDataTableUtils", () => {
 
   it("paginates and builds csv output", () => {
     expect(paginateRows(rows, 2, 1)).toEqual([rows[1]]);
-    expect(buildSensorCsv(rows, "UTC")).toContain("Temperature");
-    expect(buildSensorCsv(rows, "UTC")).toContain("2026");
+    expect(buildSensorCsv(rows, "UTC", columns)).toContain("Temperature");
+    expect(buildSensorCsv(rows, "UTC", columns)).toContain("2026");
   });
 });
-

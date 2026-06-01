@@ -1,11 +1,12 @@
 """Weather and image serving routes."""
 
 import os
+import time
 from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from auth import get_optional_current_user
 from config import read_station_config, get_data_dir
@@ -15,6 +16,87 @@ from routes import ValidStationId
 
 
 router = APIRouter(tags=["Stations"])
+
+# OpenWeather Maps 1.0 overlay layers we allow proxying.
+WEATHER_TILE_LAYERS = {
+    "clouds_new",
+    "precipitation_new",
+    "temp_new",
+    "wind_new",
+    "pressure_new",
+}
+
+# A map view fires off dozens of tile requests at once. Reuse one pooled client
+# with HTTP keep-alive so we don't pay a fresh TLS handshake to OpenWeather per
+# tile (the main source of overlay slowness).
+_tile_client: "httpx.AsyncClient | None" = None
+
+
+def _weather_tile_client() -> httpx.AsyncClient:
+    global _tile_client
+    if _tile_client is None or _tile_client.is_closed:
+        _tile_client = httpx.AsyncClient(
+            timeout=15,
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
+        )
+    return _tile_client
+
+
+# Process-wide tile cache shared across all users. Low-zoom world tiles are the
+# same for everyone, so caching them ~10 minutes collapses many viewers' tile
+# requests into one upstream OpenWeather call (the main cost lever).
+_TILE_CACHE_TTL = 600  # seconds; OpenWeather refreshes these layers ~every 10 min
+_TILE_CACHE_MAX = 4000
+_tile_cache: dict[tuple[str, int, int, int], tuple[float, bytes, str]] = {}
+
+
+def _tile_cache_get(key: tuple[str, int, int, int]) -> tuple[bytes, str] | None:
+    entry = _tile_cache.get(key)
+    if entry is None:
+        return None
+    expiry, content, media_type = entry
+    if expiry < time.monotonic():
+        _tile_cache.pop(key, None)
+        return None
+    return content, media_type
+
+
+def _tile_cache_put(key: tuple[str, int, int, int], content: bytes, media_type: str) -> None:
+    if len(_tile_cache) >= _TILE_CACHE_MAX:
+        now = time.monotonic()
+        for stale in [k for k, v in _tile_cache.items() if v[0] < now]:
+            _tile_cache.pop(stale, None)
+        while len(_tile_cache) >= _TILE_CACHE_MAX:
+            _tile_cache.pop(next(iter(_tile_cache)), None)  # drop oldest insertion
+    _tile_cache[key] = (time.monotonic() + _TILE_CACHE_TTL, content, media_type)
+
+
+# Cache for OpenWeather data responses (current weather / forecast). Many viewers
+# of the same station request identical coordinates, so caching collapses them
+# into one upstream call per refresh window.
+_WEATHER_DATA_CACHE_MAX = 500
+_weather_data_cache: dict[tuple[str, float, float, str], tuple[float, dict]] = {}
+
+
+def _weather_data_cache_get(key: tuple[str, float, float, str]) -> dict | None:
+    entry = _weather_data_cache.get(key)
+    if entry is None:
+        return None
+    expiry, data = entry
+    if expiry < time.monotonic():
+        _weather_data_cache.pop(key, None)
+        return None
+    return data
+
+
+def _weather_data_cache_put(key: tuple[str, float, float, str], data: dict, ttl: int) -> None:
+    if len(_weather_data_cache) >= _WEATHER_DATA_CACHE_MAX:
+        now = time.monotonic()
+        for stale in [k for k, v in _weather_data_cache.items() if v[0] < now]:
+            _weather_data_cache.pop(stale, None)
+        while len(_weather_data_cache) >= _WEATHER_DATA_CACHE_MAX:
+            _weather_data_cache.pop(next(iter(_weather_data_cache)), None)
+    _weather_data_cache[key] = (time.monotonic() + ttl, data)
 
 
 @router.get(
@@ -43,14 +125,22 @@ def get_station_image(
     return FileResponse(image_path, media_type=media_type_from_path(image_path))
 
 
-async def fetch_openweather(endpoint: str, lat: float, lon: float, units: str = "metric") -> dict:
-    """Fetch data from OpenWeather API.
+async def fetch_openweather(
+    endpoint: str, lat: float, lon: float, units: str = "metric", cache_ttl: int = 600
+) -> dict:
+    """Fetch data from OpenWeather API, cached per (endpoint, coordinates, units).
 
-    Upstream non-2xx responses are surfaced as 502 (bad gateway) so the client
-    cannot mistake them for problems with this service. The underlying status
-    is logged for diagnostics.
+    Results are cached for ``cache_ttl`` seconds so repeated viewers of the same
+    station don't each trigger an upstream call. Upstream non-2xx responses are
+    surfaced as 502 (bad gateway) so the client cannot mistake them for problems
+    with this service. The underlying status is logged for diagnostics.
     """
     import logging
+
+    cache_key = (endpoint, round(lat, 3), round(lon, 3), units)
+    cached = _weather_data_cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     api_key = os.getenv("OPENWEATHER_API_KEY")
     if not api_key:
@@ -73,7 +163,10 @@ async def fetch_openweather(endpoint: str, lat: float, lon: float, units: str = 
             endpoint,
         )
         raise HTTPException(status_code=502, detail="OpenWeather request failed.")
-    return response.json()
+
+    data = response.json()
+    _weather_data_cache_put(cache_key, data, cache_ttl)
+    return data
 
 
 def station_coordinates_for_weather(base_dir: Path, station_id: str) -> tuple[float, float]:
@@ -122,4 +215,52 @@ async def get_station_weather_forecast(
 ) -> dict:
     require_station_view(station_id, user)
     lat, lon = station_coordinates_for_weather(get_data_dir(), station_id)
-    return await fetch_openweather("forecast", lat, lon, "metric")
+    return await fetch_openweather("forecast", lat, lon, "metric", cache_ttl=1800)
+
+
+@router.get(
+    "/weather/map/{layer}/{z}/{x}/{y}",
+    summary="Get a weather map overlay tile",
+    description=(
+        "Proxy an OpenWeather Maps 1.0 overlay tile (clouds / precipitation / "
+        "temperature / wind / pressure) so the API key stays server-side. Returns "
+        "a PNG tile; upstream failures surface as 502. The overlay is shown on the "
+        "public station map, so this endpoint is unauthenticated like the base map "
+        "tiles. Requires `OPENWEATHER_API_KEY` in the server environment."
+    ),
+)
+async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
+    import logging
+
+    if layer not in WEATHER_TILE_LAYERS:
+        raise HTTPException(status_code=404, detail="Unknown weather layer.")
+
+    cache_key = (layer, z, x, y)
+    cached = _tile_cache_get(cache_key)
+    if cached is not None:
+        content, media_type = cached
+        return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=900"})
+
+    api_key = os.getenv("OPENWEATHER_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Missing OPENWEATHER_API_KEY.")
+
+    url = f"https://tile.openweathermap.org/map/{layer}/{z}/{x}/{y}.png"
+    try:
+        response = await _weather_tile_client().get(url, params={"appid": api_key})
+    except httpx.RequestError as exc:
+        logging.warning("OpenWeather tile request error: %s", exc)
+        raise HTTPException(status_code=502, detail="OpenWeather tile request failed.") from exc
+
+    if response.status_code >= 400:
+        logging.warning("OpenWeather tile upstream returned %s for %s", response.status_code, layer)
+        raise HTTPException(status_code=502, detail="OpenWeather tile request failed.")
+
+    media_type = response.headers.get("content-type", "image/png")
+    _tile_cache_put(cache_key, response.content, media_type)
+    return Response(
+        content=response.content,
+        media_type=media_type,
+        # Cache in the browser too so panning/zoom revisits are instant.
+        headers={"Cache-Control": "public, max-age=900"},
+    )

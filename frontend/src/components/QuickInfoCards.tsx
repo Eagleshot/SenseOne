@@ -1,87 +1,57 @@
-import { Battery, Signal } from 'lucide-react';
-
 import { useApp } from '@/contexts/AppContext';
-import { LOADING_LABEL, UNAVAILABLE_LABEL } from '@/lib/placeholders';
 import { cn } from '@/lib/utils';
+import {
+  STATUS_METRIC_KEYS,
+  formatMetricValue,
+  metricIcon,
+  metricLabel,
+} from '@/lib/metricCatalog';
+
+type StatusLevel = 'success' | 'warning' | 'error';
+
+// Status metrics here (battery, reception) are 0-100% where higher is better.
+const levelForValue = (value: number): StatusLevel =>
+  value >= 60 ? 'success' : value >= 30 ? 'warning' : 'error';
+
+const levelTextClass = (level: StatusLevel) =>
+  level === 'success' ? 'text-success' : level === 'warning' ? 'text-warning' : 'text-destructive';
 
 export const QuickInfoCards: React.FC = () => {
   const { activeWebcam, historicalData } = useApp();
 
-  const getBatteryStatus = (battery: number | null): 'success' | 'warning' | 'error' | 'neutral' => {
-    if (battery === null) return 'neutral';
-    if (battery >= 60) return 'success';
-    if (battery >= 30) return 'warning';
-    return 'error';
+  const latestReading = historicalData[historicalData.length - 1];
+  const readingValue = (key: string): number | null => {
+    const value = latestReading?.[key];
+    return typeof value === 'number' ? value : null;
   };
 
-  const latestReading = historicalData[historicalData.length - 1];
-  const historyBattery = latestReading?.battery;
-  const batteryLevel =
-    typeof activeWebcam.battery === 'number'
-      ? activeWebcam.battery
-      : typeof historyBattery === 'number'
-        ? historyBattery
-        : null;
-  const batteryStatus = getBatteryStatus(batteryLevel);
-  const isStationKnown = Boolean(activeWebcam.id);
-  const pendingLabel = isStationKnown ? LOADING_LABEL : UNAVAILABLE_LABEL;
+  // Battery may also arrive on the station summary, so fall back to that.
+  const cards = STATUS_METRIC_KEYS.map((key) => {
+    const value =
+      key === 'battery'
+        ? readingValue('battery') ??
+          (typeof activeWebcam.battery === 'number' ? activeWebcam.battery : null)
+        : readingValue(key);
+    return { key, value };
+  }).filter((card): card is { key: string; value: number } => card.value !== null);
 
-  const signalStrength =
-    typeof activeWebcam.isOnline !== 'boolean' ? pendingLabel : activeWebcam.isOnline ? 'Strong' : 'No signal';
-  const signalStatus =
-    typeof activeWebcam.isOnline !== 'boolean' ? 'neutral' : activeWebcam.isOnline ? 'success' : 'error';
-  const batteryLabel =
-    typeof batteryLevel === 'number'
-      ? `${batteryLevel}%`
-      : !isStationKnown
-        ? UNAVAILABLE_LABEL
-        : activeWebcam.battery === null
-          ? UNAVAILABLE_LABEL
-          : pendingLabel;
-
-  const batteryClass = cn(
-    'font-semibold',
-    batteryStatus === 'success' && 'text-success',
-    batteryStatus === 'warning' && 'text-warning',
-    batteryStatus === 'error' && 'text-destructive',
-    batteryStatus === 'neutral' && 'text-muted-foreground'
-  );
-
-  const signalClass = cn(
-    'font-semibold',
-    signalStatus === 'success' ? 'text-success' : signalStatus === 'error' ? 'text-destructive' : 'text-muted-foreground'
-  );
+  if (cards.length === 0) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-6">
-      <div className="flex items-center gap-2 text-sm text-foreground">
-        <Battery
-          className={cn(
-            'w-4 h-4',
-            batteryStatus === 'success' && 'text-success',
-            batteryStatus === 'warning' && 'text-warning',
-            batteryStatus === 'error' && 'text-destructive',
-            batteryStatus === 'neutral' && 'text-muted-foreground'
-          )}
-        />
-        <span className="text-muted-foreground">Battery</span>
-        <span className={batteryClass}>{batteryLabel}</span>
-      </div>
-      <div className="flex items-center gap-2 text-sm text-foreground">
-        <Signal
-          className={cn(
-            'w-4 h-4',
-            signalStatus === 'success'
-              ? 'text-success'
-              : signalStatus === 'error'
-                ? 'text-destructive'
-                : 'text-muted-foreground'
-          )}
-        />
-        <span className="text-muted-foreground">Signal</span>
-        <span className={signalClass}>{signalStrength}</span>
-      </div>
+      {cards.map(({ key, value }) => {
+        const Icon = metricIcon(key);
+        const level = levelForValue(value);
+        return (
+          <div key={key} className="flex items-center gap-2 text-sm text-foreground">
+            <Icon className={cn('w-4 h-4', levelTextClass(level))} />
+            <span className="text-muted-foreground">{metricLabel(key)}</span>
+            <span className={cn('font-semibold', levelTextClass(level))}>
+              {formatMetricValue(key, value)}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 };
-

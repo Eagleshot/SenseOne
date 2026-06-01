@@ -179,8 +179,7 @@
   .card-interactive,
   .btn-panel,
   .btn-icon-panel,
-  .selector-tile,
-  .btn-glass {
+  .selector-tile {
     position: relative;
   }
 
@@ -196,8 +195,7 @@
   .card-interactive,
   .btn-panel,
   .btn-icon-panel,
-  .selector-tile,
-  .btn-glass {
+  .selector-tile {
     outline: 1px solid rgba(0, 0, 0, 0.048);
     outline-offset: 0;
   }
@@ -223,8 +221,7 @@
   .card-interactive::before,
   .btn-panel::before,
   .btn-icon-panel::before,
-  .selector-tile::before,
-  .btn-glass::before {
+  .selector-tile::before {
     content: "";
     position: absolute;
     inset: 1px;
@@ -233,13 +230,19 @@
     pointer-events: none;
   }
 
-  .btn-panel {
-    @apply gap-2 border-border/70 text-foreground;
-    background-color: hsl(var(--sidebar-background));
+  /* Doubled selector raises specificity above the `outline` button variant's
+     utility classes (border-input / bg-background / hover:bg-accent / hover text
+     color), which would otherwise win the cascade. Matches the sidebar action
+     buttons (see sidebarActionButtonClass in Sidebar.tsx). */
+  .btn-panel.btn-panel {
+    @apply gap-2 border-sidebar-border/90 text-sidebar-foreground;
+    background-color: hsl(var(--sidebar-accent));
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   }
 
-  .btn-panel:hover {
-    background-color: hsl(var(--sidebar-accent));
+  .btn-panel.btn-panel:hover {
+    @apply border-primary/25 text-sidebar-foreground;
+    background-color: hsl(var(--sidebar-accent) / 0.8);
   }
 
   .btn-icon-panel {
@@ -283,9 +286,10 @@
     @apply bg-primary/10 text-primary border border-primary/20 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 
-  /* Button variants */
-  .btn-glass {
-    @apply bg-background/80 backdrop-blur-sm border border-border/50 hover:bg-background hover:border-border transition-all duration-200;
+  /* Give the OpenWeather overlay tiles a subtle saturation/contrast boost so the
+     colours pop a little more against the dark base. */
+  .weather-overlay-tiles {
+    filter: saturate(1.3) contrast(1.08);
   }
 
   /* Gradient overlays */

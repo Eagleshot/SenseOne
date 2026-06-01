@@ -1,21 +1,31 @@
 """Endpoint tests for station metadata, image timeline, and sensor history."""
 
+from dataclasses import dataclass
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from constants import API_PREFIX
-from auth import get_optional_current_user
-from config import station_db_path, write_station_config
+from auth import get_current_user, get_optional_current_user
+from config import read_station_config, read_station_owner, station_db_path, write_station_config
 from models import AppConfig
 from routes import stations
 from station_db import append_sensor_reading
 
 
-def _client(data_dir, monkeypatch) -> TestClient:
+@dataclass(frozen=True)
+class RouteUser:
+    username: str
+    is_admin: bool = False
+
+
+def _client(data_dir, monkeypatch, user=None) -> TestClient:
     monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
     app = FastAPI()
     app.include_router(stations.router, prefix=API_PREFIX)
     app.dependency_overrides[get_optional_current_user] = lambda: None
+    if user is not None:
+        app.dependency_overrides[get_current_user] = lambda: user
     return TestClient(app)
 
 
@@ -52,6 +62,32 @@ def test_private_station_is_hidden_from_anonymous_list(setup_station_dir, monkey
     assert response.json() == []
 
 
+def test_create_station_assigns_owner_and_private_default(tmp_data_dir, monkeypatch):
+    client = _client(tmp_data_dir, monkeypatch, RouteUser("owner"))
+
+    response = client.post("/stations", json={"title": "Peak Camera"})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] == "Peak-Camera"
+    assert body["name"] == "Peak Camera"
+    assert body["isPublic"] is False
+    assert read_station_owner(tmp_data_dir, "Peak-Camera") == "owner"
+    assert read_station_config(tmp_data_dir, "Peak-Camera").title == "Peak Camera"
+
+
+def test_create_station_auto_suffixes_duplicate_ids(setup_station_dir, monkeypatch):
+    data_dir, _ = setup_station_dir
+    client = _client(data_dir, monkeypatch, RouteUser("owner"))
+
+    response = client.post("/stations", json={"title": "test station", "isPublic": True})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] == "test-station-2"
+    assert body["isPublic"] is True
+
+
 def test_station_detail_includes_latest_image(station_with_sample_images, monkeypatch):
     data_dir, station_id = station_with_sample_images
     client = _client(data_dir, monkeypatch)
@@ -86,12 +122,7 @@ def test_station_detail_uses_db_runtime_timestamps(setup_station_dir, monkeypatc
             "humidity": 58,
             "pressure": 1012,
             "battery": 87,
-            "wind_speed": 4.2,
-            "wind_direction": 225,
-            "visibility": 9.5,
-            "uv_index": 3,
-            "dew_point": 13.1,
-            "feels_like": 20.9,
+            "reception": 73,
         },
         next_online="2026-05-23T12:30:00Z",
     )
@@ -127,4 +158,4 @@ def test_sensor_readings_use_requested_window(station_with_history, monkeypatch)
     assert response.status_code == 200
     body = response.json()
     assert len(body) <= 2
-    assert {"timestamp", "temperature", "humidity", "battery", "windSpeed", "uvIndex"} <= set(body[0])
+    assert {"timestamp", "temperature", "humidity", "battery", "reception"} <= set(body[0])

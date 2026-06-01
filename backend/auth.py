@@ -48,7 +48,7 @@ def ensure_auth_configured() -> None:
         return
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Authentication is not configured. Bootstrap an admin user first.",
+        detail="Authentication is not configured.",
     )
 
 
@@ -117,8 +117,7 @@ def get_current_user(username: str = Depends(get_current_username)):
     from users import get_user
 
     user = get_user(username)
-    if user is None:
-        # The user was deleted while their session was still valid.
+    if user is None: # The user was deleted while their session was still valid.
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists.")
     return user
 

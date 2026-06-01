@@ -25,6 +25,7 @@ export const FullscreenDialog: FC<FullscreenDialogProps> = ({
   <Dialog open={open} onOpenChange={onOpenChange}>
     {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
     <DialogContent
+      hideCloseButton
       className={cn(
         edgeToEdge
           ? "h-screen max-h-screen w-screen max-w-screen overflow-hidden border-0 bg-background p-0 rounded-none"

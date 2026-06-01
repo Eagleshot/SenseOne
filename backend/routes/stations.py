@@ -3,13 +3,14 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from constants import NEXT_ONLINE_STATUS_BUFFER_MINUTES
 from models import (
     AppConfig,
     SensorHistoryResponse,
     StationCoordinates,
+    StationCreateRequest,
     StationDetailResponse,
     StationDeviceSecretResponse,
     StationSummaryResponse,
@@ -21,9 +22,11 @@ from auth import (
     get_optional_current_user,
 )
 from config import (
+    ensure_station_dir,
     get_data_dir,
     read_station_config,
     station_db_path,
+    write_station_meta,
     write_station_config,
 )
 from routes import ValidStationId
@@ -33,7 +36,7 @@ from station_access import (
     require_station_view,
 )
 from station_db import history_from_db, image_captures_from_db, latest_status_from_db
-from utils import humanize_station_id, parse_iso_timestamp, sanitize_station_id
+from utils import humanize_station_id, parse_iso_timestamp, sanitize_station_id, unique_station_id
 
 
 router = APIRouter(prefix="/stations", tags=["Stations"])
@@ -64,14 +67,26 @@ def is_station_online(next_online: str | None) -> bool:
     return datetime.now(timezone.utc) <= next_online_at + timedelta(minutes=NEXT_ONLINE_STATUS_BUFFER_MINUTES)
 
 
-def station_status(
-    base_dir: Path,
-    station_id: str,
-) -> tuple[bool, str | None, str | None, str | None, int | None]:
-    """Get full station status. Returns (is_online, current_image, last_update, next_update, battery)."""
-    capture, battery, last_online, next_online = latest_status_from_db(station_db_path(base_dir, station_id), station_id)
-    current_image = capture["url"] if capture else None
-    return is_station_online(next_online), current_image, last_online, next_online, battery
+def station_detail_response(data_dir: Path, station_id: str, config: AppConfig) -> StationDetailResponse:
+    """Build a station detail response from config plus latest runtime status."""
+    status = latest_status_from_db(station_db_path(data_dir, station_id), station_id)
+    return StationDetailResponse(
+        id=station_id,
+        name=config.title or humanize_station_id(station_id),
+        location=config.location,
+        country=config.country,
+        country_emoji=config.country_emoji,
+        coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
+        is_public=config.is_public,
+        is_online=is_station_online(status.next_online),
+        description=config.description,
+        battery=status.battery,
+        current_image=status.capture["url"] if status.capture else None,
+        last_update=status.last_online,
+        next_update=status.next_online,
+        firmware_version=status.firmware_version,
+        wake_reason=status.wake_reason,
+    )
 
 
 @router.get(
@@ -91,7 +106,7 @@ def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummar
         config = read_station_config(data_dir, station_id)
         if not can_view_station(station_id, user, config):
             continue
-        _, _, _, next_online = latest_status_from_db(station_db_path(data_dir, station_id), station_id)
+        next_online = latest_status_from_db(station_db_path(data_dir, station_id), station_id).next_online
         stations.append(
             StationSummaryResponse(
                 id=station_id,
@@ -105,6 +120,45 @@ def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummar
             )
         )
     return stations
+
+
+@router.post(
+    "",
+    response_model=StationDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create station",
+    description=(
+        "Create a new station owned by the authenticated user. The station id "
+        "is derived from the title and made unique automatically."
+    ),
+)
+def create_station(
+    payload: StationCreateRequest,
+    user=Depends(get_current_user),
+) -> StationDetailResponse:
+    data_dir = get_data_dir()
+    station_id = unique_station_id(data_dir, payload.title, default="station")
+    if station_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not create a unique station id.",
+        )
+    config = AppConfig(
+        title=payload.title,
+        location=payload.location,
+        country=payload.country,
+        country_emoji=payload.country_emoji,
+        lat=payload.lat,
+        lon=payload.lon,
+        alt=payload.alt,
+        is_public=payload.is_public,
+    )
+
+    ensure_station_dir(data_dir, station_id)
+    write_station_config(data_dir, station_id, config)
+    write_station_meta(data_dir, station_id, owner=user.username)
+
+    return station_detail_response(data_dir, station_id, config)
 
 
 @router.post(
@@ -144,22 +198,7 @@ def get_station(
     require_station_view(station_id, user)
     data_dir = get_data_dir()
     config = read_station_config(data_dir, station_id)
-    is_online, current_image, last_update, next_update, battery = station_status(data_dir, station_id)
-    return StationDetailResponse(
-        id=station_id,
-        name=config.title or humanize_station_id(station_id),
-        location=config.location,
-        country=config.country,
-        country_emoji=config.country_emoji,
-        coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
-        is_public=config.is_public,
-        is_online=is_online,
-        description=config.description,
-        battery=battery,
-        current_image=current_image,
-        last_update=last_update,
-        next_update=next_update,
-    )
+    return station_detail_response(data_dir, station_id, config)
 
 
 @router.get(

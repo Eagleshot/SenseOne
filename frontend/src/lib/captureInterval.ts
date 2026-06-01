@@ -8,7 +8,7 @@ export const CAPTURE_INTERVAL_OPTIONS = [
   { value: "60", label: "60 min" },
 ] as const;
 
-const PRESET_CAPTURE_INTERVAL_VALUES = new Set(CAPTURE_INTERVAL_OPTIONS.map((option) => option.value));
+const PRESET_CAPTURE_INTERVAL_VALUES = new Set<string>(CAPTURE_INTERVAL_OPTIONS.map((option) => option.value));
 const MIN_CAPTURE_INTERVAL_MINUTES = 1;
 const MAX_CAPTURE_INTERVAL_MINUTES = 1440;
 

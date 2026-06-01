@@ -1,5 +1,5 @@
 import { SensorData, Webcam } from "@/data/types";
-import { apiBaseUrl, fetchJson } from "@/lib/apiClient";
+import { apiBaseUrl, extractErrorDetail, fetchJson } from "@/lib/apiClient";
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 
 export type WebcamCoordinatesResponse = {
@@ -14,7 +14,6 @@ export type StationSummaryResponse = {
   location: string;
   country?: string;
   countryEmoji?: string;
-  battery?: number | null;
   coordinates: WebcamCoordinatesResponse;
   isPublic?: boolean;
 };
@@ -23,10 +22,13 @@ export type StationDetailResponse = StationSummaryResponse & {
   description?: string;
   country?: string;
   countryEmoji?: string;
+  battery?: number | null;
   currentImage?: string | null;
   isOnline?: boolean;
   lastUpdate?: string | null;
   nextUpdate?: string | null;
+  firmwareVersion?: string | null;
+  wakeReason?: string | null;
 };
 
 export type StationConfigResponse = {
@@ -45,6 +47,23 @@ export type StationConfigResponse = {
   isPublic: boolean;
   lastOnline?: string | null;
   nextOnline?: string | null;
+};
+
+export type StationCreatePayload = {
+  title: string;
+  location: string;
+  country: string;
+  countryEmoji: string;
+  lat: number;
+  lon: number;
+  alt: number;
+  isPublic: boolean;
+};
+
+export type StationCreateResult = {
+  success: boolean;
+  station?: StationDetailResponse;
+  error?: string;
 };
 
 export type StationScheduleConfig = {
@@ -136,7 +155,7 @@ export const parseTimestampResponse = <
 ): U => ({
   ...item,
   timestamp: parseApiTimestamp(item.timestamp),
-} as U);
+} as unknown as U);
 
 export const parseTimelineItemResponse = (item: TimelineItemResponse, baseUrl: string): TimelineImage => ({
   ...item,
@@ -153,6 +172,82 @@ export const listStations = (baseUrl: string, signal?: AbortSignal) =>
     signal,
     throwOnHttpError: false,
   });
+
+export const createStation = async (
+  baseUrl: string,
+  payload: StationCreatePayload
+): Promise<StationCreateResult> => {
+  try {
+    const response = await fetch(`${baseUrl}/stations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const fallback =
+        response.status === 401
+          ? "Sign in again before creating a station."
+          : "Unable to create station.";
+      let message = fallback;
+
+      try {
+        const body = await response.json();
+        message = extractErrorDetail(body, fallback);
+      } catch {
+        // Keep fallback when the response body is empty or invalid JSON.
+      }
+
+      return { success: false, error: message };
+    }
+
+    const station = (await response.json()) as StationDetailResponse;
+    return { success: true, station };
+  } catch {
+    return { success: false, error: "Unable to reach station service." };
+  }
+};
+
+export type DeviceSecretResult = {
+  success: boolean;
+  secret?: string;
+  error?: string;
+};
+
+export const rotateStationDeviceSecret = async (
+  baseUrl: string,
+  stationId: string
+): Promise<DeviceSecretResult> => {
+  try {
+    const response = await fetch(`${baseUrl}/stations/${encodeURIComponent(stationId)}/rotate-device-secret`, {
+      method: "POST",
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      const fallback =
+        response.status === 401
+          ? "Sign in again to provision a device secret."
+          : "Unable to provision a device secret.";
+      let message = fallback;
+      try {
+        message = extractErrorDetail(await response.json(), fallback);
+      } catch {
+        // Keep fallback when the response body is empty or invalid JSON.
+      }
+      return { success: false, error: message };
+    }
+
+    const body = (await response.json()) as { deviceHmacSecret?: string };
+    if (!body.deviceHmacSecret) {
+      return { success: false, error: "Device secret missing from response." };
+    }
+    return { success: true, secret: body.deviceHmacSecret };
+  } catch {
+    return { success: false, error: "Unable to reach station service." };
+  }
+};
 
 export const getStationConfig = (baseUrl: string, stationId: string, signal?: AbortSignal) =>
   fetchJson<StationConfigResponse>(stationPath(stationId, "/config", baseUrl), {
