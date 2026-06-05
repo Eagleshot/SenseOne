@@ -6,6 +6,8 @@ import {
   ChevronDown,
   Copy,
   ExternalLink,
+  Eye,
+  EyeOff,
   Globe,
   Lock,
   LogIn,
@@ -69,6 +71,7 @@ export const Sidebar: React.FC = () => {
   const [isLoginFormOpen, setIsLoginFormOpen] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isCreateStationOpen, setIsCreateStationOpen] = useState(false);
@@ -288,9 +291,9 @@ export const Sidebar: React.FC = () => {
 
         <div className="p-4">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search webcams..."
+              placeholder="Search stations..."
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               className={cn("pl-10 focus-visible:border-primary/55", sidebarFieldClass)}
@@ -351,7 +354,7 @@ export const Sidebar: React.FC = () => {
               </motion.button>
             ))}
 
-            {filteredWebcams.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">No webcams found</div>}
+            {filteredWebcams.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">No stations found.</div>}
           </div>
         </ScrollArea>
 
@@ -408,15 +411,25 @@ export const Sidebar: React.FC = () => {
                       autoComplete="email"
                       required
                     />
-                    <Input
-                      type="password"
-                      placeholder="Password"
-                      value={loginPassword}
-                      onChange={(event) => setLoginPassword(event.target.value)}
-                      className="h-9 bg-background/80"
-                      autoComplete="current-password"
-                      required
-                    />
+                    <div className="relative">
+                      <Input
+                        type={showPassword ? "text" : "password"}
+                        placeholder="Password"
+                        value={loginPassword}
+                        onChange={(event) => setLoginPassword(event.target.value)}
+                        className="h-9 bg-background/80 pr-9"
+                        autoComplete="current-password"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((prev) => !prev)}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        className="absolute right-2 top-1/2 z-10 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                     {loginError && <p className="text-xs text-destructive">{loginError}</p>}
                     <Button type="submit" size="sm" disabled={isAuthenticating} className="w-full">
                       {isAuthenticating ? "Signing in..." : "Sign in"}

@@ -140,7 +140,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
         <div className="pt-4 space-y-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="relative flex-1 max-w-xs">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
                 placeholder="Search data..."
                 value={searchQuery}
