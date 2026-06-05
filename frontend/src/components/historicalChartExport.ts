@@ -22,83 +22,114 @@ const inlineSvgStyles = (source: Element, target: Element) => {
   });
 };
 
+// Serialize a live SVG element to a standalone, style-inlined <img>, so it can be
+// drawn onto a canvas. `color` resolves the SVG's `currentColor` (e.g. lucide
+// icon strokes); `fontFamily` keeps any embedded text on-brand.
+const rasterizeSvg = (
+  svg: SVGSVGElement,
+  width: number,
+  height: number,
+  { color, fontFamily }: { color?: string; fontFamily?: string }
+): Promise<{ image: HTMLImageElement; revoke: () => void }> => {
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+  clone.setAttribute("width", `${width}`);
+  clone.setAttribute("height", `${height}`);
+  if (!clone.getAttribute("viewBox")) {
+    clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  }
+  inlineSvgStyles(svg, clone);
+  if (color) clone.style.color = color;
+  if (fontFamily) clone.style.fontFamily = fontFamily;
+
+  const markup = new XMLSerializer().serializeToString(clone);
+  const blob = new Blob([markup], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const revoke = () => URL.revokeObjectURL(url);
+
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve({ image, revoke });
+    image.onerror = () => {
+      revoke();
+      reject(new Error("Unable to export chart image."));
+    };
+    image.src = url;
+  });
+};
+
+const ICON_SIZE = 20; // matches the in-app h-5 w-5 header icon
+
 export const exportChartAsImage = async (
   container: HTMLDivElement,
-  { title, subtitle }: { title: string; subtitle?: string }
+  { title, subtitle, icon }: { title: string; subtitle?: string; icon?: SVGSVGElement | null }
 ) => {
   const svg = container.querySelector("svg");
   if (!svg) return;
   const rect = svg.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
 
-  const serializer = new XMLSerializer();
-  const svgClone = svg.cloneNode(true) as SVGSVGElement;
-  svgClone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  svgClone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
-  svgClone.setAttribute("width", `${Math.ceil(rect.width)}`);
-  svgClone.setAttribute("height", `${Math.ceil(rect.height)}`);
-  if (!svgClone.getAttribute("viewBox")) {
-    svgClone.setAttribute("viewBox", `0 0 ${Math.ceil(rect.width)} ${Math.ceil(rect.height)}`);
-  }
-
   const computedContainerStyle = getComputedStyle(container);
-  inlineSvgStyles(svg, svgClone);
-  svgClone.style.fontFamily = computedContainerStyle.fontFamily;
-  svgClone.style.color = computedContainerStyle.color;
+  const fontFamily = computedContainerStyle.fontFamily || "sans-serif";
+  const foregroundColor = computedContainerStyle.color || "#111827";
+  const width = Math.ceil(rect.width);
+  const chartHeight = Math.ceil(rect.height);
 
-  const svgMarkup = serializer.serializeToString(svgClone);
-  const svgBlob = new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" });
-  const svgUrl = URL.createObjectURL(svgBlob);
+  const chart = await rasterizeSvg(svg, width, chartHeight, { color: foregroundColor, fontFamily });
+
+  // The header icon, in its on-screen (muted) colour. Falls back to title-only
+  // if it can't be rendered.
+  let iconImage: { image: HTMLImageElement; revoke: () => void } | null = null;
+  if (icon) {
+    try {
+      iconImage = await rasterizeSvg(icon, ICON_SIZE, ICON_SIZE, { color: getComputedStyle(icon).color });
+    } catch {
+      iconImage = null;
+    }
+  }
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => {
-        const scale = 2;
-        const hasSubtitle = Boolean(subtitle?.trim());
-        const titleBlockHeight = 72;
-        const exportHeight = rect.height + titleBlockHeight;
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.ceil(rect.width * scale);
-        canvas.height = Math.ceil(exportHeight * scale);
-        const context = canvas.getContext("2d");
-        if (!context) {
-          reject(new Error("Unable to export chart image."));
-          return;
-        }
+    const scale = 2;
+    const hasSubtitle = Boolean(subtitle?.trim());
+    const titleBlockHeight = hasSubtitle ? 72 : 56;
+    const exportHeight = chartHeight + titleBlockHeight;
 
-        context.scale(scale, scale);
-        const backgroundColor = getComputedStyle(container).backgroundColor || "#ffffff";
-        const foregroundColor = computedContainerStyle.color || "#111827";
-        context.fillStyle = backgroundColor;
-        context.fillRect(0, 0, rect.width, exportHeight);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(width * scale);
+    canvas.height = Math.ceil(exportHeight * scale);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Unable to export chart image.");
 
-        context.fillStyle = foregroundColor;
-        context.font = `600 20px ${computedContainerStyle.fontFamily || "sans-serif"}`;
-        context.textBaseline = "top";
-        context.fillText(title, 16, 14);
+    context.scale(scale, scale);
+    // Transparent background — no fill, so the exported PNG keeps an alpha channel.
 
-        if (hasSubtitle && subtitle) {
-          context.globalAlpha = 0.72;
-          context.fillStyle = foregroundColor;
-          context.font = `400 12px ${computedContainerStyle.fontFamily || "sans-serif"}`;
-          context.fillText(subtitle, 16, 40);
-          context.globalAlpha = 1;
-        }
+    // Header, mirroring the in-app heading: icon + bold title.
+    const titleX = iconImage ? 16 + ICON_SIZE + 8 : 16;
+    if (iconImage) {
+      context.drawImage(iconImage.image, 16, 18, ICON_SIZE, ICON_SIZE);
+    }
+    context.fillStyle = foregroundColor;
+    context.font = `700 24px ${fontFamily}`; // text-2xl / font-bold
+    context.textBaseline = "top";
+    context.fillText(title, titleX, 16);
 
-        context.drawImage(image, 0, titleBlockHeight, rect.width, rect.height);
+    if (hasSubtitle && subtitle) {
+      context.globalAlpha = 0.72;
+      context.fillStyle = foregroundColor;
+      context.font = `400 12px ${fontFamily}`;
+      context.fillText(subtitle, titleX, 44);
+      context.globalAlpha = 1;
+    }
 
-        const link = document.createElement("a");
-        link.href = canvas.toDataURL("image/png");
-        link.download = `${sanitizeFileName(title)}.png`;
-        link.click();
-        resolve();
-      };
-      image.onerror = () => reject(new Error("Unable to export chart image."));
-      image.src = svgUrl;
-    });
+    context.drawImage(chart.image, 0, titleBlockHeight, width, chartHeight);
+
+    const link = document.createElement("a");
+    link.href = canvas.toDataURL("image/png");
+    link.download = `${sanitizeFileName(title)}.png`;
+    link.click();
   } finally {
-    URL.revokeObjectURL(svgUrl);
+    chart.revoke();
+    iconImage?.revoke();
   }
 };
-

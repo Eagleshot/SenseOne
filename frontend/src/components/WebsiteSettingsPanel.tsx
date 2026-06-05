@@ -35,7 +35,7 @@ export const WebsiteSettingsPanel: React.FC = () => {
     stationConfigError,
     isPublic,
     setIsPublic,
-    isAuthenticated,
+    canEdit,
   } = useApp();
 
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -60,6 +60,7 @@ export const WebsiteSettingsPanel: React.FC = () => {
     const nextSelection = getCaptureIntervalSelection(captureInterval);
     const nextCustomInput = getCustomCaptureIntervalInput(captureInterval);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: re-derive interval controls from the saved config
     setIntervalSelection(nextSelection);
     setCustomIntervalInput(nextCustomInput);
     setIntervalError(
@@ -68,6 +69,7 @@ export const WebsiteSettingsPanel: React.FC = () => {
   }, [captureInterval]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: re-seed schedule drafts from the saved config
     setDraftStationStartTime(stationStartTime);
     setDraftStationStopTime(stationStopTime);
     setDraftUseSunriseSunset(useSunriseSunset);
@@ -190,30 +192,34 @@ export const WebsiteSettingsPanel: React.FC = () => {
         </div>
 
         <Accordion type="multiple" defaultValue={[]} className="space-y-2">
-          <ScheduleSettingsSection
-            stationConfigError={stationConfigError}
-            isStationConfigLoading={isStationConfigLoading}
-            isStationConfigSaving={isStationConfigSaving}
-            scheduleControlsDisabled={scheduleControlsDisabled}
-            draftUseSunriseSunset={draftUseSunriseSunset}
-            setDraftUseSunriseSunset={setDraftUseSunriseSunset}
-            draftStationStartTime={draftStationStartTime}
-            setDraftStationStartTime={setDraftStationStartTime}
-            draftStationStopTime={draftStationStopTime}
-            setDraftStationStopTime={setDraftStationStopTime}
-            intervalSelection={intervalSelection}
-            handleIntervalSelect={handleIntervalSelect}
-            customIntervalInput={customIntervalInput}
-            handleCustomIntervalChange={handleCustomIntervalChange}
-            intervalError={intervalError}
-            scheduleError={scheduleError}
-            clearScheduleError={clearScheduleError}
-            handleCancelScheduleEdit={handleCancelScheduleEdit}
-            handleSaveSchedule={handleSaveSchedule}
-            isButtonDisabled={isButtonDisabled}
-          />
+          {/* Schedule and Visibility edit the station's owner-only config, so
+              they're shown only to the owner/admin (canEdit). */}
+          {canEdit && (
+            <ScheduleSettingsSection
+              stationConfigError={stationConfigError}
+              isStationConfigLoading={isStationConfigLoading}
+              isStationConfigSaving={isStationConfigSaving}
+              scheduleControlsDisabled={scheduleControlsDisabled}
+              draftUseSunriseSunset={draftUseSunriseSunset}
+              setDraftUseSunriseSunset={setDraftUseSunriseSunset}
+              draftStationStartTime={draftStationStartTime}
+              setDraftStationStartTime={setDraftStationStartTime}
+              draftStationStopTime={draftStationStopTime}
+              setDraftStationStopTime={setDraftStationStopTime}
+              intervalSelection={intervalSelection}
+              handleIntervalSelect={handleIntervalSelect}
+              customIntervalInput={customIntervalInput}
+              handleCustomIntervalChange={handleCustomIntervalChange}
+              intervalError={intervalError}
+              scheduleError={scheduleError}
+              clearScheduleError={clearScheduleError}
+              handleCancelScheduleEdit={handleCancelScheduleEdit}
+              handleSaveSchedule={handleSaveSchedule}
+              isButtonDisabled={isButtonDisabled}
+            />
+          )}
 
-          {isAuthenticated && (
+          {canEdit && (
             <VisibilitySection
               isPrivate={isPrivate}
               handleToggleVisibility={handleToggleVisibility}

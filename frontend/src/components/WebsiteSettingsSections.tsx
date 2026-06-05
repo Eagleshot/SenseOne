@@ -117,7 +117,7 @@ export const ScheduleSettingsSection = ({
           <div className="space-y-1.5">
             <label className="text-xs text-muted-foreground">Capture interval</label>
             <Select value={intervalSelection} onValueChange={handleIntervalSelect} disabled={scheduleControlsDisabled}>
-              <SelectTrigger className="bg-background/70 border-border">
+              <SelectTrigger className="bg-background/70">
                 <SelectValue placeholder="Select interval" />
               </SelectTrigger>
               <SelectContent>

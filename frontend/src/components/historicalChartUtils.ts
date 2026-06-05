@@ -3,5 +3,3 @@
 // from the data at runtime and labelled via the metric catalog.
 export type MetricType = string;
 
-export type ChartIconKey = "line" | "thermometer" | "battery" | "humidity" | "wind" | "gauge" | "activity" | "eye";
-

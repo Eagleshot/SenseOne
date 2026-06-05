@@ -1,35 +1,19 @@
-"""Shared station access checks used by route modules."""
+"""Shared station access checks used by route modules (SQLite-backed)."""
 
 from fastapi import HTTPException, status
 
-from config import get_data_dir, read_station_config, read_station_owner
-from models import AppConfig
+from db import sqlite_repo
 
 
 def require_station_exists(station_id: str) -> None:
-    """Raise 404 if no directory has been created for this station."""
-    if not (get_data_dir() / station_id).exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Unknown station id.",
-        )
+    """Raise 404 if the station does not exist."""
+    if not sqlite_repo.station_exists(station_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown station id.")
 
 
-def can_view_station(station_id: str, user, config: AppConfig | None = None) -> bool:
+def can_view_station(station_id: str, user) -> bool:
     """A caller may view a station if it is public, owned by them, or they are admin."""
-    data_dir = get_data_dir()
-    if not (data_dir / station_id).exists():
-        return False
-
-    if config is None:
-        config = read_station_config(data_dir, station_id)
-    if config.is_public:
-        return True
-    if user is None:
-        return False
-    if user.is_admin:
-        return True
-    return read_station_owner(data_dir, station_id) == user.username
+    return sqlite_repo.can_view(station_id, user)
 
 
 def require_station_view(station_id: str, user) -> None:
@@ -41,13 +25,23 @@ def require_station_view(station_id: str, user) -> None:
         )
 
 
+def can_edit_station(station_id: str, user) -> bool:
+    """True if the caller may edit the station (admin or its owner)."""
+    if user is None:
+        return False
+    if getattr(user, "is_admin", False):
+        return True
+    return sqlite_repo.station_owner_id(station_id) == getattr(user, "owner_id", None)
+
+
 def require_station_edit(station_id: str, user) -> None:
-    """Allow only admins or the station owner to edit a station."""
+    """Allow only admins or the owning user to edit a station."""
     require_station_exists(station_id)
     if user.is_admin:
         return
-    if read_station_owner(get_data_dir(), station_id) != user.username:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this station.",
-        )
+    if sqlite_repo.station_owner_id(station_id) == getattr(user, "owner_id", None):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have access to this station.",
+    )

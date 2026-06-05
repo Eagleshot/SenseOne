@@ -18,9 +18,9 @@ interface AppProviderProps {
 
 export interface AppContextType {
   isAuthenticated: boolean;
-  authenticatedUsername: string | null;
+  authenticatedEmail: string | null;
   authReady: boolean;
-  login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
 
   isDarkMode: boolean;
@@ -71,6 +71,7 @@ export interface AppContextType {
 
   isPublic: boolean;
   setIsPublic: (isPublic: boolean) => Promise<void>;
+  canEdit: boolean;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);

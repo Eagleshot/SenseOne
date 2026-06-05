@@ -3,7 +3,7 @@
   "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }],
   "compilerOptions": {
     "paths": {
-      "@/*": ["frontend/src/*"]
+      "@/*": ["./src/*"]
     },
     "strict": true,
     "noUnusedLocals": true,

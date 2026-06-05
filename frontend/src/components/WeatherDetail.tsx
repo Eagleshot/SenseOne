@@ -22,6 +22,7 @@ export const WeatherDetail: React.FC = () => {
 
   useEffect(() => {
     if (!activeWebcam.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clear weather state when no station is selected
       setWeather(null);
       setForecast([]);
       setIsLoading(false);
@@ -90,13 +91,11 @@ export const WeatherDetail: React.FC = () => {
     return `Updated ${relative}.`;
   }, [isLoading, weather]);
 
-  const daylightLabel = useMemo(() => {
-    if (isLoading) return LOADING_LABEL;
-    if (weather?.daylightMinutes === undefined) return UNAVAILABLE_LABEL;
-    const hours = Math.floor(weather.daylightMinutes / 60);
-    const mins = weather.daylightMinutes % 60;
-    return `${hours} h ${mins} m`;
-  }, [isLoading, weather?.daylightMinutes]);
+  const daylightLabel = isLoading
+    ? LOADING_LABEL
+    : weather?.daylightMinutes === undefined
+      ? UNAVAILABLE_LABEL
+      : `${Math.floor(weather.daylightMinutes / 60)} h ${weather.daylightMinutes % 60} m`;
 
   const descriptionLabel = isLoading ? LOADING_LABEL : weather?.description || UNAVAILABLE_LABEL;
   const mainLabel = isLoading ? LOADING_LABEL : weather?.main || UNAVAILABLE_LABEL;

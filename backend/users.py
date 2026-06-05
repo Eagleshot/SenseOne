@@ -1,126 +1,79 @@
-"""User account storage and authentication."""
+"""User account storage and authentication (SQLite-backed).
+
+Login identity is the **email address**. The schema is owned by the Alembic
+migrations (see db.migrate); this module is a thin layer over db.sqlite_repo plus the
+env-var admin bootstrap. ``User.owner_id`` is the user's id that station access checks compare.
+"""
 
 import logging
 import os
-import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
-from auth import hash_secret, verify_secret
-from config import get_data_dir
+from auth import hash_secret
+from db import sqlite_repo
 
-USERS_DB_FILENAME = "users.db"
+# Precomputed hash with the same PBKDF2 cost as a real one. Used by
+# db.sqlite_repo.user_authenticate so the unknown-email path spends the same PBKDF2
+# time as a known-user failure, preventing timing-based account enumeration.
+_DUMMY_PASSWORD_HASH = hash_secret("eagleshot-dummy-password-for-timing")
 
 
 @dataclass(frozen=True)
 class User:
-    username: str
+    email: str
     is_admin: bool
     created_at: str
-
-
-def _connect() -> sqlite3.Connection:
-    path = get_data_dir() / USERS_DB_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
-    connection.row_factory = sqlite3.Row
-    return connection
+    owner_id: str = ""  # this user's id; the owner of their stations
+    plan: str = "free"  # entitlement plan key (see entitlements.PLANS)
 
 
 def init_users_db() -> None:
-    """Create the users table if it doesn't exist and bootstrap an admin from env vars."""
-    with _connect() as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                password_hash TEXT NOT NULL,
-                is_admin INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        connection.commit()
+    """Bootstrap an admin from env vars (the schema is owned by the Alembic migrations)."""
     bootstrap_admin_from_env()
 
 
 def bootstrap_admin_from_env() -> None:
-    """Create an admin user from APP_AUTH_USERNAME / APP_AUTH_PASSWORD if no users exist."""
-    username = (os.getenv("APP_AUTH_USERNAME") or "").strip()
+    """Create an admin user from APP_AUTH_EMAIL / APP_AUTH_PASSWORD if no users exist."""
+    email = (os.getenv("APP_AUTH_EMAIL") or "").strip()
     password = (os.getenv("APP_AUTH_PASSWORD") or "").strip()
-    if not username or not password:
+    if not email or not password:
         return
-    with _connect() as connection:
-        row = connection.execute("SELECT COUNT(*) AS count FROM users").fetchone()
-        if row["count"] > 0:
-            return
+    if has_any_user():
+        return
     try:
-        create_user(username, password, is_admin=True)
-        logging.info("Bootstrap admin user %r created from environment.", username)
+        create_user(email, password, is_admin=True)
+        logging.info("Bootstrap admin user %r created from environment.", email)
     except ValueError as exc:
         logging.error("Failed to bootstrap admin user: %s", exc)
 
 
-def create_user(username: str, password: str, *, is_admin: bool = False) -> User:
-    """Insert a new user. Raises ValueError if the username already exists."""
-    username = username.strip()
-    if not username:
-        raise ValueError("Username must not be empty.")
-    if len(password) < 12:
-        raise ValueError("Password must be at least 12 characters.")
-    created_at = datetime.now(timezone.utc).isoformat()
-    password_hash = hash_secret(password)
-    with _connect() as connection:
-        try:
-            connection.execute(
-                "INSERT INTO users (username, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)",
-                (username, password_hash, 1 if is_admin else 0, created_at),
-            )
-            connection.commit()
-        except sqlite3.IntegrityError as exc:
-            raise ValueError("A user with that username already exists.") from exc
-    return User(username=username, is_admin=is_admin, created_at=created_at)
+def create_user(email: str, password: str, *, is_admin: bool = False) -> User:
+    """Insert a new user. Raises ValueError if the email already exists."""
+    return _user_from_dict(sqlite_repo.user_create(email, password, is_admin=is_admin))
 
 
-def authenticate_user(username: str, password: str) -> User | None:
+def authenticate_user(email: str, password: str) -> User | None:
     """Return the user record if credentials are valid, else None."""
-    username = username.strip()
-    with _connect() as connection:
-        row = connection.execute(
-            "SELECT username, password_hash, is_admin, created_at FROM users WHERE username = ?",
-            (username,),
-        ).fetchone()
-    if row is None:
-        # Run a dummy verify to keep timing similar between known/unknown usernames.
-        verify_secret(password, None)
-        return None
-    if not verify_secret(password, row["password_hash"]):
-        return None
-    return User(
-        username=row["username"],
-        is_admin=bool(row["is_admin"]),
-        created_at=row["created_at"],
-    )
+    result = sqlite_repo.user_authenticate(email, password)
+    return _user_from_dict(result) if result is not None else None
 
 
-def get_user(username: str) -> User | None:
-    """Look up a user by username."""
-    with _connect() as connection:
-        row = connection.execute(
-            "SELECT username, is_admin, created_at FROM users WHERE username = ?",
-            (username.strip(),),
-        ).fetchone()
-    if row is None:
-        return None
-    return User(
-        username=row["username"],
-        is_admin=bool(row["is_admin"]),
-        created_at=row["created_at"],
-    )
+def get_user(email: str) -> User | None:
+    """Look up a user by email."""
+    result = sqlite_repo.user_get(email)
+    return _user_from_dict(result) if result is not None else None
 
 
 def has_any_user() -> bool:
     """True if at least one user exists."""
-    with _connect() as connection:
-        row = connection.execute("SELECT COUNT(*) AS count FROM users").fetchone()
-    return row["count"] > 0
+    return sqlite_repo.user_has_any()
+
+
+def _user_from_dict(data: dict) -> User:
+    return User(
+        email=data["email"],
+        is_admin=bool(data["is_admin"]),
+        created_at=data["created_at"],
+        owner_id=data["owner_id"],
+        plan=data.get("plan", "free"),
+    )

@@ -26,6 +26,7 @@ export const MainContent: React.FC = () => {
   const {
     activeWebcam,
     isAuthenticated,
+    canEdit,
     description,
     descriptionDraft,
     setDraftDescription,
@@ -59,6 +60,7 @@ export const MainContent: React.FC = () => {
   const descriptionButtonsDisabled = isStationConfigLoading || isDescriptionSaving || !hasDescriptionChanges;
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: exit edit mode when the active station changes
     setIsEditingDescription(false);
   }, [activeWebcam.id]);
 
@@ -74,7 +76,9 @@ export const MainContent: React.FC = () => {
     }
   };
 
-  const showDescriptionSection = Boolean(description) || isAuthenticated;
+  // Everyone sees an existing description; only owners/admins (canEdit) see the
+  // empty-state prompt and the Edit/Add affordance, since saving is owner-only.
+  const showDescriptionSection = Boolean(description) || canEdit;
 
   return (
     <div className="flex-1">
@@ -135,12 +139,12 @@ export const MainContent: React.FC = () => {
                   </p>
                 ) : (
                   <p className="text-sm italic leading-relaxed text-muted-foreground">
-                    {isAuthenticated ? "No description yet. Add one for this station." : "No description yet."}
+                    {canEdit ? "No description yet. Add one for this station." : "No description yet."}
                   </p>
                 )}
                 {descriptionError && !isEditingDescription && <p className="pt-1 text-xs text-destructive">{descriptionError}</p>}
               </div>
-              {isAuthenticated && !isEditingDescription && (
+              {canEdit && !isEditingDescription && (
                 <Button
                   type="button"
                   variant="ghost"

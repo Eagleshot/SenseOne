@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
@@ -31,12 +31,6 @@ const data = [
     humidity: 45,
     pressure: 1012,
     battery: 88,
-    windSpeed: 10,
-    windDirection: 180,
-    visibility: 8,
-    uvIndex: 2,
-    dewPoint: 10,
-    feelsLike: 21,
   },
 ];
 
@@ -49,86 +43,28 @@ describe("HistoricalCharts", () => {
     });
   });
 
-  it("opens chart settings for a newly added chart and resets the chart list when the active station changes", async () => {
-    const { rerender } = render(
-      <HistoricalCharts
-        activeStationId="station-1"
-        addChartSignal={0}
-        data={data}
-      />
-    );
+  it("auto-renders one plot per numeric metric", () => {
+    render(<HistoricalCharts data={data} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /add chart/i }));
-
-    expect(screen.getByText("Chart Settings")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("Temperature")).toBeInTheDocument();
-
-    rerender(
-      <HistoricalCharts
-        activeStationId="station-2"
-        addChartSignal={0}
-        data={data}
-      />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("No charts added")).toBeInTheDocument();
-    });
-    expect(screen.queryByRole("heading", { name: /temperature/i })).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("chart-line")).toHaveLength(4);
+    expect(screen.getByRole("heading", { name: /^temperature$/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^humidity$/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^pressure$/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^battery$/i })).toBeInTheDocument();
   });
 
-  it("opens chart settings when a chart is added through the header signal", async () => {
-    const { rerender } = render(
-      <HistoricalCharts
-        activeStationId="station-1"
-        addChartSignal={0}
-        data={data}
-      />
-    );
+  it("keeps a per-plot export button but no configuration controls", () => {
+    render(<HistoricalCharts data={data} />);
 
-    rerender(
-      <HistoricalCharts
-        activeStationId="station-1"
-        addChartSignal={1}
-        data={data}
-      />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Chart Settings")).toBeInTheDocument();
-    });
-    expect(screen.getByDisplayValue("Temperature")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /export chart image/i })).toHaveLength(4);
+    expect(screen.queryByRole("button", { name: /add chart/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/chart settings/i)).not.toBeInTheDocument();
   });
 
-  it("lets you choose individual metrics for a chart", async () => {
-    render(
-      <HistoricalCharts
-        activeStationId="station-1"
-        addChartSignal={0}
-        data={data}
-      />
-    );
+  it("shows an empty state when there are no numeric metrics", () => {
+    render(<HistoricalCharts data={[]} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /add chart/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Chart Settings")).toBeInTheDocument();
-    });
-
-    expect(screen.getByDisplayValue("Temperature")).toBeInTheDocument();
-    expect(screen.getAllByTestId("chart-line")).toHaveLength(1);
-
-    // Open metrics dropdown and select humidity
-    fireEvent.click(screen.getAllByRole("button", { name: /Temperature/ })[0]);
-    await waitFor(() => {
-      fireEvent.click(screen.getByRole("checkbox", { name: /humidity/i }));
-    });
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-
-    await waitFor(() => {
-      expect(screen.getAllByTestId("chart-line")).toHaveLength(2);
-    });
-    expect(screen.getByRole("heading", { name: /temperature \+ humidity/i })).toBeInTheDocument();
+    expect(screen.getByText(/no data available/i)).toBeInTheDocument();
+    expect(screen.queryAllByTestId("chart-line")).toHaveLength(0);
   });
 });
-

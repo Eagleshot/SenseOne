@@ -1,8 +1,8 @@
 # OpenMV N6 cellular image uploader for a SIM7670E / A7670E modem.
 #
-# Single-file firmware: HMAC signing, modem driver, clock/scheduling, and
-# capture cycle are all in this module so only main.py needs to be copied
-# to the board.
+# This module holds the modem driver, clock/scheduling, and capture cycle.
+# HMAC request signing lives in eagleshot_signing.py (shared with the other
+# clients); copy BOTH files to the board root.
 #
 # Wiring:
 # - OpenMV P4/TX -> modem RX
@@ -14,33 +14,34 @@
 # replayed once at the server. Safe over plain HTTP because the modem
 # can't reliably do TLS on this network.
 #
-# Provisioning: in the server admin UI, POST /stations/<id>/rotate-device-secret
-# and paste the returned secret into STATION_SECRET_B64 below.
+# Provisioning: in the server admin UI, rotate the station's device secret
+# (POST /v1/stations/<public_id>/rotate-device-secret). Set STATION_ID below to the
+# station's stable opaque id (its `id` in the API / admin UI, NOT the display
+# name or pretty URL slug), and paste the returned secret into STATION_SECRET_B64.
 
-import binascii
 import gc
-import hashlib
 import json
 import machine
-import os
 import sensor
 import time
 
 from pyb import UART
+
+from eagleshot_signing import sign_request
 
 
 # ----- Station configuration -------------------------------------------------
 
 API_HOST = "api.eagleshot.org"
 API_SCHEME = "http"
-STATION_ID = "silvretta-glacier"
+STATION_ID = "REPLACE-WITH-STATION-PUBLIC-ID"  # the station's stable opaque id
 STATION_SECRET_B64 = "REPLACE-WITH-PROVISIONED-DEVICE-SECRET"
 CAMERA_NAME = "front"
 FIRMWARE_VERSION = "1.0.0"
 
-UPLOAD_PATH = "/device/stations/%s/images" % STATION_ID
-SENSOR_READINGS_PATH = "/device/stations/%s/sensor-readings" % STATION_ID
-CONFIG_PATH = "/device/stations/%s/config" % STATION_ID
+UPLOAD_PATH = "/v1/ingest/stations/%s/images" % STATION_ID
+SENSOR_READINGS_PATH = "/v1/ingest/stations/%s/sensor-readings" % STATION_ID
+CONFIG_PATH = "/v1/ingest/stations/%s/config" % STATION_ID
 CLOCK_PATH = "/clock"
 
 JPEG_QUALITY = 100
@@ -70,67 +71,6 @@ MAX_HTTPDATA_BYTES = 150000
 # AT+HTTPACTION method codes.
 HTTP_ACTION_GET = 0
 HTTP_ACTION_POST = 1
-
-
-# ----- HMAC request signing --------------------------------------------------
-
-SIGNATURE_VERSION = "v1"
-NONCE_BYTES = 16
-SHA256_BLOCK_SIZE = 64
-
-
-def _sha256(data):
-    return hashlib.sha256(data).digest()
-
-
-def _xor_bytes(data, pad):
-    result = bytearray(len(data))
-    for i in range(len(data)):
-        result[i] = data[i] ^ pad
-    return bytes(result)
-
-
-def hmac_sha256(key, msg):
-    """Pure-Python HMAC-SHA256 (MicroPython doesn't ship `hmac` everywhere)."""
-    if len(key) > SHA256_BLOCK_SIZE:
-        key = _sha256(key)
-    if len(key) < SHA256_BLOCK_SIZE:
-        key = key + b"\x00" * (SHA256_BLOCK_SIZE - len(key))
-    inner = _sha256(_xor_bytes(key, 0x36) + msg)
-    return _sha256(_xor_bytes(key, 0x5c) + inner)
-
-
-def _b64decode_urlsafe_nopad(value):
-    s = value.replace("-", "+").replace("_", "/")
-    pad = (-len(s)) % 4
-    return binascii.a2b_base64(s + ("=" * pad))
-
-
-def _hexlify(data):
-    return binascii.hexlify(data).decode("ascii")
-
-
-def sign_request(station_id, secret_b64, method, path, body, timestamp, nonce_hex=None):
-    """Return the four headers to attach to a signed device request."""
-    if nonce_hex is None:
-        nonce_hex = _hexlify(os.urandom(NONCE_BYTES))
-    canonical = "\n".join((
-        SIGNATURE_VERSION,
-        station_id,
-        str(int(timestamp)),
-        nonce_hex,
-        method.upper(),
-        path,
-        _hexlify(_sha256(body)),
-    )).encode("ascii")
-    secret = _b64decode_urlsafe_nopad(secret_b64)
-    signature_hex = _hexlify(hmac_sha256(secret, canonical))
-    return {
-        "X-Station-Id": station_id,
-        "X-Timestamp": str(int(timestamp)),
-        "X-Nonce": nonce_hex,
-        "X-Signature": "%s=%s" % (SIGNATURE_VERSION, signature_hex),
-    }
 
 
 # ----- Modem I/O -------------------------------------------------------------
@@ -336,29 +276,13 @@ def round_down_to_minute(unix_seconds):
 
 
 def format_iso_utc(unix_seconds):
-    parts = time.gmtime(int(unix_seconds))
-    return "%04d-%02d-%02dT%02d:%02d:%02dZ" % (
-        parts[0], parts[1], parts[2], parts[3], parts[4], parts[5],
-    )
+    year, month, day, hour, minute, second = unix_to_components(unix_seconds)
+    return "%04d-%02d-%02dT%02d:%02d:%02dZ" % (year, month, day, hour, minute, second)
 
 
 def format_capture_filename(unix_seconds, camera_name):
-    parts = time.gmtime(round_down_to_minute(unix_seconds))
-    return "%04d%02d%02d_%02d%02dZ_%s.jpg" % (
-        parts[0], parts[1], parts[2], parts[3], parts[4], camera_name,
-    )
-
-
-def parse_hhmm(value, fallback):
-    if not value:
-        value = fallback
-    parts = value.split(":")
-    if len(parts) != 2:
-        raise ValueError("invalid schedule time: %s" % value)
-    hour, minute = int(parts[0]), int(parts[1])
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise ValueError("invalid schedule time: %s" % value)
-    return hour, minute
+    year, month, day, hour, minute, _ = unix_to_components(round_down_to_minute(unix_seconds))
+    return "%04d%02d%02d_%02d%02dZ_%s.jpg" % (year, month, day, hour, minute, camera_name)
 
 
 def days_from_civil(year, month, day):
@@ -375,10 +299,37 @@ def utc_epoch_seconds(year, month, day, hour, minute, second=0):
     return days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second
 
 
+def civil_from_days(z):
+    """Inverse of days_from_civil: 1970-epoch day count -> (year, month, day)."""
+    z = int(z) + 719468
+    era = (z if z >= 0 else z - 146096) // 146097
+    doe = z - era * 146097                                            # [0, 146096]
+    yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365   # [0, 399]
+    year = yoe + era * 400
+    doy = doe - (365 * yoe + yoe // 4 - yoe // 100)                   # [0, 365]
+    mp = (5 * doy + 2) // 153                                         # [0, 11]
+    day = doy - (153 * mp + 2) // 5 + 1                               # [1, 31]
+    month = mp + 3 if mp < 10 else mp - 9                             # [1, 12]
+    return (year + (1 if month <= 2 else 0), month, day)
+
+
+def unix_to_components(unix_seconds):
+    """1970-epoch seconds -> (year, month, day, hour, minute, second).
+
+    Pure integer math so it stays correct regardless of the board's time.gmtime
+    epoch -- STM32 OpenMV cams use a 2000-01-01 epoch, not POSIX 1970, which would
+    otherwise shift every timestamp by ~30 years.
+    """
+    unix_seconds = int(unix_seconds)
+    days, rem = unix_seconds // 86400, unix_seconds % 86400
+    year, month, day = civil_from_days(days)
+    return (year, month, day, rem // 3600, (rem % 3600) // 60, rem % 60)
+
+
 def daily_time_epoch(reference_seconds, hhmm):
-    parts = time.gmtime(int(reference_seconds))
+    year, month, day = unix_to_components(reference_seconds)[:3]
     hour, minute = hhmm
-    return utc_epoch_seconds(parts[0], parts[1], parts[2], hour, minute)
+    return utc_epoch_seconds(year, month, day, hour, minute)
 
 
 def compute_next_start(config, now_seconds):
@@ -386,10 +337,10 @@ def compute_next_start(config, now_seconds):
 
     # When useSunriseSunset is true, the backend-provided start/stop values
     # already encode today's effective active window.
-    start_hhmm = parse_hhmm(config.get("stationStartTime"), "06:00")
-    stop_hhmm = parse_hhmm(config.get("stationStopTime"), "20:00")
-    today_start = daily_time_epoch(now_seconds, start_hhmm)
-    today_stop = daily_time_epoch(now_seconds, stop_hhmm)
+    start_minute = int(config.get("stationStartMinute") or 360)  # 06:00
+    stop_minute = int(config.get("stationStopMinute") or 1200)  # 20:00
+    today_start = daily_time_epoch(now_seconds, divmod(start_minute, 60))
+    today_stop = daily_time_epoch(now_seconds, divmod(stop_minute, 60))
     tomorrow_start = today_start + 86400
 
     if now_seconds < today_start:
@@ -550,7 +501,6 @@ def main():
         "timestamp": format_iso_utc(capture_seconds),
         "firmwareVersion": FIRMWARE_VERSION,
         "nextStart": next_start_iso,
-        "cameraName": camera_name,
     }
     payload.update(telemetry)
     upload_sensor_reading(uart, clock, payload)

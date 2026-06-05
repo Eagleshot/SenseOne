@@ -15,7 +15,7 @@ from auth import (
     record_login_failure,
     resolve_session_token,
 )
-from constants import AUTH_COOKIE_NAME, AUTH_COOKIE_SECURE, AUTH_COOKIE_SAMESITE
+from constants import AUTH_COOKIE_NAME, AUTH_COOKIE_SAMESITE, auth_cookie_secure
 from users import authenticate_user
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -26,10 +26,14 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
     response_model=AuthResponse,
     summary="Log in",
     description=(
-        "Verify username + password and start a session. On success, sets the "
-        "`eagleshot_session` cookie (HttpOnly, Secure, SameSite=Strict) and "
-        "returns the same token in the body for non-browser clients to reuse "
-        "as a bearer token.\n\n"
+        "Verify email + password and start a session. On success, sets the "
+        "`eagleshot_session` cookie (HttpOnly, SameSite=Strict; Secure whenever "
+        "`APP_REQUIRE_HTTPS` is enabled). The session token is delivered only via "
+        "that `Set-Cookie` header — it is not echoed in the response body. "
+        "Non-browser clients may capture the cookie value and resend it as an "
+        "`Authorization: Bearer <token>` header. Programmatic API access will "
+        "later get dedicated, revocable API keys rather than reusing this "
+        "short-lived browser session.\n\n"
         "Per-IP and per-username throttling kicks in after repeated failures; "
         "successful logins reset both counters."
     ),
@@ -37,31 +41,31 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 def login(payload: LoginRequest, request: Request, response: Response) -> AuthResponse:
     ensure_auth_configured()
 
-    username = payload.username.strip()
+    email = payload.email
     client_ip = request.client.host if request.client else "unknown"
-    check_login_throttle(client_ip, username)
+    check_login_throttle(client_ip, email)
 
-    user = authenticate_user(username, payload.password)
+    user = authenticate_user(email, payload.password)
     if user is None:
-        record_login_failure(client_ip, username)
+        record_login_failure(client_ip, email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password.",
+            detail="Invalid email or password.",
         )
 
-    clear_login_failures(client_ip, user.username)
-    token, expires_in = create_session(user.username)
+    clear_login_failures(client_ip, user.email)
+    token, expires_in = create_session(user.email)
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
         value=token,
         max_age=expires_in,
         httponly=True,
-        secure=AUTH_COOKIE_SECURE,
+        secure=auth_cookie_secure(),
         samesite=AUTH_COOKIE_SAMESITE,
         path="/",
     )
 
-    return AuthResponse(expires_in=expires_in, username=user.username, is_admin=user.is_admin)
+    return AuthResponse(expires_in=expires_in, email=user.email, is_admin=user.is_admin)
 
 
 @router.get(
@@ -75,7 +79,7 @@ def login(payload: LoginRequest, request: Request, response: Response) -> AuthRe
     ),
 )
 def me(user=Depends(get_current_user)) -> MeResponse:
-    return MeResponse(username=user.username, is_admin=user.is_admin)
+    return MeResponse(email=user.email, is_admin=user.is_admin)
 
 
 @router.post(

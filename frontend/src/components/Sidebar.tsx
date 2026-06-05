@@ -56,7 +56,7 @@ export const Sidebar: React.FC = () => {
     setActiveWebcam,
     webcamList,
     isAuthenticated,
-    authenticatedUsername,
+    authenticatedEmail,
     authReady,
     login,
     logout,
@@ -67,7 +67,7 @@ export const Sidebar: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(true);
   const [isLoginFormOpen, setIsLoginFormOpen] = useState(false);
-  const [loginUsername, setLoginUsername] = useState("");
+  const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
@@ -103,14 +103,22 @@ export const Sidebar: React.FC = () => {
   const sidebarFieldClass = `${sidebarSurfaceClass} ${sidebarInsetFocusClass}`;
 
   const filteredWebcams = useMemo(() => {
-    if (!searchQuery.trim()) return webcamList;
-    const query = searchQuery.toLowerCase();
-    return webcamList.filter(
-      (cam) =>
-        cam.name.toLowerCase().includes(query) ||
-        cam.location.toLowerCase().includes(query) ||
-        (cam.country?.toLowerCase().includes(query) ?? false)
-    );
+    const query = searchQuery.trim().toLowerCase();
+    const matched = query
+      ? webcamList.filter(
+          (cam) =>
+            cam.name.toLowerCase().includes(query) ||
+            cam.location.toLowerCase().includes(query) ||
+            (cam.country?.toLowerCase().includes(query) ?? false)
+        )
+      : webcamList;
+    // Stations the user can edit (own/admin) first, then public before private
+    // within each group; stable sort keeps the backend slug order otherwise.
+    return [...matched].sort((a, b) => {
+      const ownerDiff = Number(Boolean(b.canEdit)) - Number(Boolean(a.canEdit));
+      if (ownerDiff !== 0) return ownerDiff;
+      return Number(b.isPublic !== false) - Number(a.isPublic !== false);
+    });
   }, [searchQuery, webcamList]);
 
   const handleLoginSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -118,7 +126,7 @@ export const Sidebar: React.FC = () => {
     setLoginError(null);
     setIsAuthenticating(true);
 
-    const result = await login(loginUsername.trim(), loginPassword);
+    const result = await login(loginEmail.trim(), loginPassword);
     setIsAuthenticating(false);
 
     if (!result.success) {
@@ -312,13 +320,23 @@ export const Sidebar: React.FC = () => {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 pr-16">
                       <h3 className="truncate text-sm font-medium text-sidebar-foreground">{webcam.name}</h3>
-                      {isAuthenticated && webcam.isPublic === false && (
+                      {/* Private badge is pinned to the default (embernova) theme orange so it stays orange across theme switches. */}
+                      {webcam.canEdit && webcam.isPublic === false && (
                         <span
                           title="Private station"
-                          className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
+                          className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-[hsl(13_80%_61%_/_0.3)] bg-[hsl(13_80%_61%_/_0.1)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[hsl(13_80%_61%)]"
                         >
                           Private
                           <Lock className="h-2.5 w-2.5" />
+                        </span>
+                      )}
+                      {webcam.canEdit && webcam.isPublic === true && (
+                        <span
+                          title="Public station"
+                          className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-500"
+                        >
+                          Public
+                          <Globe className="h-2.5 w-2.5" />
                         </span>
                       )}
                     </div>
@@ -364,8 +382,12 @@ export const Sidebar: React.FC = () => {
                 className={cn("w-full justify-center gap-2", sidebarActionButtonClass)}
               >
                 <LogIn className="h-3.5 w-3.5" />
-                Login
+                Login / Sign up
               </Button>
+
+              <p className="text-center text-xs text-muted-foreground">
+                Sign in to add your own stations.
+              </p>
 
               <AnimatePresence initial={false}>
                 {isLoginFormOpen && (
@@ -378,12 +400,12 @@ export const Sidebar: React.FC = () => {
                     className="chrome-shell-stroke space-y-2 overflow-hidden rounded-lg border border-sidebar-border bg-sidebar-accent/70 p-3"
                   >
                     <Input
-                      type="text"
-                      placeholder="Username"
-                      value={loginUsername}
-                      onChange={(event) => setLoginUsername(event.target.value)}
+                      type="email"
+                      placeholder="Email"
+                      value={loginEmail}
+                      onChange={(event) => setLoginEmail(event.target.value)}
                       className="h-9 bg-background/80"
-                      autoComplete="username"
+                      autoComplete="email"
                       required
                     />
                     <Input
@@ -408,7 +430,7 @@ export const Sidebar: React.FC = () => {
           {isAuthenticated && (
             <div className="chrome-shell-stroke space-y-2 rounded-lg border border-sidebar-border bg-sidebar-accent/70 p-3">
               <p className="text-xs text-muted-foreground">
-                Signed in as <span className="font-medium text-sidebar-foreground">{authenticatedUsername}</span>
+                Signed in as <span className="font-medium text-sidebar-foreground">{authenticatedEmail}</span>
               </p>
               <Dialog
                 open={isCreateStationOpen}

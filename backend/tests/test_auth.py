@@ -74,6 +74,47 @@ class TestCredentialVerification:
         assert "compare_digest" in source
 
 
+class TestUserEnumerationTiming:
+    """Unknown-email logins must spend the same PBKDF2 time as known-user failures."""
+
+    def test_unknown_user_verifies_against_real_dummy_hash(self, db, monkeypatch):
+        import users
+        from db import sqlite_repo
+
+        captured = {}
+        real_verify = sqlite_repo.verify_secret
+
+        def spy(secret, stored):
+            captured["stored"] = stored
+            return real_verify(secret, stored)
+
+        monkeypatch.setattr(sqlite_repo, "verify_secret", spy)
+        # No user exists, so this is the unknown-email path; it must still run a
+        # real PBKDF2 against the dummy hash (not short-circuit on None).
+        assert users.authenticate_user("ghost@example.com", "some-long-password") is None
+        assert captured["stored"] == users._DUMMY_PASSWORD_HASH
+
+    def test_dummy_hash_is_a_real_pbkdf2_hash(self):
+        from auth import verify_secret
+        from users import _DUMMY_PASSWORD_HASH
+
+        # A valid stored hash that no real password should match by accident.
+        assert _DUMMY_PASSWORD_HASH.startswith("$pbkdf2_sha256$")
+        assert not verify_secret("some-long-password", _DUMMY_PASSWORD_HASH)
+
+
+def test_auth_cookie_secure_tracks_require_https(monkeypatch):
+    """The session cookie's Secure flag follows APP_REQUIRE_HTTPS so it isn't dropped in HTTP dev."""
+    from constants import auth_cookie_secure
+
+    monkeypatch.setenv("APP_REQUIRE_HTTPS", "true")
+    assert auth_cookie_secure() is True
+    monkeypatch.setenv("APP_REQUIRE_HTTPS", "false")
+    assert auth_cookie_secure() is False
+    monkeypatch.delenv("APP_REQUIRE_HTTPS", raising=False)
+    assert auth_cookie_secure() is False
+
+
 def test_session_storage_is_mutable():
     """Test that AUTH_SESSIONS can be modified for testing."""
     AUTH_SESSIONS["test_token"] = ("user", time.time() + 3600)

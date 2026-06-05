@@ -42,7 +42,9 @@
 
     /* Borders & inputs */
     --border: 220 13% 91%;
-    --input: 220 13% 91%;
+    /* Match the chrome/control border (sidebar-border) so inputs, selects and
+       buttons share one outline; the plain card border stays lighter (--border). */
+    --input: 220 10% 80%;
     --ring: 13 80% 61%;
 
     --radius: 0.75rem;
@@ -104,7 +106,9 @@
     --destructive-foreground: 0 0% 100%;
 
     --border: 222 20% 18%;
-    --input: 222 20% 18%;
+    /* See light mode: match the chrome/control border so form controls aren't
+       nearly-invisible against the dark background. */
+    --input: 222 18% 28%;
     --ring: 13 80% 61%;
 
     --sidebar-background: 240 11% 17%;
@@ -287,9 +291,16 @@
   }
 
   /* Give the OpenWeather overlay tiles a subtle saturation/contrast boost so the
-     colours pop a little more against the dark base. */
+     colours pop a little more against the base map. */
   .weather-overlay-tiles {
     filter: saturate(1.3) contrast(1.08);
+  }
+
+  /* The clouds layer is near-white, so on the light base it washes out. Darken it
+     to grey shading (alpha still = cloud cover) so it reads on a light/white map.
+     Only applied over the light base; over the dark base white clouds show as-is. */
+  .weather-overlay-clouds-on-light {
+    filter: brightness(0.4);
   }
 
   /* Gradient overlays */

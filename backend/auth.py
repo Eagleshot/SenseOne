@@ -19,10 +19,10 @@ PBKDF2_SALT_BYTES = 16
 PBKDF2_HASH_BYTES = 32
 
 
-_BOOTSTRAP_USERNAME = (os.getenv("APP_AUTH_USERNAME") or "").strip()
+_BOOTSTRAP_EMAIL = (os.getenv("APP_AUTH_EMAIL") or "").strip()
 _BOOTSTRAP_PASSWORD = (os.getenv("APP_AUTH_PASSWORD") or "").strip()
-if bool(_BOOTSTRAP_USERNAME) != bool(_BOOTSTRAP_PASSWORD):
-    raise RuntimeError("APP_AUTH_USERNAME and APP_AUTH_PASSWORD must either both be set or both be unset.")
+if bool(_BOOTSTRAP_EMAIL) != bool(_BOOTSTRAP_PASSWORD):
+    raise RuntimeError("APP_AUTH_EMAIL and APP_AUTH_PASSWORD must either both be set or both be unset.")
 if _BOOTSTRAP_PASSWORD and len(_BOOTSTRAP_PASSWORD) < 12:
     raise RuntimeError("APP_AUTH_PASSWORD must be at least 12 characters.")
 

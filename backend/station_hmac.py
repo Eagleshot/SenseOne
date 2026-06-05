@@ -36,11 +36,8 @@ from pathlib import Path
 
 from fastapi import HTTPException, Request, status
 
-from config import (
-    get_data_dir,
-    read_station_device_hmac_secret_b64,
-    write_station_meta,
-)
+from config import get_data_dir
+from db import sqlite_repo
 from station_access import require_station_exists
 
 
@@ -75,9 +72,7 @@ def provision_device_hmac_secret(station_id: str) -> str:
     not expose it again.
     """
     require_station_exists(station_id)
-    secret_b64 = generate_device_hmac_secret_b64()
-    write_station_meta(get_data_dir(), station_id, device_hmac_secret_b64=secret_b64)
-    return secret_b64
+    return sqlite_repo.provision_device_secret(station_id)
 
 
 def canonical_signing_string(
@@ -190,7 +185,7 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
     ):
         _reject("Invalid X-Signature.")
 
-    secret_b64 = read_station_device_hmac_secret_b64(get_data_dir(), station_id)
+    secret_b64 = sqlite_repo.read_device_secret_b64(station_id)
     if not secret_b64:
         _reject("Station has no device HMAC secret provisioned.")
         return b""
@@ -220,3 +215,4 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
         _reject("Nonce already used.")
 
     return body
+    

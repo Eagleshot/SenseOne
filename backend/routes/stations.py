@@ -1,14 +1,14 @@
 """Station metadata and configuration routes."""
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
+import store
 from constants import NEXT_ONLINE_STATUS_BUFFER_MINUTES
 from models import (
     AppConfig,
-    SensorHistoryResponse,
+    SensorSeries,
     StationCoordinates,
     StationCreateRequest,
     StationDetailResponse,
@@ -21,42 +21,17 @@ from auth import (
     get_current_user,
     get_optional_current_user,
 )
-from config import (
-    ensure_station_dir,
-    get_data_dir,
-    read_station_config,
-    station_db_path,
-    write_station_meta,
-    write_station_config,
-)
+from station_db import StationStatus
 from routes import ValidStationId
 from station_access import (
-    can_view_station,
+    can_edit_station,
     require_station_edit,
     require_station_view,
 )
-from station_db import history_from_db, image_captures_from_db, latest_status_from_db
-from utils import humanize_station_id, parse_iso_timestamp, sanitize_station_id, unique_station_id
+from utils import humanize_station_id, parse_iso_timestamp
 
 
 router = APIRouter(prefix="/stations", tags=["Stations"])
-
-
-def list_station_ids(base_dir: Path) -> list[str]:
-    """Get ordered list of station IDs from the data directory."""
-    if not base_dir.exists():
-        return []
-
-    seen: set[str] = set()
-    station_ids: list[str] = []
-    for child in sorted(base_dir.iterdir(), key=lambda path: path.name):
-        if not child.is_dir():
-            continue
-        station_id = sanitize_station_id(child.name)
-        if station_id not in seen:
-            station_ids.append(station_id)
-            seen.add(station_id)
-    return station_ids
 
 
 def is_station_online(next_online: str | None) -> bool:
@@ -67,12 +42,14 @@ def is_station_online(next_online: str | None) -> bool:
     return datetime.now(timezone.utc) <= next_online_at + timedelta(minutes=NEXT_ONLINE_STATUS_BUFFER_MINUTES)
 
 
-def station_detail_response(data_dir: Path, station_id: str, config: AppConfig) -> StationDetailResponse:
+def station_detail_response(
+    public_id: str, url_slug: str, config: AppConfig, status: StationStatus, can_edit: bool
+) -> StationDetailResponse:
     """Build a station detail response from config plus latest runtime status."""
-    status = latest_status_from_db(station_db_path(data_dir, station_id), station_id)
     return StationDetailResponse(
-        id=station_id,
-        name=config.title or humanize_station_id(station_id),
+        id=public_id,
+        url_slug=url_slug,
+        name=config.title or humanize_station_id(url_slug),
         location=config.location,
         country=config.country,
         country_emoji=config.country_emoji,
@@ -86,6 +63,7 @@ def station_detail_response(data_dir: Path, station_id: str, config: AppConfig) 
         next_update=status.next_online,
         firmware_version=status.firmware_version,
         wake_reason=status.wake_reason,
+        can_edit=can_edit,
     )
 
 
@@ -100,26 +78,21 @@ def station_detail_response(data_dir: Path, station_id: str, config: AppConfig) 
     ),
 )
 def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummaryResponse]:
-    data_dir = get_data_dir()
-    stations = []
-    for station_id in list_station_ids(data_dir):
-        config = read_station_config(data_dir, station_id)
-        if not can_view_station(station_id, user, config):
-            continue
-        next_online = latest_status_from_db(station_db_path(data_dir, station_id), station_id).next_online
-        stations.append(
-            StationSummaryResponse(
-                id=station_id,
-                name=config.title or humanize_station_id(station_id),
-                location=config.location,
-                country=config.country,
-                country_emoji=config.country_emoji,
-                coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
-                is_public=config.is_public,
-                is_online=is_station_online(next_online),
-            )
+    return [
+        StationSummaryResponse(
+            id=public_id,
+            url_slug=url_slug,
+            name=config.title or humanize_station_id(url_slug),
+            location=config.location,
+            country=config.country,
+            country_emoji=config.country_emoji,
+            coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
+            is_public=config.is_public,
+            is_online=is_station_online(status.next_online),
+            can_edit=can_edit,
         )
-    return stations
+        for public_id, url_slug, config, status, can_edit in store.list_station_views(user)
+    ]
 
 
 @router.post(
@@ -136,29 +109,12 @@ def create_station(
     payload: StationCreateRequest,
     user=Depends(get_current_user),
 ) -> StationDetailResponse:
-    data_dir = get_data_dir()
-    station_id = unique_station_id(data_dir, payload.title, default="station")
-    if station_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Could not create a unique station id.",
-        )
-    config = AppConfig(
-        title=payload.title,
-        location=payload.location,
-        country=payload.country,
-        country_emoji=payload.country_emoji,
-        lat=payload.lat,
-        lon=payload.lon,
-        alt=payload.alt,
-        is_public=payload.is_public,
-    )
-
-    ensure_station_dir(data_dir, station_id)
-    write_station_config(data_dir, station_id, config)
-    write_station_meta(data_dir, station_id, owner=user.username)
-
-    return station_detail_response(data_dir, station_id, config)
+    public_id = store.create_station(payload, user)
+    view = store.station_view(public_id)
+    assert view is not None  # just created
+    url_slug, config, status = view
+    # The creator owns the station, so they can always edit it.
+    return station_detail_response(public_id, url_slug, config, status, can_edit=True)
 
 
 @router.post(
@@ -196,9 +152,12 @@ def get_station(
     user=Depends(get_optional_current_user),
 ) -> StationDetailResponse:
     require_station_view(station_id, user)
-    data_dir = get_data_dir()
-    config = read_station_config(data_dir, station_id)
-    return station_detail_response(data_dir, station_id, config)
+    view = store.station_view(station_id)
+    assert view is not None  # require_station_view already confirmed it exists
+    url_slug, config, status = view
+    return station_detail_response(
+        station_id, url_slug, config, status, can_edit=can_edit_station(station_id, user)
+    )
 
 
 @router.get(
@@ -216,30 +175,29 @@ def get_station_image_captures(
     user=Depends(get_optional_current_user),
 ) -> list[TimelineItemResponse]:
     require_station_view(station_id, user)
-    data_dir = get_data_dir()
-    rows = image_captures_from_db(station_db_path(data_dir, station_id), station_id, count)
+    rows = store.image_captures(station_id, count)
     return [TimelineItemResponse(**row) for row in rows]
 
 
 @router.get(
     "/{station_id}/sensor-readings",
-    response_model=list[SensorHistoryResponse],
+    response_model=list[SensorSeries],
     summary="Get sensor readings",
     description=(
-        "Sensor history for this station from the configured lookback window. "
-        "`hours` controls the window (default 24, max 168 = 7 days). Returns "
-        "an empty list if the station has no readings yet."
+        "Sensor history for this station from the configured lookback window, as "
+        "one point series per (metric, channel). `hours` controls the window "
+        "(default 24, max 168 = 7 days). Returns an empty list if the station has "
+        "no readings yet."
     ),
 )
 def get_station_sensor_readings(
     station_id: ValidStationId,
     hours: int = Query(24, ge=1, le=168, description="Lookback window in hours."),
     user=Depends(get_optional_current_user),
-) -> list[SensorHistoryResponse]:
+) -> list[SensorSeries]:
     require_station_view(station_id, user)
-    data_dir = get_data_dir()
-    rows = history_from_db(station_db_path(data_dir, station_id), station_id, hours)
-    return [SensorHistoryResponse(**row) for row in rows]
+    series = store.sensor_readings(station_id, hours)
+    return [SensorSeries(**item) for item in series]
 
 
 @router.get(
@@ -256,7 +214,7 @@ def get_station_config(
     user=Depends(get_current_user),
 ) -> AppConfig:
     require_station_edit(station_id, user)
-    return read_station_config(get_data_dir(), station_id)
+    return store.station_config(station_id)
 
 
 @router.put(
@@ -275,5 +233,7 @@ def update_station_config(
     user=Depends(get_current_user),
 ) -> AppConfig:
     require_station_edit(station_id, user)
-    write_station_config(get_data_dir(), station_id, payload)
-    return payload
+    store.save_station_config(station_id, payload)
+    # Re-read so the response matches GET /config (including the derived
+    # lastOnline/nextOnline status), rather than echoing the request body.
+    return store.station_config(station_id)

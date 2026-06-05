@@ -21,16 +21,23 @@ describe("SensorHistoryPanel", () => {
   beforeEach(() => {
     mockUseApp.mockReset();
     mockUseApp.mockReturnValue({
-      activeWebcam: { id: "station-1" },
       historicalData: [],
       timezone: "UTC",
     });
   });
 
-  it("renders the Add Chart button as always enabled", () => {
+  it("renders the charts and raw data table", () => {
     render(<SensorHistoryPanel />);
 
-    expect(screen.getByRole("button", { name: /add chart/i })).toBeEnabled();
+    expect(screen.getByTestId("historical-charts")).toBeInTheDocument();
+    expect(screen.getByTestId("raw-data-table")).toBeInTheDocument();
+  });
+
+  it("leaves only the date-picker control (no Add Chart)", () => {
+    render(<SensorHistoryPanel />);
+
+    expect(screen.queryByRole("button", { name: /add chart/i })).not.toBeInTheDocument();
+    // The date-picker trigger is the sole remaining control in the panel header.
+    expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 });
-

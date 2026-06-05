@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-import math
+import base64
 import hashlib
+import math
 import random
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 WEBCAM_SEED = [
@@ -19,7 +23,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 10,
         "nextUpdateMinutesIn": 20,
         "is_public": True,
-        "owner": "alice",
+        "owner": "alice@example.com",
     },
     {
         "id": "gries-glacier",
@@ -33,7 +37,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 5,
         "nextUpdateMinutesIn": 25,
         "is_public": True,
-        "owner": "bob",
+        "owner": "bob@example.com",
     },
     {
         "id": "rhone-glacier",
@@ -47,7 +51,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 15,
         "nextUpdateMinutesIn": 15,
         "is_public": True,
-        "owner": "alice",
+        "owner": "alice@example.com",
     },
     {
         "id": "jungfrau-top",
@@ -61,7 +65,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 120,
         "nextUpdateMinutesIn": 60,
         "is_public": True,
-        "owner": "bob",
+        "owner": "bob@example.com",
     },
     {
         "id": "titlis-glacier",
@@ -75,7 +79,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 8,
         "nextUpdateMinutesIn": 22,
         "is_public": False,
-        "owner": "alice",
+        "owner": "alice@example.com",
     },
     {
         "id": "reykjavik-harbor",
@@ -89,7 +93,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 12,
         "nextUpdateMinutesIn": 18,
         "is_public": False,
-        "owner": "bob",
+        "owner": "bob@example.com",
     },
     {
         "id": "yosemite-valley",
@@ -103,7 +107,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 7,
         "nextUpdateMinutesIn": 23,
         "is_public": True,
-        "owner": "bob",
+        "owner": "bob@example.com",
     },
     {
         "id": "paris-seine",
@@ -118,7 +122,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 9,
         "nextUpdateMinutesIn": 21,
         "is_public": True,
-        "owner": "alice",
+        "owner": "alice@example.com",
     },
     {
         "id": "tokyo-skyline",
@@ -132,7 +136,7 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 11,
         "nextUpdateMinutesIn": 19,
         "is_public": False,
-        "owner": "alice",
+        "owner": "alice@example.com",
     },
     {
         "id": "bangkok-river",
@@ -146,18 +150,8 @@ WEBCAM_SEED = [
         "lastUpdateMinutesAgo": 6,
         "nextUpdateMinutesIn": 24,
         "is_public": True,
-        "owner": "bob",
+        "owner": "bob@example.com",
     },
-]
-
-TIMEZONES = [
-    {"value": "UTC", "label": "UTC"},
-    {"value": "Europe/Zurich", "label": "Zurich (CET/CEST)"},
-    {"value": "Europe/London", "label": "London (GMT/BST)"},
-    {"value": "Europe/Paris", "label": "Paris (CET/CEST)"},
-    {"value": "America/New_York", "label": "New York (EST/EDT)"},
-    {"value": "America/Los_Angeles", "label": "Los Angeles (PST/PDT)"},
-    {"value": "Asia/Tokyo", "label": "Tokyo (JST)"},
 ]
 
 # Mock device housekeeping values, varied across stations/readings.
@@ -218,3 +212,53 @@ def generate_historical_data(
             }
         )
     return data
+
+
+# ----- Seeding assets / config (shared by the seeder) ------------------------
+
+# Dev-only default password for seeded owner accounts (>=12 chars, see
+# users.create_user). Override with the seeder's --owner-password.
+DEFAULT_OWNER_PASSWORD = "devpassword123"
+SENSOR_HISTORY_HOURS = 168  # 7 days of hourly readings per station
+
+SAMPLE_IMAGE_FILES = ["image0.png", "image1.png", "image2.png"]
+SAMPLE_IMAGE_URLS = {
+    "image0.png": "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?fm=png&fit=crop&w=1024&h=576&q=80",
+    "image1.png": "https://images.unsplash.com/photo-1483728642387-6c3bdd6c93e5?fm=png&fit=crop&w=1024&h=576&q=80",
+    "image2.png": "https://images.unsplash.com/photo-1464823063530-08f10ed1a2dd?fm=png&fit=crop&w=1024&h=576&q=80",
+}
+# Tiny 1x1 PNG used when the sample images can't be downloaded (offline).
+SAMPLE_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAoMBgOaI1xkAAAAASUVORK5CYII="
+)
+
+
+def _download_image(url: str, path: Path, overwrite: bool) -> bool:
+    if path.exists() and not overwrite:
+        return True
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Eagleshot Mock Seeder)", "Accept": "image/*"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if response.status != 200:
+                raise RuntimeError(f"Status {response.status} from {url}")
+            payload = response.read()
+            if not payload:
+                raise RuntimeError(f"Empty image payload from {url}")
+            path.write_bytes(payload)
+            return True
+    except (OSError, urllib.error.URLError, RuntimeError) as exc:
+        print(f"Failed to download mock image from {url}: {exc}")
+        return False
+
+
+def ensure_seed_images(images_dir: Path, overwrite: bool) -> None:
+    """Make sure the sample source images exist (download, else embedded placeholder)."""
+    for file_name in SAMPLE_IMAGE_FILES:
+        source_file = images_dir / file_name
+        if _download_image(SAMPLE_IMAGE_URLS[file_name], source_file, overwrite):
+            continue
+        if not source_file.exists():
+            source_file.write_bytes(SAMPLE_PNG_BYTES)

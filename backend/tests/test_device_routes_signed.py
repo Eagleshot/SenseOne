@@ -1,26 +1,24 @@
-﻿"""End-to-end tests for the HMAC-signed device routes.
+"""End-to-end tests for the HMAC-signed device routes (SQLite-backed).
 
-Builds a minimal FastAPI app with just the two device routers, then drives
-them through TestClient using the reference client signer. The point is to
-catch any drift between the verifier, the dependency ordering, and the
-Pydantic body parsing that could weaken authentication.
+Builds a minimal FastAPI app with just the device routers, then drives them
+through TestClient using the reference client signer — catching drift between the
+verifier, dependency ordering, and Pydantic body parsing that could weaken auth.
 """
 
+import json
 import os
-from pathlib import Path
+import re
+from types import SimpleNamespace
 
 import pytest
-import sqlite3
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from config import station_db_path
-from constants import DEVICE_API_PREFIX
+from constants import INGEST_API_PREFIX
 from routes import device_ingestion
 from station_hmac import generate_device_hmac_secret_b64, provision_device_hmac_secret
-
+from tests import _db
 from tests import _signing as eagleshot_signing
-
 
 # Real JPEG header bytes so the server's content-sniff accepts the upload.
 _JPEG_BODY = (
@@ -34,95 +32,75 @@ _SENSOR_PAYLOAD = {
     "pressure": 1015,
     "battery": 91,
     "windSpeed": 3.2,
-    "windDirection": 270,
-    "visibility": 9.0,
-    "uvIndex": 3,
-    "dewPoint": 8.1,
-    "feelsLike": 11.2,
 }
 _NEXT_ONLINE = "2026-05-23T12:30:00Z"
 
 
 def _build_app() -> FastAPI:
     app = FastAPI()
-    app.include_router(device_ingestion.router, prefix=DEVICE_API_PREFIX)
+    app.include_router(device_ingestion.router, prefix=INGEST_API_PREFIX)
     return app
 
 
 @pytest.fixture
 def signed_client(setup_station_dir, monkeypatch):
     data_dir, station_id = setup_station_dir
-    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
     secret_b64 = provision_device_hmac_secret(station_id)
     client = TestClient(_build_app())
     return client, station_id, secret_b64
 
 
-def _post_signed(
-    client: TestClient,
-    secret_b64: str,
-    station_id: str,
-    path: str,
-    body: bytes,
-    extra_headers: dict[str, str] | None = None,
-):
+def _post_signed(client, secret_b64, station_id, path, body, extra_headers=None):
     headers = eagleshot_signing.sign_request(
-        station_id=station_id,
-        secret_b64=secret_b64,
-        method="POST",
-        path=path,
-        body=body,
+        station_id=station_id, secret_b64=secret_b64, method="POST", path=path, body=body,
     )
     if extra_headers:
         headers.update(extra_headers)
     return client.post(path, content=body, headers=headers)
 
 
-def _get_signed(
-    client: TestClient,
-    secret_b64: str,
-    station_id: str,
-    path: str,
-):
+def _get_signed(client, secret_b64, station_id, path):
     headers = eagleshot_signing.sign_request(
-        station_id=station_id,
-        secret_b64=secret_b64,
-        method="GET",
-        path=path,
-        body=b"",
+        station_id=station_id, secret_b64=secret_b64, method="GET", path=path, body=b"",
     )
     return client.get(path, headers=headers)
 
 
 def test_signed_device_config_succeeds(signed_client):
     client, station_id, secret_b64 = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/config"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/config"
     response = _get_signed(client, secret_b64, station_id, path)
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["stationStartTime"] == "06:00"
-    assert body["stationStopTime"] == "20:00"
+    assert body["stationStartMinute"] == 360
+    assert body["stationStopMinute"] == 1200
     assert body["captureIntervalMinutes"] == 30
+    # Fields the device may need for sunrise/sunset are present...
+    for key in ("useSunriseSunset", "lat", "lon", "alt"):
+        assert key in body
+    # ...while UI-only fields are trimmed out of the device payload.
+    for key in ("stationStartTime", "countryEmoji", "title", "isPublic"):
+        assert key not in body
 
 
 def test_signed_device_config_rejects_missing_signature(signed_client):
     client, station_id, _ = signed_client
-    response = client.get(f"{DEVICE_API_PREFIX}/stations/{station_id}/config")
+    response = client.get(f"{INGEST_API_PREFIX}/stations/{station_id}/config")
     assert response.status_code == 401
 
 
 def test_signed_device_config_rejects_wrong_secret(signed_client):
     client, station_id, _ = signed_client
     bogus_secret = generate_device_hmac_secret_b64()
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/config"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/config"
     response = _get_signed(client, bogus_secret, station_id, path)
     assert response.status_code == 401
 
 
 def test_signed_image_upload_succeeds(signed_client):
     client, station_id, secret_b64 = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
     response = _post_signed(
         client, secret_b64, station_id, path, _JPEG_BODY,
         extra_headers={"Content-Type": "image/jpeg", "X-Filename": "20260524_1430Z_front.jpg"},
@@ -135,19 +113,30 @@ def test_signed_image_upload_succeeds(signed_client):
 
 def test_signed_image_upload_rejects_malformed_filename(signed_client):
     client, station_id, secret_b64 = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
     response = _post_signed(
         client, secret_b64, station_id, path, _JPEG_BODY,
         extra_headers={"Content-Type": "image/jpeg", "X-Filename": "capture.jpg"},
     )
-
     assert response.status_code == 422
+
+
+def test_signed_image_upload_defaults_filename_when_omitted(signed_client):
+    client, station_id, secret_b64 = signed_client
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
+    response = _post_signed(
+        client, secret_b64, station_id, path, _JPEG_BODY,
+        extra_headers={"Content-Type": "image/jpeg"},  # X-Filename omitted on purpose
+    )
+    assert response.status_code == 201, response.text
+    filename = response.json()["filename"]
+    assert re.fullmatch(r"\d{8}_\d{4}Z_default\.jpg", filename), filename
+    assert _db.latest_image(station_id)["filename"] == filename
 
 
 def test_signed_image_upload_persists_next_online(signed_client):
     client, station_id, secret_b64 = signed_client
-    data_dir = os.environ["APP_DATA_DIR"]
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
     response = _post_signed(
         client, secret_b64, station_id, path, _JPEG_BODY,
         extra_headers={
@@ -157,18 +146,12 @@ def test_signed_image_upload_persists_next_online(signed_client):
         },
     )
     assert response.status_code == 201, response.text
-
-    with sqlite3.connect(station_db_path(Path(data_dir), station_id)) as connection:
-        row = connection.execute(
-            "SELECT next_online FROM station_images ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-
-    assert row == (_NEXT_ONLINE,)
+    assert _db.latest_image(station_id)["next_online"] == _NEXT_ONLINE
 
 
 def test_image_upload_without_signature_is_rejected(signed_client):
     client, station_id, _ = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
     response = client.post(path, content=_JPEG_BODY, headers={"Content-Type": "image/jpeg"})
     assert response.status_code == 401
 
@@ -176,7 +159,7 @@ def test_image_upload_without_signature_is_rejected(signed_client):
 def test_image_upload_with_wrong_secret_is_rejected(signed_client):
     client, station_id, _ = signed_client
     bogus_secret = generate_device_hmac_secret_b64()
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/images"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
     response = _post_signed(
         client, bogus_secret, station_id, path, _JPEG_BODY,
         extra_headers={"Content-Type": "image/jpeg"},
@@ -184,11 +167,44 @@ def test_image_upload_with_wrong_secret_is_rejected(signed_client):
     assert response.status_code == 401
 
 
+def test_image_upload_rejected_when_disk_nearly_full(signed_client, monkeypatch):
+    client, station_id, secret_b64 = signed_client
+    monkeypatch.setattr(device_ingestion, "MIN_FREE_DISK_BYTES", 500 * 1024 * 1024)
+    monkeypatch.setattr(
+        device_ingestion.shutil, "disk_usage",
+        lambda _path: SimpleNamespace(total=1, used=1, free=1024),
+    )
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
+    response = _post_signed(
+        client, secret_b64, station_id, path, _JPEG_BODY,
+        extra_headers={"Content-Type": "image/jpeg", "X-Filename": "20260524_1430Z_front.jpg"},
+    )
+    assert response.status_code == 507, response.text
+    assert not (
+        os.environ["APP_DATA_DIR"] and
+        _db.latest_image(station_id) is not None
+    )
+
+
+def test_image_upload_allowed_when_disk_guard_disabled(signed_client, monkeypatch):
+    client, station_id, secret_b64 = signed_client
+    monkeypatch.setattr(device_ingestion, "MIN_FREE_DISK_BYTES", 0)
+    monkeypatch.setattr(
+        device_ingestion.shutil, "disk_usage",
+        lambda _path: SimpleNamespace(total=1, used=1, free=0),
+    )
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
+    response = _post_signed(
+        client, secret_b64, station_id, path, _JPEG_BODY,
+        extra_headers={"Content-Type": "image/jpeg", "X-Filename": "20260524_1430Z_front.jpg"},
+    )
+    assert response.status_code == 201, response.text
+
+
 def test_signed_sensor_reading_succeeds(signed_client):
     """Verifies dep-ordering: the HMAC dep consumes the body, then Pydantic still parses it."""
     client, station_id, secret_b64 = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
-    import json
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
     body = json.dumps(_SENSOR_PAYLOAD).encode("utf-8")
     response = _post_signed(
         client, secret_b64, station_id, path, body,
@@ -196,44 +212,33 @@ def test_signed_sensor_reading_succeeds(signed_client):
     )
     assert response.status_code == 201, response.text
     parsed = response.json()
-    assert parsed["temperature"] == _SENSOR_PAYLOAD["temperature"]
-    assert parsed["humidity"] == _SENSOR_PAYLOAD["humidity"]
+    assert parsed["channel"] == "default"
+    assert parsed["metrics"]["temperature"] == _SENSOR_PAYLOAD["temperature"]
+    assert parsed["metrics"]["humidity"] == _SENSOR_PAYLOAD["humidity"]
+    # windSpeed is an unregistered metric: accepted and stored, just without a unit.
+    assert parsed["metrics"]["windSpeed"] == _SENSOR_PAYLOAD["windSpeed"]
 
 
 def test_signed_sensor_reading_persists_next_online(signed_client):
-    import json
-
     client, station_id, secret_b64 = signed_client
-    data_dir = os.environ["APP_DATA_DIR"]
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
     body = json.dumps({**_SENSOR_PAYLOAD, "nextStart": _NEXT_ONLINE}).encode("utf-8")
     response = _post_signed(
         client, secret_b64, station_id, path, body,
         extra_headers={"Content-Type": "application/json"},
     )
     assert response.status_code == 201, response.text
-
-    with sqlite3.connect(station_db_path(Path(data_dir), station_id)) as connection:
-        row = connection.execute(
-            "SELECT timestamp, next_online FROM sensor_history ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-
-    assert row is not None
-    assert row[1] == _NEXT_ONLINE
+    assert _db.latest_reading(station_id)["next_online"] == _NEXT_ONLINE
 
 
 def test_signed_sparse_sensor_log_succeeds(signed_client):
-    import json
-
     client, station_id, secret_b64 = signed_client
-    data_dir = os.environ["APP_DATA_DIR"]
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
     body = json.dumps(
         {
             "timestamp": "2026-05-24T14:30:00Z",
             "firmwareVersion": "openmv-test",
             "nextStart": "2026-05-24T15:00:00Z",
-            "cameraName": "front",
             "wakeReason": "timer",
             "voltage": 3.92,
         }
@@ -246,33 +251,24 @@ def test_signed_sparse_sensor_log_succeeds(signed_client):
     assert response.status_code == 201, response.text
     parsed = response.json()
     assert parsed["timestamp"] == "2026-05-24T14:30:00Z"
-    # Unsent measurements are absent; nextStart is reserved (consumed as next_online).
-    assert "temperature" not in parsed
+    assert "temperature" not in parsed["metrics"]
     assert "nextStart" not in parsed
+    # firmware/wake are envelope labels, not measurements.
     assert parsed["firmwareVersion"] == "openmv-test"
-    assert parsed["cameraName"] == "front"
     assert parsed["wakeReason"] == "timer"
-    assert parsed["voltage"] == 3.92
+    assert parsed["metrics"] == {"voltage": 3.92}
 
-    with sqlite3.connect(station_db_path(Path(data_dir), station_id)) as connection:
-        row = connection.execute(
-            "SELECT timestamp, next_online, metrics FROM sensor_history ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-
-    assert row[0] == "2026-05-24T14:30:00Z"
-    assert row[1] == "2026-05-24T15:00:00Z"
-    assert json.loads(row[2]) == {
-        "firmwareVersion": "openmv-test",
-        "cameraName": "front",
-        "wakeReason": "timer",
-        "voltage": 3.92,
-    }
+    row = _db.latest_reading(station_id)
+    assert row["recorded_at"] == "2026-05-24T14:30:00Z"
+    assert row["next_online"] == "2026-05-24T15:00:00Z"
+    assert row["firmware_version"] == "openmv-test"
+    assert row["wake_reason"] == "timer"
+    assert row["metrics"] == {"voltage": 3.92}
 
 
 def test_sensor_reading_without_signature_is_rejected(signed_client):
     client, station_id, _ = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
-    import json
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
     response = client.post(
         path,
         content=json.dumps(_SENSOR_PAYLOAD).encode("utf-8"),
@@ -282,21 +278,14 @@ def test_sensor_reading_without_signature_is_rejected(signed_client):
 
 
 def test_sensor_reading_with_tampered_body_is_rejected(signed_client):
-    """Sign one payload, send a different one â€” signature should fail."""
+    """Sign one payload, send a different one — signature should fail."""
     client, station_id, secret_b64 = signed_client
-    path = f"{DEVICE_API_PREFIX}/stations/{station_id}/sensor-readings"
-    import json
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
     signed_body = json.dumps(_SENSOR_PAYLOAD).encode("utf-8")
     tampered = json.dumps({**_SENSOR_PAYLOAD, "battery": 1}).encode("utf-8")
     headers = eagleshot_signing.sign_request(
-        station_id=station_id,
-        secret_b64=secret_b64,
-        method="POST",
-        path=path,
-        body=signed_body,
+        station_id=station_id, secret_b64=secret_b64, method="POST", path=path, body=signed_body,
     )
     headers["Content-Type"] = "application/json"
     response = client.post(path, content=tampered, headers=headers)
     assert response.status_code == 401
-
-

@@ -2,12 +2,12 @@ import { extractErrorDetail, fetchJson } from "@/lib/apiClient";
 
 export type LoginResponse = {
   expiresIn: number;
-  username: string;
+  email: string;
   isAdmin: boolean;
 };
 
 export type MeResponse = {
-  username: string;
+  email: string;
   isAdmin: boolean;
 };
 
@@ -25,14 +25,14 @@ export const getCurrentUser = (apiBaseUrl: string, signal?: AbortSignal) =>
 
 export const loginUser = async (
   apiBaseUrl: string,
-  username: string,
+  email: string,
   password: string
-): Promise<AuthResult & { username?: string }> => {
+): Promise<AuthResult & { email?: string }> => {
   try {
     const response = await fetch(`${apiBaseUrl}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ email, password }),
       credentials: "include",
     });
 
@@ -40,7 +40,7 @@ export const loginUser = async (
       const fallback =
         response.status === 429
           ? "Too many login attempts. Try again later."
-          : "Invalid username or password.";
+          : "Invalid email or password.";
       let message = fallback;
 
       try {
@@ -54,7 +54,7 @@ export const loginUser = async (
     }
 
     const payload = (await response.json()) as LoginResponse;
-    return { success: true, username: payload.username };
+    return { success: true, email: payload.email };
   } catch {
     return { success: false, error: "Unable to reach authentication service." };
   }

@@ -10,12 +10,14 @@ export type WebcamCoordinatesResponse = {
 
 export type StationSummaryResponse = {
   id: string;
+  urlSlug?: string;
   name: string;
   location: string;
   country?: string;
   countryEmoji?: string;
   coordinates: WebcamCoordinatesResponse;
   isPublic?: boolean;
+  canEdit?: boolean;
 };
 
 export type StationDetailResponse = StationSummaryResponse & {
@@ -73,8 +75,17 @@ export type StationScheduleConfig = {
   captureInterval: string;
 };
 
-export type SensorDataResponse = Omit<SensorData, "timestamp"> & {
+// The sensor-history endpoint returns one point series per (metric, channel).
+export type SensorSeriesPointResponse = {
   timestamp: string;
+  value: number;
+};
+
+export type SensorSeriesResponse = {
+  metric: string;
+  channel: string;
+  unit: string | null;
+  points: SensorSeriesPointResponse[];
 };
 
 export type TimelineItemResponse = {
@@ -114,8 +125,9 @@ export const FALLBACK_STATION_SCHEDULE_CONFIG: StationScheduleConfig = {
   captureInterval: "30",
 };
 
-export const selectActiveWebcam = (webcams: Webcam[], activeWebcamId: string) =>
-  webcams.find((webcam) => webcam.id === activeWebcamId) ?? webcams[0] ?? FALLBACK_WEBCAM;
+// `ref` is the URL token, which may be the stable id or the editable url_slug.
+export const selectActiveWebcam = (webcams: Webcam[], ref: string) =>
+  webcams.find((webcam) => webcam.id === ref || webcam.urlSlug === ref) ?? webcams[0] ?? FALLBACK_WEBCAM;
 
 export const resolveApiMediaUrl = (url: string | null | undefined, baseUrl: string): string | null => {
   if (!url) return null;
@@ -272,12 +284,37 @@ export const getStationDetail = (baseUrl: string, stationId: string, signal?: Ab
     throwOnHttpError: false,
   });
 
+// The primary sensor channel; only this channel is folded into the flat chart
+// rows for now. Multi-channel display is a follow-up.
+export const DEFAULT_SENSOR_CHANNEL = "default";
+
 export const getStationSensorReadings = (baseUrl: string, stationId: string, hours: number, signal?: AbortSignal) =>
-  fetchJson<SensorDataResponse[]>(stationPath(stationId, `/sensor-readings?hours=${hours}`, baseUrl), {
+  fetchJson<SensorSeriesResponse[]>(stationPath(stationId, `/sensor-readings?hours=${hours}`, baseUrl), {
     credentials: "include",
     signal,
     throwOnHttpError: false,
   });
+
+// Pivot the per-(metric, channel) series into the flat, timestamp-keyed rows the
+// charts/tables consume. Only the default channel is folded in; each row gathers
+// every metric reported at that timestamp. Rows are ordered oldest-to-newest.
+export const flattenSensorSeries = (series: SensorSeriesResponse[]): SensorData[] => {
+  const rowsByTimestamp = new Map<string, SensorData>();
+  for (const stream of series) {
+    if (stream.channel !== DEFAULT_SENSOR_CHANNEL) continue;
+    for (const point of stream.points) {
+      let row = rowsByTimestamp.get(point.timestamp);
+      if (!row) {
+        row = { timestamp: parseApiTimestamp(point.timestamp) };
+        rowsByTimestamp.set(point.timestamp, row);
+      }
+      row[stream.metric] = point.value;
+    }
+  }
+  return Array.from(rowsByTimestamp.values()).sort(
+    (a, b) => a.timestamp.getTime() - b.timestamp.getTime()
+  );
+};
 
 export const getStationImageCaptures = (baseUrl: string, stationId: string, count: number, signal?: AbortSignal) =>
   fetchJson<TimelineItemResponse[]>(stationPath(stationId, `/image-captures?count=${count}`, baseUrl), {

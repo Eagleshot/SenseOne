@@ -1,58 +1,62 @@
-﻿"""Tests for shared station access checks."""
+"""Tests for shared station access checks (SQLite-backed)."""
 
+import uuid
 from dataclasses import dataclass
 
 import pytest
 from fastapi import HTTPException
 
-from config import write_station_config, write_station_meta
-from models import AppConfig
-from station_access import can_view_station, require_station_edit, require_station_view
+from station_access import (
+    can_edit_station,
+    can_view_station,
+    require_station_edit,
+    require_station_view,
+)
+from tests import _db
 
 
 @dataclass(frozen=True)
 class AccessUser:
-    username: str
+    owner_id: str
     is_admin: bool = False
 
 
-def test_public_station_is_visible_to_anonymous(setup_station_dir, monkeypatch):
-    data_dir, station_id = setup_station_dir
-    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
-    write_station_config(data_dir, station_id, AppConfig(is_public=True))
-
-    assert can_view_station(station_id, None) is True
+def test_public_station_is_visible_to_anonymous(db):
+    _db.create_station_row("pub", is_public=True)
+    assert can_view_station("pub", None) is True
 
 
-def test_private_station_is_hidden_from_anonymous(setup_station_dir, monkeypatch):
-    data_dir, station_id = setup_station_dir
-    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
-    write_station_config(data_dir, station_id, AppConfig(is_public=False))
-
+def test_private_station_is_hidden_from_anonymous(db):
+    _db.create_station_row("priv", is_public=False)
     with pytest.raises(HTTPException) as exc:
-        require_station_view(station_id, None)
-
+        require_station_view("priv", None)
     assert exc.value.status_code == 404
 
 
-def test_private_station_owner_can_edit(setup_station_dir, monkeypatch):
-    data_dir, station_id = setup_station_dir
-    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
-    write_station_config(data_dir, station_id, AppConfig(is_public=False))
-    write_station_meta(data_dir, station_id, owner="owner")
-
-    require_station_edit(station_id, AccessUser("owner"))
+def test_private_station_owner_can_edit(db):
+    owner = _db.create_owner("owner@example.com")
+    _db.create_station_row("priv", is_public=False, owner_id=owner.owner_id)
+    require_station_edit("priv", AccessUser(owner.owner_id))
 
 
-def test_private_station_non_owner_cannot_edit(setup_station_dir, monkeypatch):
-    data_dir, station_id = setup_station_dir
-    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
-    write_station_config(data_dir, station_id, AppConfig(is_public=False))
-    write_station_meta(data_dir, station_id, owner="owner")
-
+def test_private_station_non_owner_cannot_edit(db):
+    owner = _db.create_owner("owner@example.com")
+    _db.create_station_row("priv", is_public=False, owner_id=owner.owner_id)
     with pytest.raises(HTTPException) as exc:
-        require_station_edit(station_id, AccessUser("other"))
-
+        require_station_edit("priv", AccessUser(str(uuid.uuid4())))
     assert exc.value.status_code == 403
 
 
+def test_admin_can_edit_any_station(db):
+    _db.create_station_row("priv", is_public=False)
+    require_station_edit("priv", AccessUser(str(uuid.uuid4()), is_admin=True))
+
+
+def test_can_edit_station_owner_admin_and_outsider(db):
+    owner = _db.create_owner("owner@example.com")
+    _db.create_station_row("pub", is_public=True, owner_id=owner.owner_id)
+
+    assert can_edit_station("pub", AccessUser(owner.owner_id)) is True
+    assert can_edit_station("pub", AccessUser(str(uuid.uuid4()), is_admin=True)) is True
+    assert can_edit_station("pub", AccessUser(str(uuid.uuid4()))) is False
+    assert can_edit_station("pub", None) is False

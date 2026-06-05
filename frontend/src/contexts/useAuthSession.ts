@@ -5,16 +5,16 @@ import { isAbortError } from "@/lib/apiClient";
 
 export type AuthSessionState = {
   isAuthenticated: boolean;
-  authenticatedUsername: string | null;
+  authenticatedEmail: string | null;
   authReady: boolean;
-  login: (username: string, password: string) => Promise<AuthResult>;
+  login: (email: string, password: string) => Promise<AuthResult>;
   logout: () => Promise<void>;
 };
 
 export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
-  const [authenticatedUsername, setAuthenticatedUsername] = useState<string | null>(null);
+  const [authenticatedEmail, setAuthenticatedEmail] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const isAuthenticated = authReady && Boolean(authenticatedUsername);
+  const isAuthenticated = authReady && Boolean(authenticatedEmail);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -24,10 +24,10 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
         const payload = await getCurrentUser(apiBaseUrl, controller.signal);
 
         if (controller.signal.aborted) return;
-        setAuthenticatedUsername(payload?.username ?? null);
+        setAuthenticatedEmail(payload?.email ?? null);
       } catch (error) {
         if (isAbortError(error)) return;
-        setAuthenticatedUsername(null);
+        setAuthenticatedEmail(null);
       } finally {
         if (!controller.signal.aborted) {
           setAuthReady(true);
@@ -42,10 +42,10 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
     };
   }, [apiBaseUrl]);
 
-  const login = useCallback(async (username: string, password: string): Promise<AuthResult> => {
-    const result = await loginUser(apiBaseUrl, username, password);
-    if (result.success && result.username) {
-      setAuthenticatedUsername(result.username);
+  const login = useCallback(async (email: string, password: string): Promise<AuthResult> => {
+    const result = await loginUser(apiBaseUrl, email, password);
+    if (result.success && result.email) {
+      setAuthenticatedEmail(result.email);
       setAuthReady(true);
     }
     return result.success ? { success: true } : { success: false, error: result.error };
@@ -58,16 +58,16 @@ export const useAuthSession = (apiBaseUrl: string): AuthSessionState => {
       // Best-effort logout; clear local auth state regardless.
     }
 
-    setAuthenticatedUsername(null);
+    setAuthenticatedEmail(null);
     setAuthReady(true);
   }, [apiBaseUrl]);
 
   return useMemo(() => ({
     isAuthenticated,
-    authenticatedUsername,
+    authenticatedEmail,
     authReady,
     login,
     logout,
-  }), [authReady, authenticatedUsername, isAuthenticated, login, logout]);
+  }), [authReady, authenticatedEmail, isAuthenticated, login, logout]);
 };
 

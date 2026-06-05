@@ -8,7 +8,8 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from constants import API_PREFIX, DEVICE_API_PREFIX
+from constants import API_PREFIX, INGEST_API_PREFIX, env_flag
+from db.migrate import run_migrations
 from routes import auth, device_ingestion, stations, stations_images_weather, system
 from users import has_any_user, init_users_db
 
@@ -16,7 +17,7 @@ from users import has_any_user, init_users_db
 # Routes that are allowed to be served over plain HTTP even when HTTPS is
 # enforced for everything else. Device ingestion uses HMAC signing for its
 # auth, which is safe over HTTP. Health/clock endpoints carry no secrets.
-HTTP_ALLOWED_PATH_PREFIXES = (f"{DEVICE_API_PREFIX}/",)
+HTTP_ALLOWED_PATH_PREFIXES = (f"{INGEST_API_PREFIX}/",)
 HTTP_ALLOWED_EXACT_PATHS = {"/", "/health", "/favicon.ico", "/clock"}
 
 
@@ -47,13 +48,16 @@ def add_security_headers_middleware(app: FastAPI) -> None:
         response.headers["X-Download-Options"] = "noopen"
         response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=(), usb=()"
-        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+        # HSTS applies only to HTTPS. Don't emit it on the plain-HTTP device
+        # ingestion leg (those requests arrive over HTTP by design).
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
         return response
 
 
 def add_https_enforcement_middleware(app: FastAPI) -> None:
     """Reject plain-HTTP requests for routes that carry user credentials."""
-    enabled = (os.getenv("APP_REQUIRE_HTTPS") or "").strip().lower() in ("1", "true", "yes")
+    enabled = env_flag("APP_REQUIRE_HTTPS")
     if not enabled:
         logging.warning(
             "APP_REQUIRE_HTTPS is not enabled. User-auth routes will accept plain HTTP. "
@@ -79,10 +83,13 @@ def add_https_enforcement_middleware(app: FastAPI) -> None:
 def create_app() -> FastAPI:
     """Create and configure the Eagleshot API app."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    # Bring the control-plane schema up to head before anything queries it.
+    run_migrations()
     init_users_db()
     if not has_any_user():
         logging.warning(
-            "No user accounts exist. Set APP_AUTH_USERNAME and APP_AUTH_PASSWORD to bootstrap an admin."
+            "No users exist. Set APP_AUTH_EMAIL and APP_AUTH_PASSWORD to bootstrap an admin."
         )
 
     app = FastAPI(
@@ -103,7 +110,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(stations.router, prefix=API_PREFIX)
     app.include_router(stations_images_weather.router, prefix=API_PREFIX)
-    app.include_router(device_ingestion.router, prefix=DEVICE_API_PREFIX)
+    app.include_router(device_ingestion.router, prefix=INGEST_API_PREFIX)
     return app
 
 

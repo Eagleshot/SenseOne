@@ -2,18 +2,20 @@
 
 import logging
 import os
+import shutil
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from config import get_data_dir, read_station_config, station_db_path
+import store
+from config import get_data_dir
 from constants import ALLOWED_IMAGE_EXTENSIONS
-from models import AppConfig, ImageUploadResponse, SensorHistoryResponse, SensorReadingRequest
+from models import DeviceConfig, ImageUploadResponse, SensorReadingAck, SensorReadingRequest
 from routes import ValidStationId
 from station_access import require_station_exists
-from station_db import append_sensor_reading, append_station_image
 from station_hmac import verify_station_signature
 from utils import (
+    default_capture_filename,
     image_timestamp_from_filename,
     is_supported_image_upload,
     iso_utc,
@@ -34,9 +36,62 @@ def _parse_max_upload_bytes() -> int:
     return max_bytes
 
 
-MAX_UPLOAD_BYTES = _parse_max_upload_bytes()
+def _parse_min_free_disk_bytes() -> int:
+    """Free-space floor below which the server stops accepting image uploads.
 
-router = APIRouter(prefix="/stations", tags=["Device"])
+    A device with a valid secret (or a buggy one) can otherwise loop uploads and
+    fill the disk, which takes the whole service down and can corrupt in-flight
+    SQLite writes. This is a safety valve, not per-plan retention — that lands
+    with the SaaS quota work. Set to 0 to disable. Default 500 MiB.
+    """
+    raw_value = os.getenv("APP_MIN_FREE_DISK_BYTES")
+    try:
+        min_bytes = int(raw_value) if raw_value else 500 * 1024 * 1024
+    except ValueError as exc:
+        raise RuntimeError("APP_MIN_FREE_DISK_BYTES must be an integer.") from exc
+    if min_bytes < 0:
+        raise RuntimeError("APP_MIN_FREE_DISK_BYTES must not be negative.")
+    return min_bytes
+
+
+MAX_UPLOAD_BYTES = _parse_max_upload_bytes()
+MIN_FREE_DISK_BYTES = _parse_min_free_disk_bytes()
+
+
+def _enforce_free_disk(data_dir, incoming_bytes: int) -> None:
+    """Reject uploads with 507 when storing this body would breach the floor."""
+    if MIN_FREE_DISK_BYTES <= 0:
+        return
+    try:
+        free = shutil.disk_usage(data_dir).free
+    except OSError as exc:
+        logging.warning("Could not check free disk space at %s: %s", data_dir, exc)
+        return
+    if free - incoming_bytes < MIN_FREE_DISK_BYTES:
+        logging.error(
+            "Refusing upload: free disk %d would drop below floor %d after %d bytes.",
+            free, MIN_FREE_DISK_BYTES, incoming_bytes,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail="Server storage is full. Upload rejected.",
+        )
+
+router = APIRouter(prefix="/stations", tags=["Ingest"])
+
+# Error responses common to every signed device route, surfaced in the OpenAPI
+# schema. Each route spreads this and adds the failures specific to its payload.
+_SIGNED_REQUEST_ERRORS: dict[int | str, dict[str, str]] = {
+    400: {"description": "Malformed station id in the request path."},
+    401: {
+        "description": (
+            "Missing or invalid HMAC signature: absent/blank signing headers, "
+            "X-Timestamp outside the ±300 s window, a replayed X-Nonce, a "
+            "signature mismatch, or no device secret provisioned for the station."
+        )
+    },
+    404: {"description": "No station exists with this id."},
+}
 
 
 def parse_next_online(value: str | None) -> str | None:
@@ -75,6 +130,7 @@ def store_uploaded_image(
 
     data_dir = get_data_dir()
     require_station_exists(station_id)
+    _enforce_free_disk(data_dir, len(body))
 
     images_dir = data_dir / station_id / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -101,8 +157,8 @@ def store_uploaded_image(
             file_path.unlink(missing_ok=True)
         raise
 
-    append_station_image(
-        station_db_path(data_dir, station_id),
+    store.append_image(
+        station_id,
         filename=stored_filename,
         content_type=detected_media_type,
         size_bytes=len(body),
@@ -112,18 +168,39 @@ def store_uploaded_image(
     return stored_filename, f"/stations/{station_id}/images/{stored_filename}"
 
 
+def _hhmm_to_minutes(value: str) -> int:
+    hours, minutes = value.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
 @router.get(
     "/{station_id}/config",
-    response_model=AppConfig,
+    response_model=DeviceConfig,
     summary="Get station config for a device",
-    description="Return the station config to a device after validating its HMAC signature.",
+    description=(
+        "Return the capture schedule and location a device needs for its next "
+        "wake cycle (start/stop minutes, capture interval, lat/lon/alt). A device "
+        "typically calls this right after syncing its clock, before capturing.\n\n"
+        "Requires a valid **v1 HMAC signature** (`X-Station-Id`, `X-Timestamp`, "
+        "`X-Nonce`, `X-Signature` headers); the request carries no body."
+    ),
+    responses=_SIGNED_REQUEST_ERRORS,
 )
 async def get_device_station_config(
     station_id: ValidStationId,
     request: Request,
-) -> AppConfig:
+) -> DeviceConfig:
     await verify_station_signature(station_id, request)
-    return read_station_config(get_data_dir(), station_id)
+    config = store.station_config(station_id)
+    return DeviceConfig(
+        station_start_minute=_hhmm_to_minutes(config.station_start_time),
+        station_stop_minute=_hhmm_to_minutes(config.station_stop_time),
+        use_sunrise_sunset=config.use_sunrise_sunset,
+        capture_interval_minutes=config.capture_interval_minutes,
+        lat=config.lat,
+        lon=config.lon,
+        alt=config.alt,
+    )
 
 
 @router.post(
@@ -131,13 +208,53 @@ async def get_device_station_config(
     response_model=ImageUploadResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Upload one image",
-    description="Store one signed JPEG/PNG/WebP image capture for an existing station.",
+    description=(
+        "Store one image capture for an existing station. The request body is the "
+        "**raw image bytes** (not multipart); set `Content-Type` to `image/jpeg`, "
+        "`image/png`, or `image/webp`. The server also sniffs the bytes and rejects "
+        "anything that is not a real image of a supported type.\n\n"
+        "Requires a valid **v1 HMAC signature** (`X-Station-Id`, `X-Timestamp`, "
+        "`X-Nonce`, `X-Signature` headers). Uploads are capped at "
+        "`APP_MAX_UPLOAD_BYTES` (default 25 MB) and refused once free disk would "
+        "drop below `APP_MIN_FREE_DISK_BYTES`.\n\n"
+        "Capture time and camera are read from `X-Filename`; `X-Next-Online` records "
+        "when the device expects to check in next, which drives the station's "
+        "online/offline status."
+    ),
+    responses={
+        **_SIGNED_REQUEST_ERRORS,
+        400: {"description": "Invalid Content-Length, empty body, or malformed station id."},
+        413: {"description": "Upload exceeds APP_MAX_UPLOAD_BYTES."},
+        415: {"description": "Unsupported image type, or the bytes are not a recognised image."},
+        422: {
+            "description": (
+                "A supplied X-Filename or X-Next-Online is malformed (X-Filename must "
+                "match YYYYMMDD_HHMMZ_<camera>.<ext>; X-Next-Online must be ISO 8601)."
+            )
+        },
+        507: {"description": "Server storage is full; the upload was refused."},
+    },
 )
 async def upload_station_image(
     station_id: ValidStationId,
     request: Request,
-    x_filename: str | None = Header(default=None, description="Optional filename suggestion."),
-    x_next_online: str | None = Header(default=None, description="Optional ISO 8601 next check-in timestamp."),
+    x_filename: str | None = Header(
+        default=None,
+        description=(
+            "Capture filename `YYYYMMDD_HHMMZ_<camera>.<ext>` — the UTC capture "
+            "minute plus a camera/stream token. Optional: when omitted or blank the "
+            "server stamps a default name from the current UTC minute. When supplied "
+            "it must match this format, otherwise the upload is rejected with 422."
+        ),
+    ),
+    x_next_online: str | None = Header(
+        default=None,
+        description=(
+            "Optional ISO 8601 timestamp for when the device next expects to check "
+            "in. Stored with the capture and used to show the station as online "
+            "until this time (plus a short grace buffer) has passed."
+        ),
+    ),
 ) -> ImageUploadResponse:
     content_length = request.headers.get("content-length")
     if content_length:
@@ -152,11 +269,21 @@ async def upload_station_image(
             )
 
     body = await verify_station_signature(station_id, request)
+    content_type = request.headers.get("content-type")
+    # X-Filename is optional: a device may omit it (or send blank), and the server
+    # stamps a default capture name from the current UTC minute. A supplied name
+    # must still match the capture format (store_uploaded_image enforces it).
+    provided_name = (x_filename or "").strip()
+    filename = (
+        sanitize_filename(provided_name)
+        if provided_name
+        else default_capture_filename(content_type)
+    )
     stored_filename, image_url = store_uploaded_image(
         station_id=station_id,
-        filename=sanitize_filename(x_filename or "default.jpg"),
+        filename=filename,
         body=body,
-        content_type=request.headers.get("content-type"),
+        content_type=content_type,
         next_online=parse_next_online(x_next_online),
     )
     logging.info("File saved for station %s as %s", station_id, stored_filename)
@@ -165,25 +292,50 @@ async def upload_station_image(
 
 @router.post(
     "/{station_id}/sensor-readings",
-    response_model=SensorHistoryResponse,
+    response_model=SensorReadingAck,
     status_code=status.HTTP_201_CREATED,
     summary="Upload one sensor reading",
-    description="Append one signed sensor reading to a station's history.",
+    description=(
+        "Append one sensor reading to a station's history. The signed JSON body "
+        "carries optional `timestamp`, `channel`, `nextStart`, and device log fields "
+        "(`firmwareVersion`, `wakeReason`, …); any extra numeric keys are stored "
+        "verbatim as metrics, so a device can report whatever it measures without a "
+        "server change. When `timestamp` is omitted the server stamps receipt time.\n\n"
+        "Requires a valid **v1 HMAC signature** (`X-Station-Id`, `X-Timestamp`, "
+        "`X-Nonce`, `X-Signature` headers) and `Content-Type: application/json`."
+    ),
+    responses={
+        **_SIGNED_REQUEST_ERRORS,
+        422: {
+            "description": (
+                "Body failed validation: bad timestamp/nextStart, a non-numeric or "
+                "out-of-range metric, too many metric fields, or an invalid channel."
+            )
+        },
+    },
 )
 async def create_sensor_reading(
     station_id: ValidStationId,
     payload: SensorReadingRequest,
     request: Request,
-) -> SensorHistoryResponse:
+) -> SensorReadingAck:
     await verify_station_signature(station_id, request)
     timestamp = payload.timestamp or iso_utc(datetime.now(timezone.utc))
     metrics = payload.metrics
-    next_online = payload.next_start
-    data_dir = get_data_dir()
-    append_sensor_reading(
-        station_db_path(data_dir, station_id),
+    channel = payload.resolved_channel
+    store.append_reading(
+        station_id,
         timestamp,
         metrics,
-        next_online=next_online,
+        channel=channel,
+        firmware_version=payload.firmware_version,
+        wake_reason=payload.wake_reason,
+        next_online=payload.next_start,
     )
-    return SensorHistoryResponse(timestamp=timestamp, **metrics)
+    return SensorReadingAck(
+        timestamp=timestamp,
+        channel=channel,
+        metrics={key: float(value) for key, value in metrics.items()},
+        firmware_version=payload.firmware_version,
+        wake_reason=payload.wake_reason,
+    )

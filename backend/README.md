@@ -2,42 +2,38 @@
 
 ## Mock data seeding
 
-From `backend/`:
+Seeds the **SQLite** control plane (the seeder creates the schema + plans itself —
+see [`seed/README.md`](seed/README.md)). From `backend/`:
 
 ```powershell
-python .\seed\seed_mock_data.py
+python .\seed\seed_mock_data.py --overwrite
 ```
 
-This creates per-station folders in `backend/data/<station_id>/` with:
-
-- `images/` mock assets
-- `config.yaml` including schedule and metadata (`title`, `lat`, `lon`, `alt`, `location`, `country`, `country_emoji`)
-- `station.db` containing image capture and sensor reading rows
-
-Use `--station-id`, `--count`, and `--overwrite` to control generated sample data:
-
-```powershell
-python .\seed\seed_mock_data.py --station-id matterhorn-01 --count 24 --overwrite
-```
+It inserts users/stations/sensor_readings/station_images rows and writes
+timeline image blobs under `backend/data/<slug>/images/`. Use `--station-id`,
+`--count`, and `--overwrite` to control the generated sample data.
 
 This backend is a single FastAPI server that:
 
 - serves the frontend API routes used by the Vite app with session-cookie auth
-- accepts HMAC-signed device uploads on `POST /device/stations/{station_id}/images` and `POST /device/stations/{station_id}/sensor-readings` — see [Device auth (HMAC)](#device-auth-hmac)
-- saves uploaded files into `backend/data/<station>/images/`, where each station has its own folder
-- creates a `config.yaml` and `station.db` per station directory on first write
-- can optionally expose weather and auth features through the shared project root `.env`
+- accepts HMAC-signed device uploads on `POST /v1/ingest/stations/{station_id}/images` and `POST /v1/ingest/stations/{station_id}/sensor-readings` — see [Device auth (HMAC)](#device-auth-hmac)
+- stores all station metadata, ownership, sensor readings, and image metadata in a local **SQLite** database
+- writes uploaded image blobs to `backend/data/<station>/images/`
+- exposes weather and auth features through the shared project root `.env`
 
 ## 1) Prerequisites
 
 - Python 3.10+ (3.11+ recommended)
 - `pip`
+- No database server — control-plane data is a local SQLite file
+  (`backend/data/control.db`), created automatically on first run.
 - One sample `.jpg` file for local testing
 
-Optional for the shared frontend/backend `.env`:
+Required/optional in the shared frontend/backend `.env`:
 
+- `DATABASE_URL` — optional; only set it to point at a different SQLAlchemy database (defaults to `sqlite:///<APP_DATA_DIR>/control.db`)
 - `VITE_API_BASE_URL` for the frontend
-- `APP_AUTH_USERNAME`, `APP_AUTH_PASSWORD`, and `OPENWEATHER_API_KEY` for the backend
+- `APP_AUTH_EMAIL`, `APP_AUTH_PASSWORD`, and `OPENWEATHER_API_KEY` for the backend
 - `APP_REQUIRE_HTTPS=true` to reject plain-HTTP requests for user-auth routes (device routes stay HTTP-allowed since their auth is HMAC-signed)
 
 ## 2) Open the backend folder
@@ -81,7 +77,7 @@ Devices authenticate every request by signing it — the shared secret never goe
 
 | Header | Example | Notes |
 | --- | --- | --- |
-| `X-Station-Id` | `silvretta-glacier` | Must match the URL path. |
+| `X-Station-Id` | `7f3a9c2b1e08` | The station's stable opaque `id` (its `id` in the API, not the display name or pretty URL slug). Must match the URL path. |
 | `X-Timestamp` | `1748000000` | Unix seconds, within +-300 s of the server clock. |
 | `X-Nonce` | `0123456789abcdef0123456789abcdef` | Hex, >=16 chars, fresh per request. |
 | `X-Signature` | `v1=<64 hex chars>` | HMAC-SHA256 of the canonical string with the per-station secret. |
@@ -89,7 +85,7 @@ Devices authenticate every request by signing it — the shared secret never goe
 Provision the per-station secret from an authenticated admin session:
 
 ```
-POST /stations/{station_id}/rotate-device-secret
+POST /v1/stations/{station_id}/rotate-device-secret
 ```
 
 The response includes the base64url secret exactly once — flash it to the device and discard the response.
@@ -100,6 +96,40 @@ Reference signers:
 - MicroPython / OpenMV: [`clients/openmv/eagleshot_signing.py`](../clients/openmv/eagleshot_signing.py)
 
 Devices without an RTC can call the unauthenticated `GET /clock` once at boot and track the offset against a monotonic counter.
+
+### Porting to other devices (ESP32-CAM, Raspberry Pi, …)
+
+Any device that can issue an HTTP request and compute HMAC-SHA256 can push to the same endpoints — the API is device- and transport-agnostic. To port a new board:
+
+1. **Sign the request** exactly as in the table above (canonical string + four headers; see `station_hmac.py`). Reuse a shared signer where you can:
+   - **Raspberry Pi / any CPython host** — `import eagleshot_signing` from [`clients/python/eagleshot_signing.py`](../clients/python/eagleshot_signing.py) and POST with `requests` (see steps 6–7). Works over WiFi, Ethernet, or cellular; no board-specific firmware needed.
+   - **OpenMV / MicroPython** — copy [`clients/openmv/eagleshot_signing.py`](../clients/openmv/eagleshot_signing.py) next to your `main.py` and `from eagleshot_signing import sign_request` (the reference firmware does exactly this).
+   - **ESP32-CAM (Arduino/C++)** — there's no shared lib for C++, so reimplement the signer with mbedTLS (bundled in arduino-esp32): SHA-256 the JPEG framebuffer (`mbedtls_sha256`), build the same `\n`-joined canonical string, HMAC it with `mbedtls_md_hmac` (`MBEDTLS_MD_SHA256`), hex-encode lowercase, and send via `HTTPClient`. **Mind the secret encoding:** it's base64**url** and routinely contains `-`/`_`, so translate `-`→`+`, `_`→`/` and re-pad before `mbedtls_base64_decode`. Validate against the known-answer vector below before touching hardware.
+2. **Pick the transport** (see *Transport / TLS* below): prefer HTTPS where the board supports it; fall back to plain HTTP only where it can't.
+3. **Honor the upload contract:**
+   - `X-Filename` is optional: when supplied it must be `YYYYMMDD_HHMMZ_<camera>.jpg` (UTC capture minute) and becomes the stored capture timestamp; when omitted the server stamps a default name from the current UTC minute.
+   - `Content-Type` `image/jpeg|png|webp`; the body must be a real image (the server sniffs the bytes).
+   - Default size cap 25 MB (`APP_MAX_UPLOAD_BYTES`).
+   - `X-Timestamp` must be within ±300 s of the server clock; RTC-less boards sync via `GET /clock` as above.
+4. **Sensor readings are free-form:** any JSON keys beyond `timestamp` / `nextStart` are stored verbatim, so a new board can report whatever metrics it has (battery, soil moisture, …) with no server-side change.
+
+**Known-answer vector** — validate any new signer against this exact input before testing on hardware (generated by `tests/_signing.py`, the server's own reference):
+
+```
+secret_b64 = abcdef0123456789-_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA   # base64url: note the - and _
+method     = POST
+path       = /v1/ingest/stations/silvretta-glacier/images
+body       = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+timestamp  = 1748000000
+nonce      = 0123456789abcdef0123456789abcdef
+
+sha256(body) = 03f2833d8de9b8473d2afa2d09d180a5ebe9144de756a480b24e2b6aee17d0ec
+X-Signature  = v1=d8ed61d2612bc32ff168da82a763c784637e7de22529d9ca4de37b625d160a3f
+```
+
+#### Transport / TLS
+
+The shared secret is only ever an HMAC key — it never goes over the wire — so a signed request is safe to send over **plain HTTP**: an on-path observer can read a (public) webcam frame but cannot forge, tamper with, or replay it, nor recover the secret. Use plain HTTP only for links that genuinely can't do TLS (e.g. a cellular modem). Capable boards (Raspberry Pi, ESP32) should use **HTTPS** to the ingest hostname and lose nothing — a Raspberry Pi validates Cloudflare's certificate; an ESP32 can bundle Cloudflare's root CA or, at minimum, use `client.setInsecure()` (still encrypted; the HMAC covers authenticity). Configuring Cloudflare to allow both is covered in the root `README.md` ("Start Cloudflare Tunnel").
 
 ## 6) Test with a local image upload
 
@@ -112,7 +142,7 @@ import eagleshot_signing, requests
 STATION_ID = "{STATION_ID}"
 SECRET_B64 = "{DEVICE_SECRET_B64}"
 body = open(r"C:\path\to\test.jpg", "rb").read()
-path = f"/device/stations/{STATION_ID}/images"
+path = f"/v1/ingest/stations/{STATION_ID}/images"
 
 headers = eagleshot_signing.sign_request(
     station_id=STATION_ID,
@@ -153,12 +183,11 @@ import eagleshot_signing, requests
 
 STATION_ID = "{STATION_ID}"
 SECRET_B64 = "{DEVICE_SECRET_B64}"
-path = f"/device/stations/{STATION_ID}/sensor-readings"
+path = f"/v1/ingest/stations/{STATION_ID}/sensor-readings"
 body = json.dumps({
     "timestamp": "2026-05-24T14:30:00Z",
     "firmwareVersion": "openmv-n6-2026.05",
     "nextStart": "2026-05-24T15:00:00Z",
-    "cameraName": "front",
     "wakeReason": "timer",
     "voltage": 3.9,
 }).encode("utf-8")
@@ -177,27 +206,31 @@ print(response.status_code, response.text)
 PY
 ```
 
-For the OpenMV flow, `timestamp` is the adjusted UTC image capture minute and should match the `YYYYMMDD_HHMMZ` prefix in `X-Filename`. Weather-like fields are optional; log fields such as `firmwareVersion`, `nextStart`, `cameraName`, `wakeReason`, `voltage`, and `deviceTemperature` can be sent sparsely.
+For the OpenMV flow, `timestamp` is the adjusted UTC image capture minute and should match the `YYYYMMDD_HHMMZ` prefix in `X-Filename`. Weather-like fields are optional; log fields such as `firmwareVersion`, `nextStart`, `wakeReason`, `voltage`, and `deviceTemperature` can be sent sparsely.
 
 ## 8) Endpoints
 
+The public HTTP API is versioned under `/v1` (app routes at `/v1/...`, device
+ingestion at `/v1/ingest/...`). Only the unversioned infrastructure endpoints
+(`/`, `/health`, `/clock`, `/favicon.ico`) live at the root.
+
 Frontend routes (session-cookie auth):
 
-- `GET /stations`
-- `GET /stations/{station_id}`
-- `GET /stations/{station_id}/sensor-readings`
-- `GET /stations/{station_id}/image-captures`
-- `GET /stations/{station_id}/weather/current`
-- `GET /stations/{station_id}/weather/forecast`
-- `GET /stations/{station_id}/config`
-- `PUT /stations/{station_id}/config`
-- `POST /stations/{station_id}/rotate-device-secret`
+- `GET /v1/stations`
+- `GET /v1/stations/{station_id}`
+- `GET /v1/stations/{station_id}/sensor-readings`
+- `GET /v1/stations/{station_id}/image-captures`
+- `GET /v1/stations/{station_id}/weather/current`
+- `GET /v1/stations/{station_id}/weather/forecast`
+- `GET /v1/stations/{station_id}/config`
+- `PUT /v1/stations/{station_id}/config`
+- `POST /v1/stations/{station_id}/rotate-device-secret`
 
-Device routes (HMAC signing, see above):
+Ingest routes (device push/pull, HMAC signing — see above):
 
-- `POST /device/stations/{station_id}/images`
-- `POST /device/stations/{station_id}/sensor-readings`
-- `GET /device/stations/{station_id}/config`
+- `POST /v1/ingest/stations/{station_id}/images`
+- `POST /v1/ingest/stations/{station_id}/sensor-readings`
+- `GET /v1/ingest/stations/{station_id}/config`
 
 Open:
 
@@ -211,9 +244,9 @@ Open:
   - nonce was reused — generate a fresh one per request
   - secret on device doesn't match the server — rotate via `POST /stations/{station_id}/rotate-device-secret` and re-flash
 - `404 Not Found`:
-  - station id doesn't exist or the URL path doesn't match `/device/stations/{station_id}/images` / `.../sensor-readings` / `.../config`
+  - station id doesn't exist or the URL path doesn't match `/v1/ingest/stations/{station_id}/images` / `.../sensor-readings` / `.../config`
 - `422 Unprocessable Entity` on image upload:
-  - `X-Filename` must be a real UTC capture name such as `20260524_1430Z_front.jpg`
+  - a *supplied* `X-Filename` must be a real UTC capture name such as `20260524_1430Z_front.jpg` (omit it to have the server stamp one)
 - `413 Payload Too Large`:
   - default upload cap is 25 MB; override with `APP_MAX_UPLOAD_BYTES`
 - `426 Upgrade Required`:

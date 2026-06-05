@@ -1,9 +1,14 @@
-"""Tests for HTTPS enforcement middleware and the clock endpoint."""
+"""Tests for HTTPS enforcement middleware and the clock endpoint (SQLite-backed).
+
+These build the full app via create_app(), which uses the database, so they run
+against the test SQLite database. The pure auth_cookie_secure() unit test lives in
+test_auth.py so it runs without a database.
+"""
 
 from fastapi.testclient import TestClient
 
-from main import create_app
 from auth import AUTH_SESSIONS
+from main import create_app
 from station_hmac import provision_device_hmac_secret
 
 
@@ -15,77 +20,95 @@ def _client(tmp_data_dir, monkeypatch, *, require_https: bool) -> TestClient:
     return TestClient(create_app())
 
 
-def test_clock_endpoint_returns_unix_seconds(tmp_data_dir, monkeypatch):
+def test_clock_endpoint_returns_unix_seconds(db, tmp_data_dir, monkeypatch):
     client = _client(tmp_data_dir, monkeypatch, require_https=False)
     response = client.get("/clock")
     assert response.status_code == 200
     payload = response.json()
     assert isinstance(payload["unixSeconds"], int)
-    assert payload["unixSeconds"] > 1_700_000_000  # sanity check: after 2023
+    assert payload["unixSeconds"] > 1_700_000_000
 
 
-def test_https_enforcement_disabled_allows_plain_http_login(tmp_data_dir, monkeypatch):
+def test_https_enforcement_disabled_allows_plain_http_login(db, tmp_data_dir, monkeypatch):
     client = _client(tmp_data_dir, monkeypatch, require_https=False)
-    # No user configured, so login returns 401, but the request reaches the
-    # auth route rather than being short-circuited by the HTTPS middleware.
-    response = client.post(
-        "/auth/login",
-        json={"username": "nobody", "password": "nobody"},
-    )
+    response = client.post("/v1/auth/login", json={"email": "nobody@example.com", "password": "nobody-secret"})
     assert response.status_code != 426
 
 
-def test_https_enforcement_blocks_user_routes_over_http(tmp_data_dir, monkeypatch):
+def test_https_enforcement_blocks_user_routes_over_http(db, tmp_data_dir, monkeypatch):
     client = _client(tmp_data_dir, monkeypatch, require_https=True)
-    response = client.post(
-        "/auth/login",
-        json={"username": "anyone", "password": "anyone"},
-    )
+    response = client.post("/v1/auth/login", json={"email": "anyone@example.com", "password": "anyone-secret"})
     assert response.status_code == 426
     assert "HTTPS" in response.json()["detail"]
 
 
-def test_https_enforcement_allows_device_routes_over_http(tmp_data_dir, monkeypatch, setup_station_dir):
+def test_https_enforcement_allows_device_routes_over_http(setup_station_dir, monkeypatch):
     """Signed device requests must still work over HTTP even with enforcement on."""
-    data_dir, station_id = setup_station_dir
-    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
+    _, station_id = setup_station_dir
     provision_device_hmac_secret(station_id)
-
     monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
     monkeypatch.setenv("APP_REQUIRE_HTTPS", "true")
     AUTH_SESSIONS.clear()
     client = TestClient(create_app())
 
-    # Even without a valid signature, the device route should at least be
-    # reachable: it rejects with 401, not 426.
-    response = client.post(f"/device/stations/{station_id}/images", content=b"x")
+    # Even without a valid signature, the device route is reachable: 401, not 426.
+    response = client.post(f"/v1/ingest/stations/{station_id}/images", content=b"x")
     assert response.status_code == 401
 
 
-def test_https_enforcement_allows_clock_over_http(tmp_data_dir, monkeypatch):
+def test_https_enforcement_allows_clock_over_http(db, tmp_data_dir, monkeypatch):
     client = _client(tmp_data_dir, monkeypatch, require_https=True)
-    response = client.get("/clock")
-    assert response.status_code == 200
+    assert client.get("/clock").status_code == 200
 
 
-def test_https_enforcement_allows_health_over_http(tmp_data_dir, monkeypatch):
+def test_https_enforcement_allows_health_over_http(db, tmp_data_dir, monkeypatch):
     client = _client(tmp_data_dir, monkeypatch, require_https=True)
-    response = client.get("/health")
-    assert response.status_code == 200
+    assert client.get("/health").status_code == 200
 
 
-def test_https_enforcement_passes_when_scheme_is_https(tmp_data_dir, monkeypatch):
+def test_https_enforcement_passes_when_scheme_is_https(db, tmp_data_dir, monkeypatch):
     """Simulate a proxied request that arrived via HTTPS."""
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
     monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
     monkeypatch.setenv("APP_REQUIRE_HTTPS", "true")
     AUTH_SESSIONS.clear()
-    # Setting base_url with https:// flips request.url.scheme to "https" inside
-    # the app, the same way --proxy-headers would behind a real reverse proxy.
     client = TestClient(create_app(), base_url="https://testserver")
-    response = client.post(
-        "/auth/login",
-        json={"username": "nobody", "password": "nobody"},
-    )
-    # 401/503/etc: anything but 426 means the middleware let it through.
+    response = client.post("/v1/auth/login", json={"email": "nobody@example.com", "password": "nobody-secret"})
     assert response.status_code != 426
+
+
+def test_hsts_header_present_over_https(db, tmp_data_dir, monkeypatch):
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
+    monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
+    monkeypatch.setenv("APP_REQUIRE_HTTPS", "true")
+    AUTH_SESSIONS.clear()
+    client = TestClient(create_app(), base_url="https://testserver")
+    response = client.get("/clock")
+    assert response.status_code == 200
+    assert "strict-transport-security" in response.headers
+
+
+def test_hsts_header_absent_over_http(db, tmp_data_dir, monkeypatch):
+    client = _client(tmp_data_dir, monkeypatch, require_https=False)
+    response = client.get("/clock")
+    assert response.status_code == 200
+    assert "strict-transport-security" not in response.headers
+
+
+def test_login_sets_secure_httponly_cookie_under_https(db, tmp_data_dir, monkeypatch):
+    """A successful HTTPS login issues a Secure, HttpOnly, SameSite=Strict session cookie."""
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
+    monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
+    monkeypatch.setenv("APP_REQUIRE_HTTPS", "true")
+    monkeypatch.setenv("APP_AUTH_EMAIL", "admin@example.com")
+    monkeypatch.setenv("APP_AUTH_PASSWORD", "correct-horse-battery")
+    AUTH_SESSIONS.clear()
+    client = TestClient(create_app(), base_url="https://testserver")
+
+    response = client.post("/v1/auth/login", json={"email": "admin@example.com", "password": "correct-horse-battery"})
+    assert response.status_code == 200, response.text
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "eagleshot_session=" in set_cookie
+    assert "Secure" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "samesite=strict" in set_cookie.lower()

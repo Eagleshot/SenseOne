@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { TIMEZONES } from "@/data/timezones";
 import { SensorData, Webcam } from "@/data/types";
@@ -9,13 +9,13 @@ import {
   DESCRIPTION_MAX_LENGTH,
   FALLBACK_STATION_SCHEDULE_CONFIG,
   FALLBACK_WEBCAM,
+  flattenSensorSeries,
   getStationConfig,
   getStationDetail,
   getStationImageCaptures,
   getStationSensorReadings,
   listStations,
   parseStationResponse,
-  parseTimestampResponse,
   parseTimelineItemResponse,
   selectActiveWebcam,
   StationCreatePayload,
@@ -57,6 +57,7 @@ export type WebcamDataState = {
   stationConfigError: string | null;
   isPublic: boolean;
   setIsPublic: (isPublic: boolean) => Promise<void>;
+  canEdit: boolean;
 };
 
 type StationData = {
@@ -104,6 +105,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   // Reconcile the selection whenever the list (re)loads.
   useEffect(() => {
     if (stationsQuery.isError) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: mark unavailable when the stations list fails to load
       setSelectedWebcam(UNAVAILABLE_WEBCAM);
       return;
     }
@@ -118,6 +120,11 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   const stationDataQuery = useQuery<StationData>({
     queryKey: stationDataKey(activeStationId),
     enabled: Boolean(activeStationId),
+    // Keep the previous station's data visible while the newly-selected station
+    // loads, so the sections above the map (hero, Data charts) don't collapse and
+    // re-expand. That layout shift is what makes selecting a station on the map
+    // appear to jump the page to the charts.
+    placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => {
       const [detailResponse, historyResponse, timelineResponse] = await Promise.all([
         getStationDetail(apiBaseUrl, activeStationId, signal),
@@ -126,7 +133,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       ]);
       return {
         detail: detailResponse ? parseStationResponse(detailResponse, apiBaseUrl) : null,
-        history: historyResponse ? historyResponse.map(parseTimestampResponse) : [],
+        history: historyResponse ? flattenSensorSeries(historyResponse) : [],
         timeline: timelineResponse
           ? timelineResponse.map((item) => parseTimelineItemResponse(item, apiBaseUrl))
           : [],
@@ -137,10 +144,19 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   const historicalData = useMemo(() => stationDataQuery.data?.history ?? [], [stationDataQuery.data]);
   const imageTimeline = useMemo(() => stationDataQuery.data?.timeline ?? [], [stationDataQuery.data]);
 
+  // Whether the signed-in user may edit the active station (owner or admin),
+  // sourced from the station detail. Until the detail loads we assume no, so the
+  // owner-only settings (and their owner-only config fetch) never appear for a
+  // viewer who can't use them.
+  const activeStationDetail = stationDataQuery.data?.detail;
+  const canEdit = Boolean(
+    activeStationDetail && activeStationDetail.id === activeStationId && activeStationDetail.canEdit
+  );
+
   // ---- Station config (owner-only) -------------------------------------------
   const configQuery = useQuery({
     queryKey: stationConfigKey(activeStationId),
-    enabled: isAuthenticated && Boolean(activeStationId),
+    enabled: isAuthenticated && Boolean(activeStationId) && canEdit,
     queryFn: ({ signal }) => getStationConfig(apiBaseUrl, activeStationId, signal),
   });
   const stationConfig = configQuery.data ?? null;
@@ -182,6 +198,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   useEffect(() => {
     if (!isAuthenticated || !activeStationId) {
       draftLoadedForRef.current = null;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clear the description draft when leaving a station
       setDescriptionDraft("");
       setDescriptionError(null);
       return;
@@ -195,6 +212,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
 
   // Reset transient errors and playback when the station changes.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: reset transient errors/playback when the station changes
     setSaveError(null);
     setCurrentImageIndexState(0);
     setIsPlayingState(false);
@@ -204,6 +222,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
   useEffect(() => {
     const timeline = stationDataQuery.data?.timeline;
     if (timeline) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: jump to the newest image when a timeline loads
       setCurrentImageIndexState(Math.max(timeline.length - 1, 0));
       setIsPlayingState(false);
     }
@@ -323,7 +342,8 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
 
   // ---- Imperative actions ----------------------------------------------------
   const setActiveWebcam = useCallback((webcam: Webcam) => {
-    pushStationUrl(webcam.id);
+    // Browser URL uses the pretty, editable slug; data calls use webcam.id.
+    pushStationUrl(webcam.urlSlug || webcam.id);
     setSelectedWebcam(webcam);
   }, []);
   const setCurrentImageIndex = useCallback((index: number) => setCurrentImageIndexState(index), []);
@@ -353,7 +373,7 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
           ? existing.map((webcam) => (webcam.id === parsedStation.id ? parsedStation : webcam))
           : [...existing, parsedStation];
       });
-      pushStationUrl(parsedStation.id);
+      pushStationUrl(parsedStation.urlSlug || parsedStation.id);
       setSelectedWebcam(parsedStation);
       return { success: true, stationId: parsedStation.id };
     },
@@ -396,9 +416,11 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
       stationConfigError,
       isPublic,
       setIsPublic,
+      canEdit,
     }),
     [
       activeWebcam,
+      canEdit,
       createStation,
       currentImageIndex,
       description,

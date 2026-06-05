@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from utils import (
+    default_capture_filename,
     image_timestamp_from_filename,
     sanitize_filename,
     sanitize_station_id,
@@ -11,6 +12,7 @@ from utils import (
     iso_utc,
     humanize_station_id,
     is_supported_image_upload,
+    stream_from_filename,
 )
 
 
@@ -137,5 +139,44 @@ class TestImageValidation:
         # Based on actual logic: returns extension_supported or extension == ""
         # Since extension == "", result is True
         assert is_supported_image_upload("", None) is True
+
+
+class TestStreamFromFilename:
+    """Test camera/stream token extraction from capture filenames."""
+
+    def test_extracts_camera_token(self):
+        assert stream_from_filename("20260524_1430Z_front.jpg") == "front"
+        assert stream_from_filename("20260605_1200Z_thermal.png") == "thermal"
+
+    def test_token_allows_inner_separators(self):
+        assert stream_from_filename("20260605_1200Z_cam-0.jpg") == "cam-0"
+        assert stream_from_filename("20260605_1200Z_roof.cam_1.webp") == "roof.cam_1"
+
+    def test_returns_none_for_non_capture_names(self):
+        # Same names that image upload rejects → no stream.
+        assert stream_from_filename("default.jpg") is None
+        assert stream_from_filename("capture.jpg") is None
+        assert stream_from_filename("") is None
+
+
+class TestDefaultCaptureFilename:
+    """The fallback capture name used when a device omits X-Filename."""
+
+    _NOW = datetime(2026, 6, 5, 12, 0, 30, tzinfo=timezone.utc)
+
+    def test_stamps_current_utc_minute_and_round_trips(self):
+        name = default_capture_filename("image/jpeg", now=self._NOW)
+        assert name == "20260605_1200Z_default.jpg"
+        # Must parse back through the capture-name reader so the stored capture
+        # timestamp is the stamped minute (seconds truncated).
+        assert image_timestamp_from_filename(name) == datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)
+
+    def test_extension_follows_content_type(self):
+        assert default_capture_filename("image/png", now=self._NOW).endswith("_default.png")
+        assert default_capture_filename("image/webp", now=self._NOW).endswith("_default.webp")
+
+    def test_defaults_to_jpg_for_missing_or_unknown_content_type(self):
+        assert default_capture_filename(None, now=self._NOW).endswith("_default.jpg")
+        assert default_capture_filename("image/gif", now=self._NOW).endswith("_default.jpg")
 
 

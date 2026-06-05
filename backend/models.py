@@ -4,6 +4,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from metrics_registry import DEFAULT_CHANNEL, METRICS, RESERVED_READING_KEYS
 from utils import parse_iso_timestamp, iso_utc
 
 
@@ -115,10 +116,42 @@ class AppConfig(ApiModel):
         return self
 
 
+class DeviceConfig(ApiModel):
+    """Trimmed config sent to a device, derived from the station's AppConfig.
+
+    Carries only what the device needs (and may need): the capture schedule plus
+    lat/lon/alt for possible device-side sunrise/sunset computation. Start/stop are
+    expressed as integer minutes since midnight so the firmware does no string parsing.
+    """
+    station_start_minute: int = Field(
+        description="Earliest minute-of-day the device may capture (0 to 1439)."
+    )
+    station_stop_minute: int = Field(
+        description="Latest minute-of-day the device may capture (0 to 1439)."
+    )
+    use_sunrise_sunset: bool = Field(
+        description="When true, the device derives the active window from lat/lon."
+    )
+    capture_interval_minutes: int = Field(
+        description="Minutes between captures during the active window."
+    )
+    lat: float = Field(description="Latitude in decimal degrees.")
+    lon: float = Field(description="Longitude in decimal degrees.")
+    alt: float = Field(description="Altitude in metres above sea level.")
+
+
 class LoginRequest(ApiModel):
     """Credentials posted to POST /auth/login."""
-    username: str = Field(description="Account username, case-sensitive.")
-    password: str = Field(description="Account password in plaintext (over HTTPS).")
+    email: str = Field(description="User email address; the login identity.")
+    password: str = Field(description="User password in plaintext (over HTTPS).")
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", cleaned):
+            raise ValueError("A valid email address is required.")
+        return cleaned
 
 
 class AuthResponse(ApiModel):
@@ -126,19 +159,19 @@ class AuthResponse(ApiModel):
     expires_in: int = Field(
         description="Seconds until the session cookie / token expires.",
     )
-    username: str = Field(description="Username of the now-authenticated account.")
+    email: str = Field(description="Email of the now-authenticated user.")
     is_admin: bool = Field(
         default=False,
-        description="True if the account has admin privileges.",
+        description="True if the user has admin privileges.",
     )
 
 
 class MeResponse(ApiModel):
     """Returned by GET /auth/me for the currently-logged-in user."""
-    username: str = Field(description="Username of the authenticated session.")
+    email: str = Field(description="Email of the authenticated session.")
     is_admin: bool = Field(
         default=False,
-        description="True if the account has admin privileges.",
+        description="True if the user has admin privileges.",
     )
 
 
@@ -171,8 +204,9 @@ class StationDeviceSecretResponse(ApiModel):
     """One-time payload returned when rotating a station's device HMAC secret.
 
     The secret is shown exactly once. Flash it to the device and discard the
-    response — the server keeps the same value in its protected meta file
-    for verification, but the API will never reveal it again.
+    response — the server keeps the same value (encrypted at rest, in the
+    station_device_secrets table) for verification, but the API will never
+    reveal it again.
     """
     station_id: str = Field(description="Station the secret belongs to.")
     device_hmac_secret: str = Field(
@@ -192,7 +226,8 @@ class StationCoordinates(ApiModel):
 
 class StationSummaryResponse(ApiModel):
     """Lightweight per-station row returned by list endpoints."""
-    id: str = Field(description="Stable station identifier used in URLs.")
+    id: str = Field(description="Opaque, stable station identifier used in API calls and device signing.")
+    url_slug: str = Field(description="Editable, human-friendly slug for the public page URL.")
     name: str = Field(description="Display name for the station.")
     location: str = Field(description="Place name shown in the UI (e.g. valley or peak).")
     country: str = Field(default="", description="ISO country name in plain text.")
@@ -204,6 +239,10 @@ class StationSummaryResponse(ApiModel):
     )
     is_online: bool = Field(
         description="True when the device has checked in recently enough to count as online.",
+    )
+    can_edit: bool = Field(
+        default=False,
+        description="True when the authenticated caller may edit this station (owner or admin).",
     )
 
 
@@ -231,36 +270,34 @@ class TimelineItemResponse(ApiModel):
 class ImageUploadResponse(ApiModel):
     """Returned after a device upload is successfully stored."""
 
-    filename: str = Field(description="Server-assigned filename (includes a timestamp prefix).")
-    url: str = Field(description="URL where the just-uploaded image can be fetched.")
+    filename: str = Field(
+        description=(
+            "Stored capture filename: the supplied X-Filename when given, otherwise a "
+            "server-stamped YYYYMMDD_HHMMZ_default name from the current UTC minute."
+        )
+    )
+    url: str = Field(description="Relative URL where the just-uploaded image can be fetched.")
 
 
-# Guards on the free-form metric set, to keep a malformed device from writing
-# unbounded JSON. The server does not otherwise constrain which metrics exist.
+# Guards on the metric set, to keep a malformed device from writing unbounded
+# data. Measurements must be numeric; known metrics are additionally range-checked
+# against the registry. Unknown numeric metrics are still accepted.
 MAX_METRIC_FIELDS = 64
 MAX_METRIC_KEY_LENGTH = 64
-MAX_METRIC_STRING_LENGTH = 256
-
-
-class SensorHistoryResponse(BaseModel):
-    """One sensor-history reading: a timestamp plus the device's free-form metrics.
-
-    Metric keys are whatever the device reported (e.g. ``temperature``,
-    ``battery``, ``reception``) and are passed through untouched.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    timestamp: str = Field(description="ISO 8601 reading timestamp, UTC.")
 
 
 class SensorReadingRequest(ApiModel):
     """One sensor reading submitted by a device.
 
-    The reserved keys are ``timestamp`` and ``nextStart``. Every other key is
-    treated as a free-form measurement, stored verbatim, so a device can report
-    any field — battery, reception, soil moisture — without a server-side
-    schema change.
+    Reserved (non-measurement) keys: ``timestamp``, ``nextStart``, ``channel``,
+    and the device labels ``firmwareVersion`` / ``wakeReason`` (stored on the
+    reading envelope). Every other key is a numeric measurement (e.g.
+    ``temperature``, ``humidity``, ``voltage``, ``battery``): known metrics are
+    validated against the registry's units/ranges; unknown numeric metrics are
+    still accepted so a device can report a new field without a server-side schema
+    change. Values must be numbers — ``null`` is skipped and booleans store as
+    0/1; any other non-numeric value is rejected. At most 64 metric fields, each
+    key at most 64 characters.
     """
 
     model_config = ConfigDict(
@@ -270,13 +307,44 @@ class SensorReadingRequest(ApiModel):
     timestamp: str | None = Field(
         default=None,
         description=(
-            "Optional ISO 8601 timestamp. When omitted, the server stamps the "
-            "row with the current UTC time on receipt."
+            "Measurement time as an ISO 8601 date-time (e.g. `2026-05-24T14:30:00Z`). "
+            "A trailing `Z` or an explicit offset is honoured; a value with no "
+            "timezone is assumed to be UTC. Stored normalised to UTC. Omit to have "
+            "the server stamp the current UTC time on receipt."
         ),
     )
     next_start: str | None = Field(
         default=None,
-        description="ISO 8601 timestamp for the device's next scheduled start.",
+        description=(
+            "When the device next expects to wake and check in, as an ISO 8601 "
+            "date-time (e.g. `2026-05-24T15:00:00Z`; same timezone rules as "
+            "`timestamp`). Stored as the reading's next-online hint, which keeps the "
+            "station shown as online until this time plus a short grace buffer has "
+            "passed."
+        ),
+    )
+    channel: str | None = Field(
+        default=None,
+        description=(
+            "Optional channel that groups measurements into a per-(metric, channel) "
+            "series, so one station can carry several sensors of the same metric "
+            "(e.g. `indoor` vs `outdoor`). Letters, digits, '.', '_' and '-' only, "
+            "max 64 chars. Defaults to `default` when omitted."
+        ),
+    )
+    firmware_version: str | None = Field(
+        default=None,
+        description=(
+            "Free-form firmware version label stored on the reading, not a "
+            "measurement (e.g. `openmv-n6-2026.05`)."
+        ),
+    )
+    wake_reason: str | None = Field(
+        default=None,
+        description=(
+            "Free-form label for why the device woke, stored on the reading, not a "
+            "measurement (e.g. `timer`)."
+        ),
     )
 
     @field_validator("timestamp", "next_start")
@@ -289,6 +357,20 @@ class SensorReadingRequest(ApiModel):
             raise ValueError("Timestamp must be ISO 8601.")
         return iso_utc(parsed)
 
+    @field_validator("channel")
+    @classmethod
+    def validate_channel(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if len(cleaned) > MAX_METRIC_KEY_LENGTH:
+            raise ValueError("channel is too long.")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", cleaned):
+            raise ValueError("channel may only contain letters, digits, '.', '_' and '-'.")
+        return cleaned
+
     @model_validator(mode="after")
     def validate_metrics(self) -> "SensorReadingRequest":
         extras = self.model_extra or {}
@@ -297,14 +379,63 @@ class SensorReadingRequest(ApiModel):
         for key, value in extras.items():
             if len(key) > MAX_METRIC_KEY_LENGTH:
                 raise ValueError(f"Metric key '{key[:16]}…' is too long.")
-            if isinstance(value, str):
-                if len(value) > MAX_METRIC_STRING_LENGTH:
-                    raise ValueError(f"Metric '{key}' string value is too long.")
-            elif value is not None and not isinstance(value, (int, float, bool)):
-                raise ValueError(f"Metric '{key}' must be a number, string, boolean, or null.")
+            if value is None or isinstance(value, bool):
+                continue  # null skipped at ingest; bool stored as 0/1
+            if not isinstance(value, (int, float)):
+                raise ValueError(f"Metric '{key}' must be a number (or null).")
+            spec = METRICS.get(key)
+            if spec is not None and not (spec.minimum <= value <= spec.maximum):
+                raise ValueError(
+                    f"Metric '{key}'={value} is outside the allowed range "
+                    f"[{spec.minimum}, {spec.maximum}] {spec.unit}."
+                )
         return self
 
     @property
+    def resolved_channel(self) -> str:
+        """The channel to store on, with the primary-channel default applied."""
+        return self.channel or DEFAULT_CHANNEL
+
+    @property
     def metrics(self) -> dict:
-        """The free-form measurements (everything except the reserved keys)."""
-        return dict(self.model_extra or {})
+        """Numeric measurements only (reserved keys and nulls excluded)."""
+        return {
+            key: value
+            for key, value in (self.model_extra or {}).items()
+            if value is not None and key not in RESERVED_READING_KEYS
+        }
+
+
+class SensorReadingAck(ApiModel):
+    """Acknowledgement returned to a device after a reading is stored."""
+
+    timestamp: str = Field(
+        description=(
+            "ISO 8601 UTC timestamp the reading was stored under — the normalised "
+            "request `timestamp`, or the server's receipt time when none was sent."
+        )
+    )
+    channel: str = Field(
+        description="Channel the measurements were stored on (`default` when the request omitted one)."
+    )
+    metrics: dict[str, float] = Field(
+        default_factory=dict, description="The numeric measurements that were stored."
+    )
+    firmware_version: str | None = Field(default=None, description="Firmware label stored on the reading.")
+    wake_reason: str | None = Field(default=None, description="Wake reason stored on the reading.")
+
+
+class SensorSeriesPoint(ApiModel):
+    """One (timestamp, value) sample within a series."""
+
+    timestamp: str = Field(description="ISO 8601 sample timestamp, UTC.")
+    value: float = Field(description="Measured value, in the series' canonical unit.")
+
+
+class SensorSeries(ApiModel):
+    """A station's history for one (metric, channel), as an ordered point series."""
+
+    metric: str = Field(description="Canonical metric name (e.g. 'temperature').")
+    channel: str = Field(description="Sensor channel within the station.")
+    unit: str | None = Field(default=None, description="Canonical unit, or null for an unregistered metric.")
+    points: list[SensorSeriesPoint] = Field(description="Samples ordered oldest-to-newest.")

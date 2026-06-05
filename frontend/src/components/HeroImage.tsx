@@ -61,6 +61,7 @@ export const HeroImage: React.FC = () => {
 
   useEffect(() => {
     if (!hasTimeline) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clamp the compare index when the timeline shrinks
       setCompareIndex(0);
       return;
     }
@@ -72,6 +73,7 @@ export const HeroImage: React.FC = () => {
   // Reset the error flag whenever the current image URL changes; the new
   // src will retry, and onError will set the flag again if it really fails.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: retry the load when the image URL changes
     setHasLoadError(false);
   }, [currentImageUrl]);
 

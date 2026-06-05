@@ -1,5 +1,6 @@
 export interface Webcam {
-  id: string;
+  id: string;          // opaque, stable: used for all API/data calls
+  urlSlug?: string;    // editable, human-friendly: used for the public page URL
   name: string;
   description?: string;
   location: string;
@@ -16,6 +17,7 @@ export interface Webcam {
   lastUpdate?: Date | null;
   nextUpdate?: Date | null;
   isPublic?: boolean;
+  canEdit?: boolean;   // true when the signed-in user owns this station or is admin
   firmwareVersion?: string | null;
   wakeReason?: string | null;
 }

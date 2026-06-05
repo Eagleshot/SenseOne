@@ -1,15 +1,16 @@
 """Weather and image serving routes."""
 
+import base64
 import os
 import time
-from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
 
+import store
 from auth import get_optional_current_user
-from config import read_station_config, get_data_dir
+from config import get_data_dir
 from station_access import require_station_view
 from utils import media_type_from_path, sanitize_filename
 from routes import ValidStationId
@@ -17,7 +18,7 @@ from routes import ValidStationId
 
 router = APIRouter(tags=["Stations"])
 
-# OpenWeather Maps 1.0 overlay layers we allow proxying.
+# OpenWeather Maps 1.0 overlay layers we allow proxying (the "_new" styled tiles).
 WEATHER_TILE_LAYERS = {
     "clouds_new",
     "precipitation_new",
@@ -69,6 +70,13 @@ def _tile_cache_put(key: tuple[str, int, int, int], content: bytes, media_type: 
         while len(_tile_cache) >= _TILE_CACHE_MAX:
             _tile_cache.pop(next(iter(_tile_cache)), None)  # drop oldest insertion
     _tile_cache[key] = (time.monotonic() + _TILE_CACHE_TTL, content, media_type)
+
+
+# A 1x1 transparent PNG served (and cached) for tiles OpenWeather has no data for,
+# so the overlay just shows nothing there instead of erroring out.
+_TRANSPARENT_TILE = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
 
 
 # Cache for OpenWeather data responses (current weather / forecast). Many viewers
@@ -169,9 +177,9 @@ async def fetch_openweather(
     return data
 
 
-def station_coordinates_for_weather(base_dir: Path, station_id: str) -> tuple[float, float]:
+def station_coordinates_for_weather(station_id: str) -> tuple[float, float]:
     """Get coordinates for weather API calls."""
-    config = read_station_config(base_dir, station_id)
+    config = store.station_config(station_id)
     lat = config.lat
     lon = config.lon
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
@@ -196,7 +204,7 @@ async def get_station_current_weather(
     user=Depends(get_optional_current_user),
 ) -> dict:
     require_station_view(station_id, user)
-    lat, lon = station_coordinates_for_weather(get_data_dir(), station_id)
+    lat, lon = station_coordinates_for_weather(station_id)
     return await fetch_openweather("weather", lat, lon, "metric")
 
 
@@ -214,7 +222,7 @@ async def get_station_weather_forecast(
     user=Depends(get_optional_current_user),
 ) -> dict:
     require_station_view(station_id, user)
-    lat, lon = station_coordinates_for_weather(get_data_dir(), station_id)
+    lat, lon = station_coordinates_for_weather(station_id)
     return await fetch_openweather("forecast", lat, lon, "metric", cache_ttl=1800)
 
 
@@ -251,6 +259,18 @@ async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
     except httpx.RequestError as exc:
         logging.warning("OpenWeather tile request error: %s", exc)
         raise HTTPException(status_code=502, detail="OpenWeather tile request failed.") from exc
+
+    # OpenWeather returns 404 for tiles it has no data for in this layer (e.g.
+    # empty ocean/land areas). That's expected, not a failure: serve a transparent
+    # tile and cache it so repeat pans/zooms don't re-hit upstream.
+    if response.status_code == 404:
+        logging.debug("OpenWeather tile has no data (404): %s/%s/%s/%s", layer, z, x, y)
+        _tile_cache_put(cache_key, _TRANSPARENT_TILE, "image/png")
+        return Response(
+            content=_TRANSPARENT_TILE,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=900"},
+        )
 
     if response.status_code >= 400:
         logging.warning("OpenWeather tile upstream returned %s for %s", response.status_code, layer)

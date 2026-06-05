@@ -1,48 +1,39 @@
-"""Endpoint tests for station metadata, image timeline, and sensor history."""
+"""Endpoint tests for station metadata, image timeline, and sensor history (SQLite-backed)."""
 
 from dataclasses import dataclass
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from constants import API_PREFIX
 from auth import get_current_user, get_optional_current_user
-from config import read_station_config, read_station_owner, station_db_path, write_station_config
-from models import AppConfig
 from routes import stations
-from station_db import append_sensor_reading
+from tests import _db
 
 
 @dataclass(frozen=True)
 class RouteUser:
-    username: str
+    owner_id: str
     is_admin: bool = False
 
 
-def _client(data_dir, monkeypatch, user=None) -> TestClient:
-    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
+def _client(monkeypatch, user=None) -> TestClient:
     app = FastAPI()
-    app.include_router(stations.router, prefix=API_PREFIX)
+    app.include_router(stations.router)
     app.dependency_overrides[get_optional_current_user] = lambda: None
     if user is not None:
         app.dependency_overrides[get_current_user] = lambda: user
     return TestClient(app)
 
 
-def test_list_stations_empty(tmp_data_dir, monkeypatch):
-    client = _client(tmp_data_dir, monkeypatch)
-
-    response = client.get("/stations")
-
+def test_list_stations_empty(db, monkeypatch):
+    response = _client(monkeypatch).get("/stations")
     assert response.status_code == 200
     assert response.json() == []
 
 
 def test_list_stations_returns_visible_station(setup_station_dir, monkeypatch):
-    data_dir, station_id = setup_station_dir
-    client = _client(data_dir, monkeypatch)
-
-    response = client.get("/stations")
+    _, station_id = setup_station_dir
+    response = _client(monkeypatch).get("/stations")
 
     assert response.status_code == 200
     body = response.json()
@@ -52,47 +43,82 @@ def test_list_stations_returns_visible_station(setup_station_dir, monkeypatch):
 
 
 def test_private_station_is_hidden_from_anonymous_list(setup_station_dir, monkeypatch):
-    data_dir, station_id = setup_station_dir
-    write_station_config(data_dir, station_id, AppConfig(is_public=False))
-    client = _client(data_dir, monkeypatch)
-
-    response = client.get("/stations")
-
+    _, station_id = setup_station_dir
+    _db.set_station_public(station_id, False)
+    response = _client(monkeypatch).get("/stations")
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_create_station_assigns_owner_and_private_default(tmp_data_dir, monkeypatch):
-    client = _client(tmp_data_dir, monkeypatch, RouteUser("owner"))
+def test_list_stations_reports_can_edit_per_row(db, monkeypatch):
+    owner = _db.create_owner("owner@example.com")
+    other = _db.create_owner("other@example.com")
+    _db.create_station_row("owned", is_public=True, owner_id=owner.owner_id)
+    _db.create_station_row("foreign", is_public=True, owner_id=other.owner_id)
+
+    def can_edit_map(user):
+        app = FastAPI()
+        app.include_router(stations.router)
+        app.dependency_overrides[get_optional_current_user] = lambda: user
+        body = TestClient(app).get("/stations").json()
+        return {item["id"]: item["canEdit"] for item in body}
+
+    assert can_edit_map(RouteUser(owner.owner_id)) == {"owned": True, "foreign": False}
+    assert can_edit_map(RouteUser("00000000-0000-0000-0000-000000000000", is_admin=True)) == {
+        "owned": True,
+        "foreign": True,
+    }
+    assert can_edit_map(None) == {"owned": False, "foreign": False}
+
+
+def test_create_station_assigns_owner_and_private_default(db, monkeypatch):
+    owner = _db.create_owner("owner@example.com")
+    client = _client(monkeypatch, RouteUser(owner.owner_id))
 
     response = client.post("/stations", json={"title": "Peak Camera"})
 
     assert response.status_code == 201
     body = response.json()
-    assert body["id"] == "Peak-Camera"
+    # id is opaque + stable; the human-friendly slug lives in urlSlug.
+    assert body["urlSlug"] == "Peak-Camera"
+    assert body["id"] and body["id"] != "Peak-Camera"
     assert body["name"] == "Peak Camera"
     assert body["isPublic"] is False
-    assert read_station_owner(tmp_data_dir, "Peak-Camera") == "owner"
-    assert read_station_config(tmp_data_dir, "Peak-Camera").title == "Peak Camera"
+    assert _db.station_owner_id(body["id"]) == owner.owner_id
 
 
-def test_create_station_auto_suffixes_duplicate_ids(setup_station_dir, monkeypatch):
-    data_dir, _ = setup_station_dir
-    client = _client(data_dir, monkeypatch, RouteUser("owner"))
+def test_create_station_auto_suffixes_duplicate_urlslug(setup_station_dir, monkeypatch):
+    # setup_station_dir created a station with url_slug "test-station".
+    owner = _db.create_owner("owner@example.com")
+    client = _client(monkeypatch, RouteUser(owner.owner_id))
 
     response = client.post("/stations", json={"title": "test station", "isPublic": True})
 
     assert response.status_code == 201
     body = response.json()
-    assert body["id"] == "test-station-2"
+    assert body["urlSlug"] == "test-station-2"
     assert body["isPublic"] is True
 
 
-def test_station_detail_includes_latest_image(station_with_sample_images, monkeypatch):
-    data_dir, station_id = station_with_sample_images
-    client = _client(data_dir, monkeypatch)
+def test_rename_changes_url_slug_not_id(setup_station_dir, monkeypatch):
+    # setup_station_dir: public_id == url_slug == "test-station".
+    _, station_id = setup_station_dir
+    admin = RouteUser("00000000-0000-0000-0000-000000000000", is_admin=True)
+    client = _client(monkeypatch, admin)
 
-    response = client.get(f"/stations/{station_id}")
+    cfg = client.get(f"/stations/{station_id}/config").json()
+    cfg["title"] = "Renamed Cam"
+    assert client.put(f"/stations/{station_id}/config", json=cfg).status_code == 200
+
+    detail = client.get(f"/stations/{station_id}").json()
+    assert detail["id"] == station_id          # opaque id is stable
+    assert detail["urlSlug"] == "Renamed-Cam"  # pretty slug followed the rename
+    assert detail["name"] == "Renamed Cam"
+
+
+def test_station_detail_includes_latest_image(station_with_sample_images, monkeypatch):
+    _, station_id = station_with_sample_images
+    response = _client(monkeypatch).get(f"/stations/{station_id}")
 
     assert response.status_code == 200
     body = response.json()
@@ -102,33 +128,38 @@ def test_station_detail_includes_latest_image(station_with_sample_images, monkey
     assert body["nextUpdate"] is None
 
 
-def test_station_detail_includes_latest_battery(station_with_history, monkeypatch):
-    data_dir, station_id = station_with_history
-    client = _client(data_dir, monkeypatch)
+def test_station_detail_can_edit_reflects_ownership(setup_station_dir, monkeypatch):
+    _, station_id = setup_station_dir
+    owner_id = _db.station_owner_id(station_id)
 
-    response = client.get(f"/stations/{station_id}")
+    # Anonymous viewer of a public station cannot edit it.
+    assert _client(monkeypatch).get(f"/stations/{station_id}").json()["canEdit"] is False
+
+    # The owner can.
+    app = FastAPI()
+    app.include_router(stations.router)
+    app.dependency_overrides[get_optional_current_user] = lambda: RouteUser(owner_id)
+    owner_client = TestClient(app)
+    assert owner_client.get(f"/stations/{station_id}").json()["canEdit"] is True
+
+
+def test_station_detail_includes_latest_battery(station_with_history, monkeypatch):
+    _, station_id = station_with_history
+    response = _client(monkeypatch).get(f"/stations/{station_id}")
 
     assert response.status_code == 200
     assert response.json()["battery"] == 95
 
 
 def test_station_detail_uses_db_runtime_timestamps(setup_station_dir, monkeypatch):
-    data_dir, station_id = setup_station_dir
-    append_sensor_reading(
-        station_db_path(data_dir, station_id),
+    _, station_id = setup_station_dir
+    _db.add_reading(
+        station_id,
         "2026-05-23T12:00:00Z",
-        {
-            "temperature": 21.5,
-            "humidity": 58,
-            "pressure": 1012,
-            "battery": 87,
-            "reception": 73,
-        },
+        {"temperature": 21.5, "humidity": 58, "pressure": 1012, "battery": 87, "reception": 73},
         next_online="2026-05-23T12:30:00Z",
     )
-    client = _client(data_dir, monkeypatch)
-
-    response = client.get(f"/stations/{station_id}")
+    response = _client(monkeypatch).get(f"/stations/{station_id}")
 
     assert response.status_code == 200
     body = response.json()
@@ -137,10 +168,8 @@ def test_station_detail_uses_db_runtime_timestamps(setup_station_dir, monkeypatc
 
 
 def test_image_captures_are_oldest_to_newest_and_respect_count(station_with_sample_images, monkeypatch):
-    data_dir, station_id = station_with_sample_images
-    client = _client(data_dir, monkeypatch)
-
-    response = client.get(f"/stations/{station_id}/image-captures?count=2")
+    _, station_id = station_with_sample_images
+    response = _client(monkeypatch).get(f"/stations/{station_id}/image-captures?count=2")
 
     assert response.status_code == 200
     assert [item["url"] for item in response.json()] == [
@@ -150,12 +179,18 @@ def test_image_captures_are_oldest_to_newest_and_respect_count(station_with_samp
 
 
 def test_sensor_readings_use_requested_window(station_with_history, monkeypatch):
-    data_dir, station_id = station_with_history
-    client = _client(data_dir, monkeypatch)
-
-    response = client.get(f"/stations/{station_id}/sensor-readings?hours=2")
+    _, station_id = station_with_history
+    response = _client(monkeypatch).get(f"/stations/{station_id}/sensor-readings?hours=2")
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body) <= 2
-    assert {"timestamp", "temperature", "humidity", "battery", "reception"} <= set(body[0])
+    # One series per metric the fixture wrote.
+    metrics = {series["metric"] for series in body}
+    assert {"temperature", "humidity", "battery", "reception"} <= metrics
+    for series in body:
+        assert series["channel"] == "default"
+        assert len(series["points"]) <= 3  # window covers at most readings i=0,1,2
+        assert {"timestamp", "value"} <= set(series["points"][0])
+    # battery is a registered metric, so its series is unit-tagged.
+    battery = next(series for series in body if series["metric"] == "battery")
+    assert battery["unit"] == "percent"

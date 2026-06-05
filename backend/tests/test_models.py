@@ -113,9 +113,19 @@ class TestLoginRequest:
     """Test LoginRequest model."""
 
     def test_login_request_required_fields(self):
-        """Test that username and password are required."""
+        """Test that email and password are required."""
         with pytest.raises(ValueError):
-            LoginRequest(username="test")  # Missing password
+            LoginRequest(email="test@example.com")  # Missing password
+
+    def test_login_request_rejects_invalid_email(self):
+        """A malformed email is rejected."""
+        with pytest.raises(ValueError):
+            LoginRequest(email="not-an-email", password="whatever12345")
+
+    def test_login_request_normalizes_email(self):
+        """Email is lower-cased and trimmed."""
+        request = LoginRequest(email="  Admin@Example.COM ", password="whatever12345")
+        assert request.email == "admin@example.com"
 
 
 class TestAuthResponse:
@@ -123,9 +133,9 @@ class TestAuthResponse:
 
     def test_auth_response_structure(self):
         """Test AuthResponse structure."""
-        response = AuthResponse(expires_in=3600, username="testuser")
+        response = AuthResponse(expires_in=3600, email="testuser@example.com")
         assert response.expires_in == 3600
-        assert response.username == "testuser"
+        assert response.email == "testuser@example.com"
 
 
 class TestMeResponse:
@@ -133,8 +143,8 @@ class TestMeResponse:
 
     def test_me_response_structure(self):
         """Test MeResponse structure."""
-        response = MeResponse(username="testuser")
-        assert response.username == "testuser"
+        response = MeResponse(email="testuser@example.com")
+        assert response.email == "testuser@example.com"
 
 
 

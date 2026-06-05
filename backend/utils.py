@@ -13,8 +13,14 @@ _EXTENSION_TO_MEDIA_TYPE: dict[str, str] = {
     ".webp": "image/webp",
 }
 
+_MEDIA_TYPE_TO_EXTENSION: dict[str, str] = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+
 _IMAGE_CAPTURE_NAME = re.compile(
-    r"^(\d{8})_(\d{4})Z_[A-Za-z0-9._-]+\.(?:jpe?g|png|webp)$",
+    r"^(\d{8})_(\d{4})Z_([A-Za-z0-9._-]+)\.(?:jpe?g|png|webp)$",
     re.IGNORECASE,
 )
 
@@ -28,22 +34,6 @@ def sanitize_station_id(raw_name: str | None = None, default: str = "default") -
     """Sanitize a station ID."""
     raw = (raw_name or default).strip()
     return re.sub(r"[^a-zA-Z0-9._-]", "-", raw).strip("._-") or default
-
-
-def unique_station_id(base_dir: Path, requested_id: str | None, default: str = "default") -> str | None:
-    """Return a sanitized station id under base_dir that does not exist yet.
-
-    Appends ``-2``, ``-3``, … when the preferred id is taken. Returns None if
-    no free id is found within a reasonable range; callers decide how to fail.
-    """
-    station_id = sanitize_station_id(requested_id, default=default)
-    if not (base_dir / station_id).exists():
-        return station_id
-    for index in range(2, 1000):
-        candidate = sanitize_station_id(f"{station_id}-{index}", default=default)
-        if not (base_dir / candidate).exists():
-            return candidate
-    return None
 
 
 def normalize_content_type(raw_content_type: str | None) -> str | None:
@@ -90,7 +80,9 @@ def parse_iso_timestamp(value: str | None) -> datetime | None:
 
 
 def iso_utc(value: datetime) -> str:
-    """Convert a datetime to ISO 8601 UTC string."""
+    """Convert a datetime to an ISO 8601 UTC string (naive values are assumed UTC)."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -105,6 +97,32 @@ def image_timestamp_from_filename(filename: str) -> datetime | None:
         return datetime.strptime(raw_date + raw_time, "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+
+
+def stream_from_filename(filename: str) -> str | None:
+    """Parse the camera/stream token from a YYYYMMDD_HHMMZ_<stream> image name.
+
+    Returns the ``<stream>`` token (e.g. ``thermal``, ``main``) or None when the
+    name doesn't match the capture format (the same names rejected on upload).
+    """
+    match = _IMAGE_CAPTURE_NAME.match(filename)
+    return match.group(3) if match else None
+
+
+def default_capture_filename(
+    content_type: str | None, *, camera: str = "default", now: datetime | None = None
+) -> str:
+    """Build a capture-format filename for an upload that omitted ``X-Filename``.
+
+    Stamps the current UTC minute as the capture time and uses a default
+    camera/stream token, so the generated name still matches
+    ``YYYYMMDD_HHMMZ_<camera>.<ext>`` and flows through the same parsing as a
+    device-supplied name. The extension follows the body's content type,
+    defaulting to ``.jpg``.
+    """
+    moment = now or datetime.now(timezone.utc)
+    extension = _MEDIA_TYPE_TO_EXTENSION.get(normalize_content_type(content_type) or "", ".jpg")
+    return f"{moment:%Y%m%d_%H%MZ}_{camera}{extension}"
 
 
 def is_supported_image_upload(filename: str, content_type: str | None) -> bool:

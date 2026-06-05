@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 
 const WEATHER_OFF = 'off';
 
+// OpenWeather Maps 1.0 "_new" styled layers (the values are the upstream layer ids).
 const WEATHER_LAYERS = [
   { value: 'precipitation_new', label: 'Precipitation' },
   { value: 'clouds_new', label: 'Clouds' },
@@ -48,28 +49,31 @@ const WeatherControls: React.FC<WeatherControlsProps> = ({ value, onChange }) =>
   </Select>
 );
 
-// Approximate OpenWeather Maps 1.0 colour scales, for the on-map legend. The
-// gradients mirror each layer's palette; labels mark the low → high range.
+// OpenWeather's official Maps 1.0 default palettes (see /api/map_legend),
+// mirrored for the on-map legend. Keys are the layer ids in WEATHER_LAYERS; the
+// labels are the layer's real units/range. Pressure is shown in hPa (OpenWeather
+// stores it in Pa: 94000–108000 Pa = 940–1080 hPa). Clouds uses a grey ramp so
+// the legend reads regardless of theme (the tiles themselves are near-white).
 const WEATHER_LEGENDS: Record<string, { gradient: string; labels: string[] }> = {
   temp_new: {
-    gradient: 'linear-gradient(to right, #821692, #208CEC, #23DDDD, #C2FF28, #FFF028, #FFC228, #E81818)',
-    labels: ['-40°C', '0°C', '40°C'],
+    gradient: 'linear-gradient(to right, #821692, #8257DB, #208CEC, #20C4E8, #23DDDD, #C2FF28, #FFF028, #FFC228, #FC8014)',
+    labels: ['-65°C', '0°C', '30°C'],
   },
   precipitation_new: {
-    gradient: 'linear-gradient(to right, rgba(255,255,255,0), #8EC9F0, #3B6FE0, #6F2DBD)',
-    labels: ['Light', 'Heavy'],
+    gradient: 'linear-gradient(to right, rgba(200,150,150,0), rgba(110,110,205,0.3), rgba(80,80,225,0.7), rgba(20,20,255,0.9))',
+    labels: ['0 mm', '140 mm'],
   },
   clouds_new: {
-    gradient: 'linear-gradient(to right, rgba(255,255,255,0), rgba(225,225,225,0.85), #FFFFFF)',
+    gradient: 'linear-gradient(to right, rgba(120,124,135,0), rgba(120,124,135,0.55), #6b7280)',
     labels: ['0%', '100%'],
   },
   wind_new: {
-    gradient: 'linear-gradient(to right, #ECFFB3, #8FE04F, #E0C84F, #E0734F, #B03A2E)',
-    labels: ['Calm', 'Strong'],
+    gradient: 'linear-gradient(to right, rgba(238,206,204,0.3), #B364BC, #744CAC, #4600AF, #0D1126)',
+    labels: ['1 m/s', '50 m/s', '200 m/s'],
   },
   pressure_new: {
-    gradient: 'linear-gradient(to right, #4F6FE0, #4FBFE0, #8FE04F, #E0C84F, #E0734F)',
-    labels: ['Low', 'High'],
+    gradient: 'linear-gradient(to right, #0073FF, #B0F720, #C60000)',
+    labels: ['940 hPa', '1010 hPa', '1080 hPa'],
   },
 };
 
@@ -120,15 +124,6 @@ const esriReferenceLayers = {
     'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
 } as const;
 
-// When a weather overlay is active we render it over a fixed, clean dark base
-// (CARTO Dark Matter) so the weather data stands out — independent of the
-// dark/light theme and the Map/Satellite toggle.
-const weatherBaseLayer = {
-  url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-  attribution:
-    '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">CARTO</a>',
-} as const;
-
 type ActiveMarkerCenterProps = {
   webcamId: string;
   lat: number;
@@ -174,16 +169,15 @@ type MapCanvasProps = {
 const MapCanvas: React.FC<MapCanvasProps> = ({ fullscreen = false, weatherLayer = null }) => {
   const { activeWebcam, webcamList, setActiveWebcam, isDarkMode, mapStyle } = useApp();
 
+  // The base map always follows the theme + Map/Satellite toggle, including when a
+  // weather overlay is on (the overlay just renders on top of it).
   const tileLayer = useMemo(() => {
-    // With a weather overlay on, fix the base to OSM so the view doesn't change
-    // with the theme or the Map/Satellite toggle.
-    if (weatherLayer) return weatherBaseLayer;
     return mapStyle === 'satellite'
       ? mapTileLayers.satellite
       : isDarkMode
         ? mapTileLayers.abstractDark
         : mapTileLayers.abstractLight;
-  }, [isDarkMode, mapStyle, weatherLayer]);
+  }, [isDarkMode, mapStyle]);
 
   const defaultCenter: [number, number] = [
     activeWebcam.coordinates.lat,
@@ -202,11 +196,11 @@ const MapCanvas: React.FC<MapCanvasProps> = ({ fullscreen = false, weatherLayer 
         <InvalidateMapSize enabled={fullscreen} />
         <ZoomControl position="topright" />
         <TileLayer
-          key={weatherLayer ? 'weather-base' : `${mapStyle}-${isDarkMode ? 'dark' : 'light'}`}
+          key={`${mapStyle}-${isDarkMode ? 'dark' : 'light'}`}
           attribution={tileLayer.attribution}
           url={tileLayer.url}
         />
-        {!weatherLayer && mapStyle === 'satellite' && (
+        {mapStyle === 'satellite' && (
           <>
             <TileLayer key="sat-roads" url={esriReferenceLayers.transportation} zIndex={5} />
             <TileLayer key="sat-labels" url={esriReferenceLayers.boundaries} zIndex={6} />
@@ -216,11 +210,24 @@ const MapCanvas: React.FC<MapCanvasProps> = ({ fullscreen = false, weatherLayer 
           <TileLayer
             key={`weather-${weatherLayer}`}
             url={`${apiBaseUrl}/weather/map/${weatherLayer}/{z}/{x}/{y}`}
-            className="weather-overlay-tiles"
+            className={cn(
+              'weather-overlay-tiles',
+              // clouds_new is near-white, so darken it only on the light base.
+              weatherLayer === 'clouds_new' &&
+                !isDarkMode &&
+                mapStyle !== 'satellite' &&
+                'weather-overlay-clouds-on-light',
+            )}
             opacity={1}
             zIndex={10}
-            updateWhenIdle={false}
-            keepBuffer={4}
+            // Render a failed/empty tile as blank (1x1 transparent gif) instead of
+            // leaving a stale tile from a previous zoom/layer on screen — the
+            // mismatched-scale "patchwork", most visible on the mostly-transparent
+            // precipitation layer. keepBuffer/updateWhenZooming reduce how many
+            // stale tiles linger while the new ones load through the proxy.
+            errorTileUrl="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+            keepBuffer={2}
+            updateWhenZooming={false}
           />
         )}
         <ActiveMarkerCenter

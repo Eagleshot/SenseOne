@@ -45,11 +45,42 @@ def test_openmv_adjusts_capture_ticks_to_server_utc(monkeypatch):
     assert clock.unix_seconds_at_ticks(5_000) == _epoch("2026-05-24T14:30:05Z")
 
 
+def test_openmv_date_math_is_independent_of_gmtime_epoch(monkeypatch):
+    """Capture-cycle date math must not depend on the board's time.gmtime epoch.
+
+    STM32 OpenMV cams use a 2000-01-01 epoch (not POSIX 1970). We feed gmtime the
+    1970-epoch seconds it would receive on hardware, so a 2000-epoch gmtime would
+    decode ~30 years late (2026 -> ~2056). The helpers must ignore gmtime entirely
+    and still produce 2026.
+    """
+    main = _load_openmv_main(monkeypatch)
+
+    epoch_offset = _epoch("2000-01-01T00:00:00Z")  # 1970->2000 epoch gap in seconds
+    real_gmtime = main.time.gmtime
+
+    def gmtime_2000(secs):  # emulate an STM32 board's 2000-epoch gmtime
+        return real_gmtime(int(secs) + epoch_offset)
+
+    monkeypatch.setattr(main.time, "gmtime", gmtime_2000, raising=False)
+
+    capture_seconds = _epoch("2026-05-24T14:30:05Z")
+    assert main.format_iso_utc(main.round_down_to_minute(capture_seconds)) == "2026-05-24T14:30:00Z"
+    assert main.format_capture_filename(capture_seconds, "front") == "20260524_1430Z_front.jpg"
+
+    config = {
+        "stationStartMinute": 360,
+        "stationStopMinute": 1200,
+        "captureIntervalMinutes": 30,
+        "useSunriseSunset": False,
+    }
+    assert main.compute_next_start(config, capture_seconds) == _epoch("2026-05-24T15:00:00Z")
+
+
 def test_openmv_computes_next_start_inside_and_outside_window(monkeypatch):
     main = _load_openmv_main(monkeypatch)
     config = {
-        "stationStartTime": "06:00",
-        "stationStopTime": "20:00",
+        "stationStartMinute": 360,
+        "stationStopMinute": 1200,
         "captureIntervalMinutes": 30,
         "useSunriseSunset": False,
     }

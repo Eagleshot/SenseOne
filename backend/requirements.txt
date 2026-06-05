@@ -6,3 +6,8 @@ pytest>=9.0.3
 pytest-asyncio>=1.4.0
 pydantic>=2.13.4
 PyYAML>=6.0.3
+
+# SQLite control plane via SQLAlchemy (sqlite3 ships with Python; no driver or
+# server needed). Schema is owned by Alembic migrations, run at startup.
+SQLAlchemy>=2.0.50
+alembic>=1.13

@@ -1,5 +1,5 @@
 export const apiBaseUrl: string =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api";
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api/v1";
 
 type FetchJsonOptions = RequestInit & {
   throwOnHttpError?: boolean;

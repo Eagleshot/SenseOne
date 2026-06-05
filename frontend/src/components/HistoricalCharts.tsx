@@ -1,37 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 
 import { CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import {
-  Activity,
-  ArrowDown,
-  ArrowUp,
-  Battery,
-  ChevronDown,
-  Download,
-  Droplets,
-  Eye,
-  Gauge,
-  LineChart as LineChartIcon,
-  Plus,
-  Settings2,
-  Thermometer,
-  Trash2,
-  Wind,
-} from "lucide-react";
+import { Download, LineChart as LineChartIcon, type LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { formatDateTimeLabel, formatTimeLabel } from "@/lib/datetime";
 import { useApp } from "@/contexts/AppContext";
@@ -39,97 +11,14 @@ import {
   CHART_PALETTE,
   collectNumericMetricKeys,
   formatMetricValue,
+  metricIcon,
   metricLabel,
   metricUnit,
-  orderMetricKeys,
 } from "@/lib/metricCatalog";
 import type { SensorData } from "@/data/types";
 import { exportChartAsImage } from "./historicalChartExport";
-import type { ChartIconKey, MetricType } from "./historicalChartUtils";
-
-type ChartConfig = {
-  id: string;
-  title: string;
-  icon: ChartIconKey;
-  color: string;
-  metrics: MetricType[];
-};
-
-type ChartDraft = Omit<ChartConfig, "id">;
 
 const metricColor = (index: number) => CHART_PALETTE[index % CHART_PALETTE.length];
-
-const chartIconConfig: Record<ChartIconKey, React.ComponentType<{ className?: string }>> = {
-  line: LineChartIcon,
-  thermometer: Thermometer,
-  battery: Battery,
-  humidity: Droplets,
-  wind: Wind,
-  gauge: Gauge,
-  activity: Activity,
-  eye: Eye,
-};
-
-const chartIconOptions: Array<{ value: ChartIconKey; label: string }> = [
-  { value: "line", label: "Line Chart" },
-  { value: "thermometer", label: "Thermometer" },
-  { value: "battery", label: "Battery" },
-  { value: "humidity", label: "Droplets" },
-  { value: "wind", label: "Wind" },
-  { value: "gauge", label: "Gauge" },
-  { value: "activity", label: "Activity" },
-  { value: "eye", label: "Eye" },
-];
-
-const ADD_CHART_LABEL = "Add Chart";
-const CHART_SETTINGS_LABEL = "Chart Settings";
-
-const getAutoChartTitle = (metrics: MetricType[]) =>
-  metrics.map((metric) => metricLabel(metric)).join(" + ") || "Custom Chart";
-const chartThemeColorOptions = [
-  { value: "hsl(var(--chart-1))", label: "Theme Chart 1" },
-  { value: "hsl(var(--chart-2))", label: "Theme Chart 2" },
-  { value: "hsl(var(--chart-3))", label: "Theme Chart 3" },
-] as const;
-type ChartThemeColorValue = (typeof chartThemeColorOptions)[number]["value"];
-type ChartColorSelection = ChartThemeColorValue | "custom";
-
-const createChartId = () => `chart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-// Default metric for a new chart: prefer temperature, else the first available
-// metric in the current data (empty when the station has no numeric metrics).
-const getDefaultMetrics = (available: MetricType[]): MetricType[] => {
-  if (available.includes("temperature")) return ["temperature"];
-  return available.length > 0 ? [available[0]] : [];
-};
-
-const orderMetrics = (selectedMetrics: MetricType[]) => orderMetricKeys(selectedMetrics);
-
-const createDefaultChart = (available: MetricType[]): ChartConfig => {
-  const metrics = getDefaultMetrics(available);
-  return {
-    id: createChartId(),
-    title: getAutoChartTitle(metrics),
-    icon: "line",
-    color: chartThemeColorOptions[0].value,
-    metrics,
-  };
-};
-
-const DEFAULT_CUSTOM_COLOR = "#f97316";
-const isValidHexColor = (value: string) => /^#[0-9a-fA-F]{6}$/.test(value);
-const normalizeColorValue = (value: string) => value.trim().toLowerCase().replace(/\s+/g, "");
-const getThemeColorValue = (value: string): ChartThemeColorValue | null => {
-  const normalizedValue = normalizeColorValue(value);
-  const match = chartThemeColorOptions.find((option) => normalizeColorValue(option.value) === normalizedValue);
-  return match ? match.value : null;
-};
-const getColorSelection = (value: string): ChartColorSelection => {
-  const themeColorValue = getThemeColorValue(value);
-  if (themeColorValue) return themeColorValue;
-  if (isValidHexColor(value)) return "custom";
-  return chartThemeColorOptions[0].value;
-};
 
 const ChartTooltip = ({
   active,
@@ -161,58 +50,22 @@ const ChartTooltip = ({
 };
 
 type ChartCardProps = {
-  config: ChartConfig;
+  metric: string;
+  Icon: LucideIcon;
   data: SensorData[];
-  availableMetrics: MetricType[];
   timezone: string;
   isDarkMode: boolean;
-  isSettingsOpen: boolean;
-  index: number;
-  total: number;
-  onSettingsOpenChange: (open: boolean) => void;
-  onUpdate: (id: string, updates: Partial<ChartConfig>) => void;
-  onMove: (id: string, direction: "up" | "down") => void;
-  onRemove: (id: string) => void;
+  colorIndex: number;
 };
 
-const ChartCard: React.FC<ChartCardProps> = ({
-  config,
-  data,
-  availableMetrics,
-  timezone,
-  isDarkMode,
-  isSettingsOpen,
-  index,
-  total,
-  onSettingsOpenChange,
-  onUpdate,
-  onMove,
-  onRemove,
-}) => {
-  const Icon = chartIconConfig[config.icon];
+// One read-only plot for a single metric. The chart configurability (titles,
+// metric selection, icons, colours, reordering) was removed and will be
+// re-implemented later; for now each numeric metric simply gets its own plot.
+const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, data, timezone, isDarkMode, colorIndex }) => {
   const chartRef = useRef<HTMLDivElement | null>(null);
-  const [draft, setDraft] = useState<ChartDraft>({
-    title: config.title,
-    icon: config.icon,
-    color: config.color,
-    metrics: config.metrics,
-  });
-  const [colorSelection, setColorSelection] = useState<ChartColorSelection>(() => getColorSelection(config.color));
-  const [customColor, setCustomColor] = useState<string>(
-    isValidHexColor(config.color) ? config.color : DEFAULT_CUSTOM_COLOR
-  );
-
-  useEffect(() => {
-    if (!isSettingsOpen) return;
-    setDraft({
-      title: config.title,
-      icon: config.icon,
-      color: config.color,
-      metrics: config.metrics,
-    });
-    setColorSelection(getColorSelection(config.color));
-    setCustomColor(isValidHexColor(config.color) ? config.color : DEFAULT_CUSTOM_COLOR);
-  }, [config, isSettingsOpen]);
+  const iconRef = useRef<SVGSVGElement>(null);
+  const color = metricColor(colorIndex);
+  const unit = metricUnit(metric);
 
   const chartData = useMemo(
     () =>
@@ -224,283 +77,32 @@ const ChartCard: React.FC<ChartCardProps> = ({
     [data, timezone]
   );
 
-  const handleMetricToggle = (metric: MetricType, checked: boolean | "indeterminate") => {
-    setDraft((prev) => {
-      const currentAutoTitle = getAutoChartTitle(prev.metrics);
-
-      if (checked === true) {
-        const nextMetrics = orderMetrics([...prev.metrics, metric]);
-        return {
-          ...prev,
-          title: prev.title === currentAutoTitle ? getAutoChartTitle(nextMetrics) : prev.title,
-          metrics: nextMetrics,
-        };
-      }
-
-      const nextMetrics = prev.metrics.filter((item) => item !== metric);
-      if (nextMetrics.length === 0) {
-        return prev;
-      }
-
-      return {
-        ...prev,
-        title: prev.title === currentAutoTitle ? getAutoChartTitle(nextMetrics) : prev.title,
-        metrics: orderMetrics(nextMetrics),
-      };
-    });
-  };
-
-  const handleSave = () => {
-    const nextColor =
-      colorSelection === "custom" ? (isValidHexColor(customColor) ? customColor : DEFAULT_CUSTOM_COLOR) : draft.color;
-    const nextMetrics = draft.metrics.length > 0 ? orderMetrics(draft.metrics) : getDefaultMetrics(availableMetrics);
-    onUpdate(config.id, {
-      title: draft.title.trim() || getAutoChartTitle(nextMetrics),
-      icon: draft.icon,
-      color: nextColor,
-      metrics: nextMetrics,
-    });
-    onSettingsOpenChange(false);
-  };
-
-  const handleColorSelectionChange = (value: ChartColorSelection) => {
-    setColorSelection(value);
-    if (value === "custom") {
-      const nextCustomColor = isValidHexColor(customColor) ? customColor : DEFAULT_CUSTOM_COLOR;
-      setDraft((prev) => ({ ...prev, color: nextCustomColor }));
-      return;
-    }
-    setDraft((prev) => ({ ...prev, color: value }));
-  };
-
-  const yAxisUnit = useMemo(() => {
-    const units = Array.from(new Set(config.metrics.map((metric) => metricUnit(metric)).filter(Boolean)));
-    return units.length === 1 ? units[0] : "";
-  }, [config.metrics]);
-  const metricsLabel = useMemo(
-    () => config.metrics.map((metric) => metricLabel(metric)).join(" + "),
-    [config.metrics]
-  );
-  // Offer every metric in the current data, plus any the chart already uses
-  // (so a saved metric that's momentarily absent can still be toggled off).
-  const metricOptions = useMemo(
-    () => orderMetricKeys([...availableMetrics, ...draft.metrics]),
-    [availableMetrics, draft.metrics]
-  );
-
-  const formatYAxisTick = (value: number | string) => {
-    if (!yAxisUnit) return `${value}`;
-    return `${value} ${yAxisUnit}`;
-  };
+  const formatYAxisTick = (value: number | string) => (unit ? `${value} ${unit}` : `${value}`);
 
   return (
     <div className="widget-shell-stroke rounded-2xl border border-border bg-card/70 p-4">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Icon className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-2xl font-bold text-foreground">{config.title}</h2>
+          <Icon ref={iconRef} className="h-5 w-5 text-muted-foreground" />
+          <h2 className="text-2xl font-bold text-foreground">{metricLabel(metric)}</h2>
         </div>
-
-        <div className="flex items-center gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Move chart up"
-            disabled={index === 0}
-            onClick={() => onMove(config.id, "up")}
-            className="btn-icon-panel h-8 w-8"
-          >
-            <ArrowUp className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Move chart down"
-            disabled={index === total - 1}
-            onClick={() => onMove(config.id, "down")}
-            className="btn-icon-panel h-8 w-8"
-          >
-            <ArrowDown className="h-4 w-4" />
-          </Button>
-          <Dialog open={isSettingsOpen} onOpenChange={onSettingsOpenChange}>
-            <DialogTrigger asChild>
-              <Button type="button" variant="ghost" size="icon" aria-label={CHART_SETTINGS_LABEL} className="btn-icon-panel h-8 w-8">
-                <Settings2 className="h-4 w-4" />
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>{CHART_SETTINGS_LABEL}</DialogTitle>
-                <DialogDescription>
-                  Configure the selected chart title, metrics, icon, and color.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Title</label>
-                  <Input
-                    value={draft.title}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
-                    placeholder="Chart title"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Metrics</label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <button
-                        type="button"
-                        className="chrome-shell-stroke flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 data-[state=open]:border-ring disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <span className="line-clamp-1 text-left">
-                          {draft.metrics.length > 0
-                            ? draft.metrics.map((m) => metricLabel(m)).join(", ")
-                            : "Select metrics..."}
-                        </span>
-                        <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
-                      {metricOptions.length === 0 ? (
-                        <div className="px-3 py-2 text-sm text-muted-foreground">No metrics in this range.</div>
-                      ) : (
-                        <div className="max-h-64 overflow-auto py-1">
-                          {metricOptions.map((metric) => (
-                            <label
-                              key={metric}
-                              className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-                            >
-                              <Checkbox
-                                checked={draft.metrics.includes(metric)}
-                                onCheckedChange={(checked) => handleMetricToggle(metric, checked)}
-                                disabled={draft.metrics.length === 1 && draft.metrics.includes(metric)}
-                              />
-                              <span className="flex flex-1 items-center justify-between gap-2">
-                                <span className="font-medium text-foreground">{metricLabel(metric)}</span>
-                                <span className="text-xs text-muted-foreground">{metricUnit(metric) || "Value"}</span>
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      )}
-                    </PopoverContent>
-                  </Popover>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <label className="text-sm text-muted-foreground">Icon</label>
-                    <Select
-                      value={draft.icon}
-                      onValueChange={(value) => setDraft((prev) => ({ ...prev, icon: value as ChartIconKey }))}
-                    >
-                      <SelectTrigger className="h-9">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                      {chartIconOptions.map((option) => {
-                        const OptionIcon = chartIconConfig[option.value];
-                        return (
-                          <SelectItem key={option.value} value={option.value}>
-                            <span className="flex items-center gap-2">
-                              <OptionIcon className="h-4 w-4" />
-                              {option.label}
-                            </span>
-                          </SelectItem>
-                        );
-                      })}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm text-muted-foreground">Color</label>
-                    <div className="space-y-2">
-                      <Select
-                        value={colorSelection}
-                        onValueChange={(value) => handleColorSelectionChange(value as ChartColorSelection)}
-                      >
-                        <SelectTrigger className="h-9">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {chartThemeColorOptions.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              <span className="flex items-center gap-2">
-                                <span
-                                  className="h-3 w-3 rounded-full"
-                                  style={{ backgroundColor: option.value }}
-                                />
-                                {option.label}
-                              </span>
-                            </SelectItem>
-                          ))}
-                          <SelectItem value="custom">
-                            <span className="flex items-center gap-2">
-                              <span
-                                className="h-3 w-3 rounded-full border border-border"
-                                style={{
-                                  backgroundColor: isValidHexColor(customColor)
-                                    ? customColor
-                                    : DEFAULT_CUSTOM_COLOR,
-                                }}
-                              />
-                              Custom Color
-                            </span>
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {colorSelection === "custom" && (
-                        <Input
-                          type="color"
-                          value={isValidHexColor(customColor) ? customColor : DEFAULT_CUSTOM_COLOR}
-                          onChange={(event) => {
-                            const nextColor = event.target.value;
-                            setCustomColor(nextColor);
-                            setDraft((prev) => ({ ...prev, color: nextColor }));
-                          }}
-                          className="h-9 p-1"
-                        />
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex justify-end">
-                  <Button type="button" onClick={handleSave}>
-                    Save
-                  </Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Export chart image"
-            onClick={() => {
-              if (chartRef.current) {
-                void exportChartAsImage(chartRef.current, {
-                  title: config.title,
-                  subtitle: metricsLabel,
-                });
-              }
-            }}
-            className="btn-icon-panel h-8 w-8"
-          >
-            <Download className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Remove chart"
-            onClick={() => onRemove(config.id)}
-            className="btn-icon-panel h-8 w-8 text-destructive hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="Export chart image"
+          onClick={() => {
+            if (chartRef.current) {
+              void exportChartAsImage(chartRef.current, {
+                title: metricLabel(metric),
+                icon: iconRef.current,
+              });
+            }
+          }}
+          className="btn-icon-panel h-8 w-8"
+        >
+          <Download className="h-4 w-4" />
+        </Button>
       </div>
 
       <div ref={chartRef} className="h-[280px] w-full rounded-lg bg-background p-2">
@@ -532,23 +134,17 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 width={72}
               />
               <Tooltip content={<ChartTooltip />} />
-              {config.metrics.map((metric, metricIndex) => {
-                const stroke = metricIndex === 0 ? config.color : metricColor(metricIndex);
-                return (
-                  <Line
-                    key={`${config.id}-${metric}`}
-                    type="monotone"
-                    dataKey={metric}
-                    stroke={stroke}
-                    strokeWidth={2.2}
-                    dot={false}
-                    activeDot={{ r: 4, fill: stroke }}
-                    isAnimationActive
-                    animationDuration={400}
-                    animationEasing="ease-out"
-                  />
-                );
-              })}
+              <Line
+                type="monotone"
+                dataKey={metric}
+                stroke={color}
+                strokeWidth={2.2}
+                dot={false}
+                activeDot={{ r: 4, fill: color }}
+                isAnimationActive
+                animationDuration={400}
+                animationEasing="ease-out"
+              />
             </ComposedChart>
           </ResponsiveContainer>
         )}
@@ -558,123 +154,46 @@ const ChartCard: React.FC<ChartCardProps> = ({
 };
 
 interface HistoricalChartsProps {
-  activeStationId: string;
   data: SensorData[];
-  addChartSignal?: number;
 }
 
-export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({
-  activeStationId,
-  data,
-  addChartSignal,
-}) => {
+export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data }) => {
   const { timezone, isDarkMode } = useApp();
-  const [charts, setCharts] = useState<ChartConfig[]>([]);
-  const [activeSettingsChartId, setActiveSettingsChartId] = useState<string | null>(null);
-  const previousAddSignal = useRef<number | undefined>(addChartSignal);
-  const previousStationId = useRef(activeStationId);
+  // One plot per numeric metric present in the (already date-filtered) data.
+  const metrics = useMemo(() => collectNumericMetricKeys(data), [data]);
 
-  const availableMetrics = useMemo(() => collectNumericMetricKeys(data), [data]);
-  // Read inside the add-chart effect without adding it to that effect's deps.
-  const availableMetricsRef = useRef(availableMetrics);
-  availableMetricsRef.current = availableMetrics;
-
-  const addChart = () => {
-    const nextChart = createDefaultChart(availableMetricsRef.current);
-    setCharts((prev) => [...prev, nextChart]);
-    setActiveSettingsChartId(nextChart.id);
-  };
-
-  useEffect(() => {
-    if (activeStationId === previousStationId.current) return;
-
-    setCharts([]);
-    setActiveSettingsChartId(null);
-    previousAddSignal.current = addChartSignal;
-    previousStationId.current = activeStationId;
-  }, [activeStationId, addChartSignal]);
-
-  useEffect(() => {
-    if (addChartSignal === undefined) return;
-    if (previousAddSignal.current === undefined) {
-      previousAddSignal.current = addChartSignal;
-      return;
-    }
-    if (addChartSignal !== previousAddSignal.current) {
-      const nextChart = createDefaultChart(availableMetricsRef.current);
-      setCharts((prev) => [...prev, nextChart]);
-      setActiveSettingsChartId(nextChart.id);
-      previousAddSignal.current = addChartSignal;
-    }
-  }, [addChartSignal]);
-
-  const updateChart = (id: string, updates: Partial<ChartConfig>) => {
-    setCharts((prev) => prev.map((chart) => (chart.id === id ? { ...chart, ...updates } : chart)));
-  };
-
-  const moveChart = (id: string, direction: "up" | "down") => {
-    setCharts((prev) => {
-      const currentIndex = prev.findIndex((chart) => chart.id === id);
-      if (currentIndex < 0) return prev;
-      const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
-      const next = [...prev];
-      [next[currentIndex], next[targetIndex]] = [next[targetIndex], next[currentIndex]];
-      return next;
-    });
-  };
-
-  const removeChart = (id: string) => {
-    setActiveSettingsChartId((currentId) => (currentId === id ? null : currentId));
-    setCharts((prev) => prev.filter((chart) => chart.id !== id));
-  };
+  if (metrics.length === 0) {
+    return (
+      <div className="flex min-h-[340px] flex-col items-center justify-center gap-4 rounded-2xl bg-background p-6 text-center">
+        <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border/70 bg-card">
+          <LineChartIcon className="h-7 w-7 text-muted-foreground" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-base font-semibold text-foreground">No data available</p>
+          <p className="text-sm text-muted-foreground">
+            There is no sensor data for the selected range.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
-      {charts.length === 0 ? (
-        <div className="flex min-h-[340px] flex-col items-center justify-center gap-4 rounded-2xl bg-background p-6 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border/70 bg-card">
-            <LineChartIcon className="h-7 w-7 text-muted-foreground" />
-          </div>
-          <div className="space-y-1">
-            <p className="text-base font-semibold text-foreground">No charts added</p>
-            <p className="text-sm text-muted-foreground">
-              Create a new chart to start visualizing sensor data.
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={addChart}
-            className="btn-panel"
-          >
-              <Plus className="h-4 w-4" />
-              {ADD_CHART_LABEL}
-            </Button>
-        </div>
-      ) : (
-        charts.map((chart, index) => (
+      {metrics.map((metric, index) => {
+        const Icon = metricIcon(metric);
+        return (
           <ChartCard
-            key={chart.id}
-            config={chart}
+            key={metric}
+            metric={metric}
+            Icon={Icon}
             data={data}
-            availableMetrics={availableMetrics}
             timezone={timezone}
             isDarkMode={isDarkMode}
-            isSettingsOpen={activeSettingsChartId === chart.id}
-            index={index}
-            total={charts.length}
-            onSettingsOpenChange={(open) =>
-              setActiveSettingsChartId((currentId) => (open ? chart.id : currentId === chart.id ? null : currentId))
-            }
-            onUpdate={updateChart}
-            onMove={moveChart}
-            onRemove={removeChart}
+            colorIndex={index}
           />
-        ))
-      )}
+        );
+      })}
     </div>
   );
 };
-
