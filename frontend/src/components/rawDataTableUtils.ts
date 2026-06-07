@@ -36,8 +36,26 @@ const compareCellValues = (
   return direction === "asc" ? result : -result;
 };
 
+// Chronological compare for date columns (nextStart); missing values sort to the
+// end regardless of direction, matching compareCellValues.
+const compareDateValues = (
+  a: Date | null | undefined,
+  b: Date | null | undefined,
+  direction: SortDirection,
+): number => {
+  if (!a || !b) {
+    if (!a && !b) return 0;
+    return !a ? 1 : -1;
+  }
+  const result = a.getTime() - b.getTime();
+  return direction === "asc" ? result : -result;
+};
+
 export const createFormattedTimestampMap = (data: SensorData[], timezone: string) =>
   new Map(data.map((row) => [row, formatDateTimeLabel(row.timestamp, timezone)]));
+
+export const createFormattedNextStartMap = (data: SensorData[], timezone: string) =>
+  new Map(data.map((row) => [row, row.nextStart ? formatDateTimeLabel(row.nextStart, timezone) : "—"]));
 
 export const createSensorRowKeyMap = (data: SensorData[]) =>
   new Map(data.map((row, index) => [row, `${row.timestamp.toISOString()}-${index}`]));
@@ -73,6 +91,9 @@ export const filterAndSortSensorRows = ({
       const diff = a.timestamp.getTime() - b.timestamp.getTime();
       return sortDirection === "asc" ? diff : -diff;
     }
+    if (sortField === "nextStart") {
+      return compareDateValues(a.nextStart, b.nextStart, sortDirection);
+    }
     return compareCellValues(a[sortField], b[sortField], sortDirection);
   });
 
@@ -94,9 +115,10 @@ const escapeCsvCell = (value: string): string =>
   /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 
 export const buildSensorCsv = (data: SensorData[], timezone: string, columns: string[]) => {
-  const headers = ["Timestamp", ...columns.map(csvHeader)];
+  const headers = ["Timestamp", "Next Start", ...columns.map(csvHeader)];
   const rows = data.map((row) => [
     formatCsvTimestamp(row.timestamp, timezone),
+    row.nextStart ? formatCsvTimestamp(row.nextStart, timezone) : "",
     ...columns.map((column) => cellValue(row[column])),
   ]);
 

@@ -53,6 +53,10 @@ def sensor_readings(slug: str, hours: int) -> list[dict[str, object]]:
     return sqlite_repo.sensor_readings(slug, hours)
 
 
+def sensor_reading_envelopes(slug: str, hours: int) -> list[dict[str, object]]:
+    return sqlite_repo.sensor_reading_envelopes(slug, hours)
+
+
 def append_image(slug: str, *, filename, content_type, size_bytes, captured_at) -> None:
     sqlite_repo.append_image(
         slug, filename=filename, content_type=content_type, size_bytes=size_bytes,

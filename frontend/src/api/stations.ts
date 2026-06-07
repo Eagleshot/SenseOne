@@ -88,6 +88,15 @@ export type SensorSeriesResponse = {
   points: SensorSeriesPointResponse[];
 };
 
+// One entry per device check-in: the reading-envelope fields the metric series
+// omit, so check-ins that reported no metrics still surface.
+export type SensorReadingEnvelopeResponse = {
+  timestamp: string;
+  nextStart: string | null;
+  firmwareVersion: string | null;
+  wakeReason: string | null;
+};
+
 export type TimelineItemResponse = {
   timestamp: string;
   url: string;
@@ -249,21 +258,44 @@ export const getStationSensorReadings = (baseUrl: string, stationId: string, hou
     throwOnHttpError: false,
   });
 
+export const getStationReadingEnvelopes = (baseUrl: string, stationId: string, hours: number, signal?: AbortSignal) =>
+  fetchJson<SensorReadingEnvelopeResponse[]>(stationPath(stationId, `/readings?hours=${hours}`, baseUrl), {
+    credentials: "include",
+    signal,
+    throwOnHttpError: false,
+  });
+
 // Pivot the per-(metric, channel) series into the flat, timestamp-keyed rows the
 // charts/tables consume. Only the default channel is folded in; each row gathers
 // every metric reported at that timestamp. Rows are ordered oldest-to-newest.
-export const flattenSensorSeries = (series: SensorSeriesResponse[]): SensorData[] => {
+export const flattenSensorSeries = (
+  series: SensorSeriesResponse[],
+  envelopes: SensorReadingEnvelopeResponse[] = [],
+): SensorData[] => {
   const rowsByTimestamp = new Map<string, SensorData>();
+  const rowFor = (timestamp: string): SensorData => {
+    let row = rowsByTimestamp.get(timestamp);
+    if (!row) {
+      row = { timestamp: parseApiTimestamp(timestamp) };
+      rowsByTimestamp.set(timestamp, row);
+    }
+    return row;
+  };
+
   for (const stream of series) {
     if (stream.channel !== DEFAULT_SENSOR_CHANNEL) continue;
     for (const point of stream.points) {
-      let row = rowsByTimestamp.get(point.timestamp);
-      if (!row) {
-        row = { timestamp: parseApiTimestamp(point.timestamp) };
-        rowsByTimestamp.set(point.timestamp, row);
-      }
-      row[stream.metric] = point.value;
+      rowFor(point.timestamp)[stream.metric] = point.value;
     }
+  }
+  // Merge per-reading envelopes by timestamp (== the observations' recorded_at):
+  // a check-in with no metrics still gets a row, and every row carries its
+  // next-start time plus the device labels.
+  for (const envelope of envelopes) {
+    const row = rowFor(envelope.timestamp);
+    row.nextStart = envelope.nextStart ? parseApiTimestamp(envelope.nextStart) : null;
+    if (envelope.wakeReason) row.wakeReason = envelope.wakeReason;
+    if (envelope.firmwareVersion) row.firmwareVersion = envelope.firmwareVersion;
   }
   return Array.from(rowsByTimestamp.values()).sort(
     (a, b) => a.timestamp.getTime() - b.timestamp.getTime()

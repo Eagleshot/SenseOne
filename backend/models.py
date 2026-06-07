@@ -487,3 +487,19 @@ class SensorSeries(ApiModel):
     channel: str = Field(description="Sensor channel within the station.")
     unit: str | None = Field(default=None, description="Canonical unit, or null for an unregistered metric.")
     points: list[SensorSeriesPoint] = Field(description="Samples ordered oldest-to-newest.")
+
+
+class SensorReadingEnvelope(ApiModel):
+    """One device check-in's envelope, independent of its measurements.
+
+    Exposes the per-reading fields the metric series omit, so a check-in that
+    carried only a timestamp and a next-online hint (no measurements) still
+    surfaces. One per reading, oldest-to-newest.
+    """
+
+    timestamp: str = Field(description="ISO 8601 check-in time, UTC.")
+    next_start: str | None = Field(
+        default=None, description="ISO 8601 time the device next expects to check in, or null."
+    )
+    firmware_version: str | None = Field(default=None, description="Firmware label on the reading, or null.")
+    wake_reason: str | None = Field(default=None, description="Wake reason on the reading, or null.")

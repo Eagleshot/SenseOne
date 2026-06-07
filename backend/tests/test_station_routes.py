@@ -194,3 +194,42 @@ def test_sensor_readings_use_requested_window(station_with_history, monkeypatch)
     # battery is a registered metric, so its series is unit-tagged.
     battery = next(series for series in body if series["metric"] == "battery")
     assert battery["unit"] == "percent"
+
+
+def test_reading_envelopes_include_metricless_checkins(setup_station_dir, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from utils import iso_utc
+
+    _, station_id = setup_station_dir
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    t_metrics = now - timedelta(minutes=10)
+    t_envelope = now - timedelta(minutes=5)
+
+    # A normal check-in: measurements plus envelope fields.
+    _db.add_reading(
+        station_id,
+        t_metrics,
+        {"temperature": 12.5, "firmwareVersion": "fw-1", "wakeReason": "timer"},
+        next_online=t_metrics + timedelta(minutes=30),
+    )
+    # A check-in carrying ONLY the envelope (no measurements -> no observations).
+    _db.add_reading(station_id, t_envelope, {}, next_online=t_envelope + timedelta(minutes=30))
+
+    response = _client(monkeypatch).get(f"/stations/{station_id}/readings?hours=2")
+    assert response.status_code == 200
+    body = response.json()
+
+    # Both check-ins surface, oldest-to-newest, including the metric-less one.
+    assert [row["timestamp"] for row in body] == [iso_utc(t_metrics), iso_utc(t_envelope)]
+    first, second = body
+    assert first["nextStart"] == iso_utc(t_metrics + timedelta(minutes=30))
+    assert first["firmwareVersion"] == "fw-1"
+    assert first["wakeReason"] == "timer"
+    assert second["nextStart"] == iso_utc(t_envelope + timedelta(minutes=30))
+    assert second["firmwareVersion"] is None and second["wakeReason"] is None
+
+    # The metric-less check-in is absent from /data (no observations) but present here.
+    data = _client(monkeypatch).get(f"/stations/{station_id}/data?hours=2").json()
+    data_timestamps = {point["timestamp"] for series in data for point in series["points"]}
+    assert iso_utc(t_envelope) not in data_timestamps

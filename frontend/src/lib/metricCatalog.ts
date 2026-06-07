@@ -99,7 +99,8 @@ export const orderMetricKeys = (keys: Iterable<string>): string[] => {
 };
 
 const metricEntries = (row: SensorData): [string, SensorMetricValue | Date | undefined][] =>
-  Object.entries(row).filter(([key]) => key !== "timestamp");
+  // "timestamp" and "nextStart" are dedicated, timestamp-formatted columns, not metrics.
+  Object.entries(row).filter(([key]) => key !== "timestamp" && key !== "nextStart");
 
 const collectKeys = (
   data: SensorData[],

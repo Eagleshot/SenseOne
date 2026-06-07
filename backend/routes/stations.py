@@ -8,6 +8,7 @@ import store
 from constants import NEXT_ONLINE_STATUS_BUFFER_MINUTES
 from models import (
     AppConfig,
+    SensorReadingEnvelope,
     SensorSeries,
     StationCoordinates,
     StationCreateRequest,
@@ -198,6 +199,28 @@ def get_station_sensor_readings(
     require_station_view(station_id, user)
     series = store.sensor_readings(station_id, hours)
     return [SensorSeries(**item) for item in series]
+
+
+@router.get(
+    "/{station_id}/readings",
+    response_model=list[SensorReadingEnvelope],
+    summary="Get sensor reading envelopes",
+    description=(
+        "Per-reading envelopes for this station from the lookback window: one entry "
+        "per device check-in with its timestamp, next-online hint, firmware version, "
+        "and wake reason. Unlike `/data` (which is keyed off measurements), this "
+        "includes check-ins that reported no metrics. `hours` controls the window "
+        "(default 24, max 168 = 7 days). Empty list if the station has no readings yet."
+    ),
+)
+def get_station_reading_envelopes(
+    station_id: ValidStationId,
+    hours: int = Query(24, ge=1, le=168, description="Lookback window in hours."),
+    user=Depends(get_optional_current_user),
+) -> list[SensorReadingEnvelope]:
+    require_station_view(station_id, user)
+    envelopes = store.sensor_reading_envelopes(station_id, hours)
+    return [SensorReadingEnvelope(**item) for item in envelopes]
 
 
 @router.get(

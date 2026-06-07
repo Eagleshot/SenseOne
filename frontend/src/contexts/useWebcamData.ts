@@ -13,6 +13,7 @@ import {
   getStationConfig,
   getStationDetail,
   getStationImageCaptures,
+  getStationReadingEnvelopes,
   getStationSensorReadings,
   listStations,
   parseStationResponse,
@@ -126,14 +127,15 @@ export const useWebcamData = (apiBaseUrl: string, isAuthenticated: boolean): Web
     // appear to jump the page to the charts.
     placeholderData: keepPreviousData,
     queryFn: async ({ signal }) => {
-      const [detailResponse, historyResponse, timelineResponse] = await Promise.all([
+      const [detailResponse, historyResponse, envelopesResponse, timelineResponse] = await Promise.all([
         getStationDetail(apiBaseUrl, activeStationId, signal),
         getStationSensorReadings(apiBaseUrl, activeStationId, 24, signal),
+        getStationReadingEnvelopes(apiBaseUrl, activeStationId, 24, signal),
         getStationImageCaptures(apiBaseUrl, activeStationId, 48, signal),
       ]);
       return {
         detail: detailResponse ? parseStationResponse(detailResponse, apiBaseUrl) : null,
-        history: historyResponse ? flattenSensorSeries(historyResponse) : [],
+        history: historyResponse ? flattenSensorSeries(historyResponse, envelopesResponse ?? []) : [],
         timeline: timelineResponse
           ? timelineResponse.map((item) => parseTimelineItemResponse(item, apiBaseUrl))
           : [],

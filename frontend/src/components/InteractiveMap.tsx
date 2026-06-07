@@ -34,8 +34,8 @@ type WeatherControlsProps = {
 // a layer turns it on, choosing "No overlay" turns it off.
 const WeatherControls: React.FC<WeatherControlsProps> = ({ value, onChange }) => (
   <Select value={value} onValueChange={onChange}>
-    <SelectTrigger className="h-9 w-[170px] gap-1.5">
-      <CloudRain className="h-4 w-4 shrink-0 text-muted-foreground" />
+    <SelectTrigger className="btn-panel h-9 w-[170px]">
+      <CloudRain className="h-4 w-4 shrink-0" />
       <SelectValue />
     </SelectTrigger>
     <SelectContent>

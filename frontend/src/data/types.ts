@@ -30,6 +30,9 @@ export type SensorMetricValue = number | string | null;
 // values are not part of readings — they come live from the weather proxy.
 export interface SensorData {
   timestamp: Date;
+  // Per-reading next check-in time (the device's "nextStart"/next_online), when
+  // reported. A dedicated, timestamp-formatted column — not a metric.
+  nextStart?: Date | null;
   [metric: string]: SensorMetricValue | Date | undefined;
 }
 

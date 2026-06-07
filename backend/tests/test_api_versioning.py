@@ -174,6 +174,7 @@ def test_renamed_station_data_routes_are_registered(client):
     station_id = _station()
     assert client.get(f"/v1/stations/{station_id}/image-captures").status_code == 200
     assert client.get(f"/v1/stations/{station_id}/data").status_code == 200
+    assert client.get(f"/v1/stations/{station_id}/readings").status_code == 200
     assert client.get(f"/v1/stations/{station_id}/sensor-series").status_code == 404
     assert client.get(f"/v1/stations/{station_id}/timeline").status_code == 404
     assert client.get(f"/v1/stations/{station_id}/history").status_code == 404
@@ -225,6 +226,7 @@ def test_openapi_lists_versioned_and_infra_paths(client):
     assert "/v1/stations" in paths
     assert "/v1/stations/{station_id}/image-captures" in paths
     assert "/v1/stations/{station_id}/data" in paths
+    assert "/v1/stations/{station_id}/readings" in paths
     assert "/v1/ingest/stations/{station_id}/images" in paths
     assert "/v1/ingest/stations/{station_id}/config" in paths
     assert "/v1/ingest/stations/{station_id}/data" in paths

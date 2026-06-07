@@ -14,6 +14,7 @@ import type { SensorData } from "@/data/types";
 import {
   buildSensorCsv,
   collectMetricKeys,
+  createFormattedNextStartMap,
   createFormattedTimestampMap,
   createSensorRowKeyMap,
   filterAndSortSensorRows,
@@ -58,6 +59,10 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
 
   const formattedTimestamps = useMemo(
     () => createFormattedTimestampMap(data, timezone),
+    [data, timezone]
+  );
+  const formattedNextStarts = useMemo(
+    () => createFormattedNextStartMap(data, timezone),
     [data, timezone]
   );
   const rowKeys = useMemo(
@@ -166,6 +171,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
               <TableHeader>
                 <TableRow className="bg-[hsl(var(--sidebar-background))] dark:bg-muted">
                   <SortableHeader field="timestamp" activeField={sortField} onSort={handleSort}>Timestamp</SortableHeader>
+                  <SortableHeader field="nextStart" activeField={sortField} onSort={handleSort}>Next Start</SortableHeader>
                   {columns.map((column) => (
                     <SortableHeader key={column} field={column} activeField={sortField} onSort={handleSort}>
                       {metricLabel(column)}
@@ -176,7 +182,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
               <TableBody className="bg-muted/70 dark:bg-transparent">
                 {paginatedData.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={columns.length + 1} className="text-center text-sm text-muted-foreground py-8">
+                    <TableCell colSpan={columns.length + 2} className="text-center text-sm text-muted-foreground py-8">
                       No data available for the selected station and date range.
                     </TableCell>
                   </TableRow>
@@ -184,6 +190,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                   paginatedData.map((row) => (
                     <TableRow key={rowKeys.get(row) ?? row.timestamp.toISOString()} className="hover:bg-[hsl(var(--sidebar-background))]">
                       <TableCell className="font-medium">{formattedTimestamps.get(row)}</TableCell>
+                      <TableCell>{formattedNextStarts.get(row)}</TableCell>
                       {columns.map((column) => (
                         <TableCell key={column}>{renderCell(row, column)}</TableCell>
                       ))}

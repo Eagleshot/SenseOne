@@ -16,6 +16,7 @@ import {
   metricUnit,
 } from "@/lib/metricCatalog";
 import type { SensorData } from "@/data/types";
+import { CheckInStatusChart } from "./CheckInStatusChart";
 import { exportChartAsImage } from "./historicalChartExport";
 
 const metricColor = (index: number) => CHART_PALETTE[index % CHART_PALETTE.length];
@@ -163,8 +164,10 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data }) => {
       })),
     [data, timezone]
   );
+  // The check-in status chart shows whenever any check-in carried a next-online hint.
+  const hasStatus = useMemo(() => data.some((row) => row.nextStart instanceof Date), [data]);
 
-  if (metrics.length === 0) {
+  if (metrics.length === 0 && !hasStatus) {
     return (
       <div className="flex min-h-[340px] flex-col items-center justify-center gap-4 rounded-2xl bg-background p-6 text-center">
         <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border/70 bg-card">
@@ -192,6 +195,7 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data }) => {
           />
         );
       })}
+      {hasStatus && <CheckInStatusChart data={data} />}
     </div>
   );
 };

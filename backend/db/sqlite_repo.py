@@ -420,6 +420,35 @@ def sensor_readings(public_id: str, hours: int) -> list[dict[str, object]]:
     return [series[key] for key in order]
 
 
+def sensor_reading_envelopes(public_id: str, hours: int) -> list[dict[str, object]]:
+    """Per-reading envelopes for a station within the lookback window.
+
+    One dict per device check-in — independent of whether it carried any
+    measurements, so a check-in with only ``recorded_at``/``next_online`` still
+    appears: ``{timestamp, next_start, firmware_version, wake_reason}``,
+    oldest-to-newest. ``next_start`` and the labels are None when not reported.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    with session_scope() as session:
+        row = _station(session, public_id)
+        if row is None:
+            return []
+        readings = session.scalars(
+            select(SensorReading)
+            .where(SensorReading.station_id == row.id, SensorReading.recorded_at >= cutoff)
+            .order_by(SensorReading.recorded_at.asc())
+        ).all()
+        return [
+            {
+                "timestamp": iso_utc(reading.recorded_at),
+                "next_start": iso_utc(reading.next_online) if reading.next_online else None,
+                "firmware_version": reading.firmware_version,
+                "wake_reason": reading.wake_reason,
+            }
+            for reading in readings
+        ]
+
+
 # ----- stations: write -------------------------------------------------------
 
 def create_station(payload, owner_id: str) -> str:
