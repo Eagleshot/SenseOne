@@ -126,7 +126,7 @@ def test_device_image_route_accepts_signed_request(client):
 
 def test_sensor_device_route_is_registered(client):
     station_id = _station()
-    response = client.post(f"/v1/ingest/stations/{station_id}/sensor-readings", json={})
+    response = client.post(f"/v1/ingest/stations/{station_id}/data", json={})
     assert response.status_code in (401, 422)
 
 
@@ -134,34 +134,36 @@ def test_sensor_reading_accepts_signed_request(client):
     station_id = _station()
     secret_b64 = provision_device_hmac_secret(station_id)
 
-    path = f"/v1/ingest/stations/{station_id}/sensor-readings"
+    path = f"/v1/ingest/stations/{station_id}/data"
     body = json.dumps({
         "timestamp": "2026-05-23T12:00:00Z",
-        "temperature": 21.5,
-        "humidity": 58,
-        "windSpeed": 4.2,
-        "uvIndex": 3,
+        "readings": [{
+            "temperature": 21.5,
+            "humidity": 58,
+            "windSpeed": 4.2,
+            "uvIndex": 3,
+        }],
     }).encode("utf-8")
     signed_headers = eagleshot_signing.sign_request(
         station_id=station_id, secret_b64=secret_b64, method="POST", path=path, body=body,
     )
     response = client.post(path, headers={**signed_headers, "Content-Type": "application/json"}, content=body)
 
-    assert response.status_code == 201, response.text
-    payload = response.json()
-    # camelCase measurement keys are preserved verbatim under metrics (unregistered
-    # metrics are still accepted); no snake_case rewriting happens.
-    assert payload["metrics"]["windSpeed"] == 4.2
-    assert payload["metrics"]["uvIndex"] == 3
-    assert "wind_speed" not in payload["metrics"]
+    assert response.status_code == 204, response.text
+    # camelCase measurement keys are preserved verbatim (unregistered metrics are
+    # still accepted); no snake_case rewriting happens.
+    stored = {obs["metric"]: obs["value"] for obs in _db.sensor_observations(station_id)}
+    assert stored["windSpeed"] == 4.2
+    assert stored["uvIndex"] == 3
+    assert "wind_speed" not in stored
 
 
 def test_sensor_reading_rejects_session_cookie_without_hmac_signature(client):
     station_id = _station()
     login_response = client.post("/v1/auth/login", json={"email": TEST_EMAIL, "password": TEST_PASSWORD})
     response = client.post(
-        f"/v1/ingest/stations/{station_id}/sensor-readings",
-        json={"temperature": 21.5, "humidity": 58, "battery": 87},
+        f"/v1/ingest/stations/{station_id}/data",
+        json={"readings": [{"temperature": 21.5, "humidity": 58, "battery": 87}]},
     )
     assert login_response.status_code == 200
     assert response.status_code == 401
@@ -170,7 +172,7 @@ def test_sensor_reading_rejects_session_cookie_without_hmac_signature(client):
 def test_renamed_station_data_routes_are_registered(client):
     station_id = _station()
     assert client.get(f"/v1/stations/{station_id}/image-captures").status_code == 200
-    assert client.get(f"/v1/stations/{station_id}/sensor-readings").status_code == 200
+    assert client.get(f"/v1/stations/{station_id}/data").status_code == 200
     assert client.get(f"/v1/stations/{station_id}/sensor-series").status_code == 404
     assert client.get(f"/v1/stations/{station_id}/timeline").status_code == 404
     assert client.get(f"/v1/stations/{station_id}/history").status_code == 404
@@ -221,10 +223,10 @@ def test_openapi_lists_versioned_and_infra_paths(client):
     assert "/v1/auth/login" in paths
     assert "/v1/stations" in paths
     assert "/v1/stations/{station_id}/image-captures" in paths
-    assert "/v1/stations/{station_id}/sensor-readings" in paths
+    assert "/v1/stations/{station_id}/data" in paths
     assert "/v1/ingest/stations/{station_id}/images" in paths
     assert "/v1/ingest/stations/{station_id}/config" in paths
-    assert "/v1/ingest/stations/{station_id}/sensor-readings" in paths
+    assert "/v1/ingest/stations/{station_id}/data" in paths
     # The unversioned app paths and removed route names are gone.
     assert "/auth/login" not in paths
     assert "/stations" not in paths

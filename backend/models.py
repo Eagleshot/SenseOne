@@ -138,6 +138,13 @@ class DeviceConfig(ApiModel):
     lat: float = Field(description="Latitude in decimal degrees.")
     lon: float = Field(description="Longitude in decimal degrees.")
     alt: float = Field(description="Altitude in metres above sea level.")
+    name: str = Field(
+        description=(
+            "Filename-safe ASCII station name token (umlauts transliterated, e.g. "
+            "'Zuerich'). The device uses it to name capture files "
+            "'YYYYMMDD_HHMMZ_<name>.jpg' so its local copy matches the dashboard download."
+        )
+    )
 
 
 class LoginRequest(ApiModel):
@@ -284,78 +291,40 @@ class ImageUploadResponse(ApiModel):
 # against the registry. Unknown numeric metrics are still accepted.
 MAX_METRIC_FIELDS = 64
 MAX_METRIC_KEY_LENGTH = 64
+# Cap channels (readings) per check-in — same spirit as MAX_METRIC_FIELDS.
+MAX_READINGS_PER_REQUEST = 32
+# Hard ceiling on total measurements across all readings in one check-in, so a
+# single signed request can't write thousands of observations (32 readings x 64
+# metrics each would otherwise reach 2048).
+MAX_OBSERVATIONS_PER_REQUEST = 512
 
 
-class SensorReadingRequest(ApiModel):
-    """One sensor reading submitted by a device.
+class ChannelReading(ApiModel):
+    """Measurements for one channel within a device check-in.
 
-    Reserved (non-measurement) keys: ``timestamp``, ``nextStart``, ``channel``,
-    and the device labels ``firmwareVersion`` / ``wakeReason`` (stored on the
-    reading envelope). Every other key is a numeric measurement (e.g.
-    ``temperature``, ``humidity``, ``voltage``, ``battery``): known metrics are
-    validated against the registry's units/ranges; unknown numeric metrics are
-    still accepted so a device can report a new field without a server-side schema
-    change. Values must be numbers — ``null`` is skipped and booleans store as
-    0/1; any other non-numeric value is rejected. At most 64 metric fields, each
-    key at most 64 characters.
+    The reserved key ``channel`` selects the (metric, channel) series; every other
+    key is a numeric measurement (e.g. ``temperature``, ``humidity``, ``voltage``,
+    ``battery``): known metrics are validated against the registry's units/ranges;
+    unknown numeric metrics are still accepted so a device can report a new field
+    without a server-side schema change. Values must be numbers — ``null`` is
+    skipped and booleans store as 0/1; any other non-numeric value is rejected. At
+    most 64 metric fields, each key at most 64 characters.
     """
 
     model_config = ConfigDict(
         alias_generator=to_camel, populate_by_name=True, extra="allow"
     )
 
-    timestamp: str | None = Field(
-        default=None,
-        description=(
-            "Measurement time as an ISO 8601 date-time (e.g. `2026-05-24T14:30:00Z`). "
-            "A trailing `Z` or an explicit offset is honoured; a value with no "
-            "timezone is assumed to be UTC. Stored normalised to UTC. Omit to have "
-            "the server stamp the current UTC time on receipt."
-        ),
-    )
-    next_start: str | None = Field(
-        default=None,
-        description=(
-            "When the device next expects to wake and check in, as an ISO 8601 "
-            "date-time (e.g. `2026-05-24T15:00:00Z`; same timezone rules as "
-            "`timestamp`). Stored as the reading's next-online hint, which keeps the "
-            "station shown as online until this time plus a short grace buffer has "
-            "passed."
-        ),
-    )
     channel: str | None = Field(
         default=None,
         description=(
             "Optional channel that groups measurements into a per-(metric, channel) "
             "series, so one station can carry several sensors of the same metric "
             "(e.g. `indoor` vs `outdoor`). Letters, digits, '.', '_' and '-' only, "
-            "max 64 chars. Defaults to `default` when omitted."
+            "max 64 chars. Defaults to `default` when omitted; resolved channels "
+            "must be unique across a request's readings."
         ),
     )
-    firmware_version: str | None = Field(
-        default=None,
-        description=(
-            "Free-form firmware version label stored on the reading, not a "
-            "measurement (e.g. `openmv-n6-2026.05`)."
-        ),
-    )
-    wake_reason: str | None = Field(
-        default=None,
-        description=(
-            "Free-form label for why the device woke, stored on the reading, not a "
-            "measurement (e.g. `timer`)."
-        ),
-    )
-
-    @field_validator("timestamp", "next_start")
-    @classmethod
-    def validate_timestamp_field(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        parsed = parse_iso_timestamp(value)
-        if parsed is None:
-            raise ValueError("Timestamp must be ISO 8601.")
-        return iso_utc(parsed)
 
     @field_validator("channel")
     @classmethod
@@ -372,11 +341,16 @@ class SensorReadingRequest(ApiModel):
         return cleaned
 
     @model_validator(mode="after")
-    def validate_metrics(self) -> "SensorReadingRequest":
+    def validate_metrics(self) -> "ChannelReading":
         extras = self.model_extra or {}
         if len(extras) > MAX_METRIC_FIELDS:
             raise ValueError(f"At most {MAX_METRIC_FIELDS} metric fields are allowed.")
         for key, value in extras.items():
+            if key in RESERVED_READING_KEYS:
+                raise ValueError(
+                    f"'{key}' is an envelope label and must be sent at the top "
+                    "level, not inside a reading."
+                )
             if len(key) > MAX_METRIC_KEY_LENGTH:
                 raise ValueError(f"Metric key '{key[:16]}…' is too long.")
             if value is None or isinstance(value, bool):
@@ -406,23 +380,96 @@ class SensorReadingRequest(ApiModel):
         }
 
 
-class SensorReadingAck(ApiModel):
-    """Acknowledgement returned to a device after a reading is stored."""
+class SensorReadingRequest(ApiModel):
+    """One device check-in: a shared envelope plus zero or more per-channel readings.
 
-    timestamp: str = Field(
+    Envelope fields apply to the whole check-in: ``timestamp`` (server stamps
+    receipt time when omitted), ``nextStart``, and the device labels
+    ``firmwareVersion`` / ``wakeReason`` (stored on the reading envelope, not as
+    measurements). ``readings`` carries the measurements, one entry per channel;
+    a single-channel device may omit ``channel`` (defaults to ``default``).
+    Resolved channels must be unique within the request. ``readings`` may be
+    omitted/empty for an envelope-only check-in (e.g. an online-status heartbeat).
+    Unknown top-level keys are rejected — measurements belong inside ``readings``.
+    """
+
+    model_config = ConfigDict(
+        alias_generator=to_camel, populate_by_name=True, extra="forbid"
+    )
+
+    timestamp: str | None = Field(
+        default=None,
         description=(
-            "ISO 8601 UTC timestamp the reading was stored under — the normalised "
-            "request `timestamp`, or the server's receipt time when none was sent."
-        )
+            "Measurement time as an ISO 8601 date-time (e.g. `2026-05-24T14:30:00Z`). "
+            "A trailing `Z` or an explicit offset is honoured; a value with no "
+            "timezone is assumed to be UTC. Stored normalised to UTC. Omit to have "
+            "the server stamp the current UTC time on receipt."
+        ),
     )
-    channel: str = Field(
-        description="Channel the measurements were stored on (`default` when the request omitted one)."
+    next_start: str | None = Field(
+        default=None,
+        description=(
+            "When the device next expects to wake and check in, as an ISO 8601 "
+            "date-time (e.g. `2026-05-24T15:00:00Z`; same timezone rules as "
+            "`timestamp`). Stored as the reading's next-online hint, which keeps the "
+            "station shown as online until this time plus a short grace buffer has "
+            "passed."
+        ),
     )
-    metrics: dict[str, float] = Field(
-        default_factory=dict, description="The numeric measurements that were stored."
+    firmware_version: str | None = Field(
+        default=None,
+        description=(
+            "Free-form firmware version label stored on the reading, not a "
+            "measurement (e.g. `openmv-n6-2026.05`)."
+        ),
     )
-    firmware_version: str | None = Field(default=None, description="Firmware label stored on the reading.")
-    wake_reason: str | None = Field(default=None, description="Wake reason stored on the reading.")
+    wake_reason: str | None = Field(
+        default=None,
+        description=(
+            "Free-form label for why the device woke, stored on the reading, not a "
+            "measurement (e.g. `timer`)."
+        ),
+    )
+    readings: list[ChannelReading] = Field(
+        default_factory=list,
+        max_length=MAX_READINGS_PER_REQUEST,
+        description=(
+            "Per-channel measurements for this check-in, one entry per channel. Each "
+            "entry's `channel` is optional (defaults to `default`) but resolved "
+            f"channels must be unique. At most {MAX_READINGS_PER_REQUEST} readings. "
+            "Omit or leave empty for an envelope-only check-in."
+        ),
+    )
+
+    @field_validator("timestamp", "next_start")
+    @classmethod
+    def validate_timestamp_field(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = parse_iso_timestamp(value)
+        if parsed is None:
+            raise ValueError("Timestamp must be ISO 8601.")
+        return iso_utc(parsed)
+
+    @model_validator(mode="after")
+    def validate_readings(self) -> "SensorReadingRequest":
+        seen: set[str] = set()
+        total_metrics = 0
+        for reading in self.readings:
+            channel = reading.resolved_channel
+            if channel in seen:
+                raise ValueError(
+                    f"Duplicate channel '{channel}' in readings; resolved channels "
+                    "must be unique within a check-in."
+                )
+            seen.add(channel)
+            total_metrics += len(reading.metrics)
+        if total_metrics > MAX_OBSERVATIONS_PER_REQUEST:
+            raise ValueError(
+                f"At most {MAX_OBSERVATIONS_PER_REQUEST} measurements are allowed "
+                "per check-in."
+            )
+        return self
 
 
 class SensorSeriesPoint(ApiModel):

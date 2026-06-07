@@ -5,22 +5,22 @@ import os
 import shutil
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
 import store
 from config import get_data_dir
 from constants import ALLOWED_IMAGE_EXTENSIONS
-from models import DeviceConfig, ImageUploadResponse, SensorReadingAck, SensorReadingRequest
+from models import DeviceConfig, ImageUploadResponse, SensorReadingRequest
 from routes import ValidStationId
 from station_access import require_station_exists
 from station_hmac import verify_station_signature
 from utils import (
     default_capture_filename,
     image_timestamp_from_filename,
+    inject_name_if_missing,
     is_supported_image_upload,
     iso_utc,
     media_type_from_path,
-    parse_iso_timestamp,
     sanitize_filename,
 )
 
@@ -94,24 +94,11 @@ _SIGNED_REQUEST_ERRORS: dict[int | str, dict[str, str]] = {
 }
 
 
-def parse_next_online(value: str | None) -> str | None:
-    if value is None or not value.strip():
-        return None
-    parsed = parse_iso_timestamp(value)
-    if parsed is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="X-Next-Online must be an ISO 8601 timestamp.",
-        )
-    return iso_utc(parsed)
-
-
 def store_uploaded_image(
     station_id: str,
     filename: str,
     body: bytes,
     content_type: str | None,
-    next_online: str | None = None,
 ) -> tuple[str, str]:
     """Persist an uploaded image that has already passed HMAC verification."""
     if not is_supported_image_upload(filename, content_type):
@@ -163,7 +150,6 @@ def store_uploaded_image(
         content_type=detected_media_type,
         size_bytes=len(body),
         captured_at=iso_utc(image_timestamp),
-        next_online=next_online,
     )
     return stored_filename, f"/stations/{station_id}/images/{stored_filename}"
 
@@ -200,6 +186,7 @@ async def get_device_station_config(
         lat=config.lat,
         lon=config.lon,
         alt=config.alt,
+        name=store.station_name_token(station_id),
     )
 
 
@@ -217,9 +204,7 @@ async def get_device_station_config(
         "`X-Nonce`, `X-Signature` headers). Uploads are capped at "
         "`APP_MAX_UPLOAD_BYTES` (default 25 MB) and refused once free disk would "
         "drop below `APP_MIN_FREE_DISK_BYTES`.\n\n"
-        "Capture time and camera are read from `X-Filename`; `X-Next-Online` records "
-        "when the device expects to check in next, which drives the station's "
-        "online/offline status."
+        "Capture time and camera are read from `X-Filename`."
     ),
     responses={
         **_SIGNED_REQUEST_ERRORS,
@@ -228,8 +213,8 @@ async def get_device_station_config(
         415: {"description": "Unsupported image type, or the bytes are not a recognised image."},
         422: {
             "description": (
-                "A supplied X-Filename or X-Next-Online is malformed (X-Filename must "
-                "match YYYYMMDD_HHMMZ_<camera>.<ext>; X-Next-Online must be ISO 8601)."
+                "A supplied X-Filename is malformed (must match "
+                "YYYYMMDD_HHMMZ_<camera>.<ext>)."
             )
         },
         507: {"description": "Server storage is full; the upload was refused."},
@@ -245,14 +230,6 @@ async def upload_station_image(
             "minute plus a camera/stream token. Optional: when omitted or blank the "
             "server stamps a default name from the current UTC minute. When supplied "
             "it must match this format, otherwise the upload is rejected with 422."
-        ),
-    ),
-    x_next_online: str | None = Header(
-        default=None,
-        description=(
-            "Optional ISO 8601 timestamp for when the device next expects to check "
-            "in. Stored with the capture and used to show the station as online "
-            "until this time (plus a short grace buffer) has passed."
         ),
     ),
 ) -> ImageUploadResponse:
@@ -271,45 +248,52 @@ async def upload_station_image(
     body = await verify_station_signature(station_id, request)
     content_type = request.headers.get("content-type")
     # X-Filename is optional: a device may omit it (or send blank), and the server
-    # stamps a default capture name from the current UTC minute. A supplied name
-    # must still match the capture format (store_uploaded_image enforces it).
+    # stamps a capture name from the current UTC minute. The station's frozen name
+    # token is injected so the stored file (hence the dashboard download) is
+    # self-identifying: an omitted/bare-timestamp name becomes
+    # YYYYMMDD_HHMMZ_<name>.jpg; a name the device already supplied is kept as-is.
+    # A supplied name must still match the capture format (store_uploaded_image enforces it).
+    name_token = store.station_name_token(station_id)
     provided_name = (x_filename or "").strip()
     filename = (
-        sanitize_filename(provided_name)
+        inject_name_if_missing(sanitize_filename(provided_name), name_token)
         if provided_name
-        else default_capture_filename(content_type)
+        else default_capture_filename(content_type, name=name_token)
     )
     stored_filename, image_url = store_uploaded_image(
         station_id=station_id,
         filename=filename,
         body=body,
         content_type=content_type,
-        next_online=parse_next_online(x_next_online),
     )
     logging.info("File saved for station %s as %s", station_id, stored_filename)
     return ImageUploadResponse(filename=stored_filename, url=image_url)
 
 
 @router.post(
-    "/{station_id}/sensor-readings",
-    response_model=SensorReadingAck,
-    status_code=status.HTTP_201_CREATED,
-    summary="Upload one sensor reading",
+    "/{station_id}/data",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Upload one device check-in",
     description=(
-        "Append one sensor reading to a station's history. The signed JSON body "
-        "carries optional `timestamp`, `channel`, `nextStart`, and device log fields "
-        "(`firmwareVersion`, `wakeReason`, …); any extra numeric keys are stored "
-        "verbatim as metrics, so a device can report whatever it measures without a "
-        "server change. When `timestamp` is omitted the server stamps receipt time.\n\n"
-        "Requires a valid **v1 HMAC signature** (`X-Station-Id`, `X-Timestamp`, "
-        "`X-Nonce`, `X-Signature` headers) and `Content-Type: application/json`."
+        "Append one device check-in to a station's history. The signed JSON body is a "
+        "shared envelope — optional `timestamp`, `nextStart`, and device log fields "
+        "(`firmwareVersion`, `wakeReason`) — plus a `readings` array, one entry per "
+        "channel. Each reading's `channel` is optional (defaults to `default`) but "
+        "resolved channels must be unique; every other key in a reading is a numeric "
+        "measurement, stored verbatim, so a device can report whatever it measures "
+        "without a server change. `readings` may be omitted/empty for an envelope-only "
+        "heartbeat. When `timestamp` is omitted the server stamps receipt time.\n\n"
+        "On success returns **204 No Content** (no body). Requires a valid **v1 HMAC "
+        "signature** (`X-Station-Id`, `X-Timestamp`, `X-Nonce`, `X-Signature` headers) "
+        "and `Content-Type: application/json`."
     ),
     responses={
         **_SIGNED_REQUEST_ERRORS,
         422: {
             "description": (
                 "Body failed validation: bad timestamp/nextStart, a non-numeric or "
-                "out-of-range metric, too many metric fields, or an invalid channel."
+                "out-of-range metric, too many metric fields/readings, an invalid or "
+                "duplicate channel, or an unknown top-level key."
             )
         },
     },
@@ -318,24 +302,16 @@ async def create_sensor_reading(
     station_id: ValidStationId,
     payload: SensorReadingRequest,
     request: Request,
-) -> SensorReadingAck:
+) -> Response:
     await verify_station_signature(station_id, request)
     timestamp = payload.timestamp or iso_utc(datetime.now(timezone.utc))
-    metrics = payload.metrics
-    channel = payload.resolved_channel
+    channel_metrics = [(reading.resolved_channel, reading.metrics) for reading in payload.readings]
     store.append_reading(
         station_id,
         timestamp,
-        metrics,
-        channel=channel,
+        channel_metrics,
         firmware_version=payload.firmware_version,
         wake_reason=payload.wake_reason,
         next_online=payload.next_start,
     )
-    return SensorReadingAck(
-        timestamp=timestamp,
-        channel=channel,
-        metrics={key: float(value) for key, value in metrics.items()},
-        firmware_version=payload.firmware_version,
-        wake_reason=payload.wake_reason,
-    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

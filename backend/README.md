@@ -16,7 +16,7 @@ timeline image blobs under `backend/data/<slug>/images/`. Use `--station-id`,
 This backend is a single FastAPI server that:
 
 - serves the frontend API routes used by the Vite app with session-cookie auth
-- accepts HMAC-signed device uploads on `POST /v1/ingest/stations/{station_id}/images` and `POST /v1/ingest/stations/{station_id}/sensor-readings` — see [Device auth (HMAC)](#device-auth-hmac)
+- accepts HMAC-signed device uploads on `POST /v1/ingest/stations/{station_id}/images` and `POST /v1/ingest/stations/{station_id}/data` — see [Device auth (HMAC)](#device-auth-hmac)
 - stores all station metadata, ownership, sensor readings, and image metadata in a local **SQLite** database
 - writes uploaded image blobs to `backend/data/<station>/images/`
 - exposes weather and auth features through the shared project root `.env`
@@ -92,7 +92,7 @@ The response includes the base64url secret exactly once — flash it to the devi
 
 Reference signers:
 
-- Python: [`clients/python/eagleshot_signing.py`](../clients/python/eagleshot_signing.py)
+- Python: [`clients/python/eagleshot.py`](../clients/python/eagleshot.py)
 - MicroPython / OpenMV: [`clients/openmv/eagleshot_signing.py`](../clients/openmv/eagleshot_signing.py)
 
 Devices without an RTC can call the unauthenticated `GET /clock` once at boot and track the offset against a monotonic counter.
@@ -102,7 +102,7 @@ Devices without an RTC can call the unauthenticated `GET /clock` once at boot an
 Any device that can issue an HTTP request and compute HMAC-SHA256 can push to the same endpoints — the API is device- and transport-agnostic. To port a new board:
 
 1. **Sign the request** exactly as in the table above (canonical string + four headers; see `station_hmac.py`). Reuse a shared signer where you can:
-   - **Raspberry Pi / any CPython host** — `import eagleshot_signing` from [`clients/python/eagleshot_signing.py`](../clients/python/eagleshot_signing.py) and POST with `requests` (see steps 6–7). Works over WiFi, Ethernet, or cellular; no board-specific firmware needed.
+   - **Raspberry Pi / any CPython host** — `import eagleshot` from [`clients/python/eagleshot.py`](../clients/python/eagleshot.py) and POST with `requests` (see steps 6–7). Works over WiFi, Ethernet, or cellular; no board-specific firmware needed.
    - **OpenMV / MicroPython** — copy [`clients/openmv/eagleshot_signing.py`](../clients/openmv/eagleshot_signing.py) next to your `main.py` and `from eagleshot_signing import sign_request` (the reference firmware does exactly this).
    - **ESP32-CAM (Arduino/C++)** — there's no shared lib for C++, so reimplement the signer with mbedTLS (bundled in arduino-esp32): SHA-256 the JPEG framebuffer (`mbedtls_sha256`), build the same `\n`-joined canonical string, HMAC it with `mbedtls_md_hmac` (`MBEDTLS_MD_SHA256`), hex-encode lowercase, and send via `HTTPClient`. **Mind the secret encoding:** it's base64**url** and routinely contains `-`/`_`, so translate `-`→`+`, `_`→`/` and re-pad before `mbedtls_base64_decode`. Validate against the known-answer vector below before touching hardware.
 2. **Pick the transport** (see *Transport / TLS* below): prefer HTTPS where the board supports it; fall back to plain HTTP only where it can't.
@@ -137,14 +137,14 @@ The shared secret is only ever an HMAC key — it never goes over the wire — s
 python - <<'PY'
 import sys
 sys.path.insert(0, "../clients/python")
-import eagleshot_signing, requests
+import eagleshot, requests
 
 STATION_ID = "{STATION_ID}"
 SECRET_B64 = "{DEVICE_SECRET_B64}"
 body = open(r"C:\path\to\test.jpg", "rb").read()
 path = f"/v1/ingest/stations/{STATION_ID}/images"
 
-headers = eagleshot_signing.sign_request(
+headers = eagleshot.sign_request(
     station_id=STATION_ID,
     secret_b64=SECRET_B64,
     method="POST",
@@ -179,11 +179,11 @@ Get-ChildItem .\data\<STATION_ID>\images
 python - <<'PY'
 import json, sys
 sys.path.insert(0, "../clients/python")
-import eagleshot_signing, requests
+import eagleshot, requests
 
 STATION_ID = "{STATION_ID}"
 SECRET_B64 = "{DEVICE_SECRET_B64}"
-path = f"/v1/ingest/stations/{STATION_ID}/sensor-readings"
+path = f"/v1/ingest/stations/{STATION_ID}/data"
 body = json.dumps({
     "timestamp": "2026-05-24T14:30:00Z",
     "firmwareVersion": "openmv-n6-2026.05",
@@ -192,7 +192,7 @@ body = json.dumps({
     "voltage": 3.9,
 }).encode("utf-8")
 
-headers = eagleshot_signing.sign_request(
+headers = eagleshot.sign_request(
     station_id=STATION_ID,
     secret_b64=SECRET_B64,
     method="POST",
@@ -218,7 +218,7 @@ Frontend routes (session-cookie auth):
 
 - `GET /v1/stations`
 - `GET /v1/stations/{station_id}`
-- `GET /v1/stations/{station_id}/sensor-readings`
+- `GET /v1/stations/{station_id}/data`
 - `GET /v1/stations/{station_id}/image-captures`
 - `GET /v1/stations/{station_id}/weather/current`
 - `GET /v1/stations/{station_id}/weather/forecast`
@@ -229,7 +229,7 @@ Frontend routes (session-cookie auth):
 Ingest routes (device push/pull, HMAC signing — see above):
 
 - `POST /v1/ingest/stations/{station_id}/images`
-- `POST /v1/ingest/stations/{station_id}/sensor-readings`
+- `POST /v1/ingest/stations/{station_id}/data`
 - `GET /v1/ingest/stations/{station_id}/config`
 
 Open:
@@ -244,7 +244,7 @@ Open:
   - nonce was reused — generate a fresh one per request
   - secret on device doesn't match the server — rotate via `POST /stations/{station_id}/rotate-device-secret` and re-flash
 - `404 Not Found`:
-  - station id doesn't exist or the URL path doesn't match `/v1/ingest/stations/{station_id}/images` / `.../sensor-readings` / `.../config`
+  - station id doesn't exist or the URL path doesn't match `/v1/ingest/stations/{station_id}/images` / `.../data` / `.../config`
 - `422 Unprocessable Entity` on image upload:
   - a *supplied* `X-Filename` must be a real UTC capture name such as `20260524_1430Z_front.jpg` (omit it to have the server stamp one)
 - `413 Payload Too Large`:

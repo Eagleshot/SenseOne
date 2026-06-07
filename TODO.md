@@ -14,6 +14,7 @@
 - Connect to different data sources to back up the data (scheduled or on-upload to cloud storage, e.g. FTP or Google Drive) or external weather services
 - User API to get sensor data (e.g. smart home)
 - Scheduled reports (weekly PDF/email summary) + public per-station status/uptime.
+- Filter stations by data type etc.
 
 ## Alerts
 
@@ -66,7 +67,7 @@ Offer as a hosted service. The **station is the unit of value and of cost** — 
 
 | Feature / limit | Free | Pro (CHF7/station/mo) | Business (CHF19/station/mo) |
 |---|---|---|---|
-| Stations | 25 free, then CHF1/station/mo | Unlimited (per-station billing) | Unlimited (per-station billing) |
+| Stations | 3 free, then CHF1/station/mo | Unlimited (per-station billing) | Unlimited (per-station billing) |
 | Max image resolution | VGA (640×480) | HD 720p (1280×720)* | Full HD 1080p (1920×1080)* |
 | Image capture interval | >=60 min | >=10 min* | >=5 min* |
 | Image retention | 7 days | 6 months* | 1 year* |

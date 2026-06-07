@@ -3,8 +3,10 @@
 from datetime import datetime, timezone
 
 from utils import (
+    ascii_station_name,
     default_capture_filename,
     image_timestamp_from_filename,
+    inject_name_if_missing,
     sanitize_filename,
     sanitize_station_id,
     normalize_content_type,
@@ -12,6 +14,7 @@ from utils import (
     iso_utc,
     humanize_station_id,
     is_supported_image_upload,
+    station_name_token,
     stream_from_filename,
 )
 
@@ -94,6 +97,12 @@ class TestTimestampParsing:
 
         assert result == datetime(2026, 5, 24, 14, 30, tzinfo=timezone.utc)
 
+    def test_image_timestamp_from_filename_accepts_bare_timestamp(self):
+        # A device may upload just the timestamp; the server expands the name later.
+        assert image_timestamp_from_filename("20260524_1430Z.jpg") == datetime(
+            2026, 5, 24, 14, 30, tzinfo=timezone.utc
+        )
+
     def test_image_timestamp_from_filename_rejects_untimestamped_name(self):
         assert image_timestamp_from_filename("capture.jpg") is None
 
@@ -142,21 +151,83 @@ class TestImageValidation:
 
 
 class TestStreamFromFilename:
-    """Test camera/stream token extraction from capture filenames."""
+    """Stream is the OPTIONAL token after the (frozen) station name token."""
 
-    def test_extracts_camera_token(self):
-        assert stream_from_filename("20260524_1430Z_front.jpg") == "front"
-        assert stream_from_filename("20260605_1200Z_thermal.png") == "thermal"
+    def test_name_only_has_no_stream(self):
+        # A single token after the timestamp is the station name, not a stream.
+        assert stream_from_filename("20260524_1430Z_Zuerich.jpg") is None
+        assert stream_from_filename("20260605_1200Z_cam-0.png") is None
 
-    def test_token_allows_inner_separators(self):
-        assert stream_from_filename("20260605_1200Z_cam-0.jpg") == "cam-0"
-        assert stream_from_filename("20260605_1200Z_roof.cam_1.webp") == "roof.cam_1"
+    def test_extracts_stream_after_name(self):
+        assert stream_from_filename("20260524_1430Z_Zuerich_thermal.jpg") == "thermal"
+        assert stream_from_filename("20260605_1200Z_roof_main.png") == "main"
 
     def test_returns_none_for_non_capture_names(self):
         # Same names that image upload rejects → no stream.
         assert stream_from_filename("default.jpg") is None
         assert stream_from_filename("capture.jpg") is None
         assert stream_from_filename("") is None
+        # Underscores aren't allowed inside a token, so a third token is rejected.
+        assert stream_from_filename("20260605_1200Z_a_b_c.jpg") is None
+
+
+class TestAsciiStationName:
+    """Transliteration of station titles to filename-safe ASCII tokens."""
+
+    def test_expands_german_umlauts(self):
+        assert ascii_station_name("Zürich") == "zuerich"
+        assert ascii_station_name("Österreich") == "oesterreich"
+        assert ascii_station_name("Straße") == "strasse"
+
+    def test_strips_other_accents_via_nfkd(self):
+        assert ascii_station_name("Genève") == "geneve"
+        assert ascii_station_name("Pointe d'Orny") == "pointe-d-orny"
+
+    def test_collapses_separators_to_hyphen_never_underscore(self):
+        assert ascii_station_name("Foo  Bar_Baz") == "foo-bar-baz"
+
+    def test_empty_for_non_latin_or_blank(self):
+        assert ascii_station_name("北京") == ""
+        assert ascii_station_name("") == ""
+
+    def test_caps_length(self):
+        assert len(ascii_station_name("A" * 100)) == 40
+
+
+class TestStationNameToken:
+    """The frozen name token with fallbacks for an empty transliteration."""
+
+    def test_uses_transliterated_title(self):
+        assert station_name_token("Zürich", url_slug="zurich", public_id="abc123") == "zuerich"
+
+    def test_falls_back_to_slug_then_public_id(self):
+        assert station_name_token("北京", url_slug="beijing-1", public_id="abc123") == "beijing-1"
+        assert station_name_token("北京", url_slug="", public_id="abc123") == "abc123"
+
+    def test_never_empty(self):
+        assert station_name_token("", url_slug="", public_id="") == "station"
+
+    def test_strips_underscores_from_fallback(self):
+        assert station_name_token("北京", url_slug="a_b", public_id="abc") == "a-b"
+
+
+class TestInjectNameIfMissing:
+    """The server fills in the station name only when the device left it out."""
+
+    def test_expands_bare_timestamp(self):
+        assert inject_name_if_missing("20260605_1200Z.jpg", "zuerich") == "20260605_1200Z_zuerich.jpg"
+
+    def test_keeps_existing_name(self):
+        assert inject_name_if_missing("20260605_1200Z_Other.jpg", "Zuerich") == "20260605_1200Z_Other.jpg"
+
+    def test_keeps_name_and_stream(self):
+        assert (
+            inject_name_if_missing("20260605_1200Z_Other_thermal.jpg", "Zuerich")
+            == "20260605_1200Z_Other_thermal.jpg"
+        )
+
+    def test_leaves_non_capture_names_untouched(self):
+        assert inject_name_if_missing("random.jpg", "Zuerich") == "random.jpg"
 
 
 class TestDefaultCaptureFilename:
@@ -170,6 +241,10 @@ class TestDefaultCaptureFilename:
         # Must parse back through the capture-name reader so the stored capture
         # timestamp is the stamped minute (seconds truncated).
         assert image_timestamp_from_filename(name) == datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)
+
+    def test_uses_provided_name_token(self):
+        name = default_capture_filename("image/jpeg", name="zuerich", now=self._NOW)
+        assert name == "20260605_1200Z_zuerich.jpg"
 
     def test_extension_follows_content_type(self):
         assert default_capture_filename("image/png", now=self._NOW).endswith("_default.png")

@@ -177,7 +177,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                 {paginatedData.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={columns.length + 1} className="text-center text-sm text-muted-foreground py-8">
-                      No data available for the selected range.
+                      No data available for the selected station and date range.
                     </TableCell>
                   </TableRow>
                 ) : (

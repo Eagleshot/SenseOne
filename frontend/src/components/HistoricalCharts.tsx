@@ -108,7 +108,7 @@ const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, data, timezone, isD
       <div ref={chartRef} className="h-[280px] w-full rounded-lg bg-background p-2">
         {chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center rounded-lg text-sm text-muted-foreground">
-            No data available for the selected range.
+            No data available for the selected date range.
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
@@ -168,12 +168,9 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data }) => {
         <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border/70 bg-card">
           <LineChartIcon className="h-7 w-7 text-muted-foreground" />
         </div>
-        <div className="space-y-1">
-          <p className="text-base font-semibold text-foreground">No data available</p>
-          <p className="text-sm text-muted-foreground">
-            There is no sensor data for the selected range.
-          </p>
-        </div>
+        <p className="text-sm text-muted-foreground">
+          No data available for the selected station and date range.
+        </p>
       </div>
     );
   }

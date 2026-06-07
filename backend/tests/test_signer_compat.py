@@ -21,7 +21,7 @@ from tests import _signing as reference
 
 REPO = Path(__file__).resolve().parents[2]
 OPENMV_DIR = REPO / "clients" / "openmv"
-PYTHON_CLIENT = REPO / "clients" / "python" / "eagleshot_signing.py"
+PYTHON_CLIENT = REPO / "clients" / "python" / "eagleshot.py"
 
 
 def _load_from_path(module_name, path):
@@ -75,8 +75,8 @@ _SENSOR_READING = dict(
     station_id="alp-grimsel",
     secret_b64="ZDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTAx",
     method="POST",
-    path="/v1/ingest/stations/alp-grimsel/sensor-readings",
-    body=b'{"temperature":12.5,"humidity":78}',
+    path="/v1/ingest/stations/alp-grimsel/data",
+    body=b'{"readings":[{"temperature":12.5,"humidity":78}]}',
     timestamp=1748123456,
     nonce_hex="ffffffffffffffffffffffffffffffff",
 )

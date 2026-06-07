@@ -164,7 +164,6 @@ class StationImage(Base):
     content_type: Mapped[str | None] = mapped_column(Text)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    next_online: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     storage_key: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = _created_at()
 

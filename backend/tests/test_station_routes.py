@@ -80,7 +80,7 @@ def test_create_station_assigns_owner_and_private_default(db, monkeypatch):
     assert response.status_code == 201
     body = response.json()
     # id is opaque + stable; the human-friendly slug lives in urlSlug.
-    assert body["urlSlug"] == "Peak-Camera"
+    assert body["urlSlug"] == "peak-camera"
     assert body["id"] and body["id"] != "Peak-Camera"
     assert body["name"] == "Peak Camera"
     assert body["isPublic"] is False
@@ -112,7 +112,7 @@ def test_rename_changes_url_slug_not_id(setup_station_dir, monkeypatch):
 
     detail = client.get(f"/stations/{station_id}").json()
     assert detail["id"] == station_id          # opaque id is stable
-    assert detail["urlSlug"] == "Renamed-Cam"  # pretty slug followed the rename
+    assert detail["urlSlug"] == "renamed-cam"  # pretty slug followed the rename
     assert detail["name"] == "Renamed Cam"
 
 
@@ -180,7 +180,7 @@ def test_image_captures_are_oldest_to_newest_and_respect_count(station_with_samp
 
 def test_sensor_readings_use_requested_window(station_with_history, monkeypatch):
     _, station_id = station_with_history
-    response = _client(monkeypatch).get(f"/stations/{station_id}/sensor-readings?hours=2")
+    response = _client(monkeypatch).get(f"/stations/{station_id}/data?hours=2")
 
     assert response.status_code == 200
     body = response.json()

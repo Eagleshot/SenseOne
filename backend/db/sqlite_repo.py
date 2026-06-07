@@ -29,7 +29,13 @@ from db.session import session_scope
 from metrics_registry import DEFAULT_CHANNEL, metric_unit
 from models import AppConfig
 from station_db import StationStatus, _coerce_battery
-from utils import iso_utc, parse_iso_timestamp, sanitize_station_id, stream_from_filename
+from utils import (
+    ascii_station_name,
+    iso_utc,
+    parse_iso_timestamp,
+    station_name_token as _resolve_name_token,
+    stream_from_filename,
+)
 
 # Config columns persisted on the stations row (runtime status is derived).
 _CONFIG_COLUMNS = (
@@ -54,8 +60,13 @@ def _new_public_id(session) -> str:
 
 
 def _unique_url_slug(session, title: str, exclude_id: uuid.UUID | None = None) -> str:
-    """Pretty URL slug from the title, unique across stations (excluding self)."""
-    base = sanitize_station_id(title, default="station")
+    """Pretty URL slug from the title, unique across stations (excluding self).
+
+    Uses the same lowercase ASCII transliteration as the capture-filename name
+    token (``utils.ascii_station_name``), so a station's slug and its image
+    filenames agree (e.g. 'Zürich' -> 'zuerich').
+    """
+    base = ascii_station_name(title) or "station"
 
     def taken(slug: str) -> bool:
         stmt = select(Station.id).where(Station.url_slug == slug)
@@ -66,7 +77,7 @@ def _unique_url_slug(session, title: str, exclude_id: uuid.UUID | None = None) -
     if not taken(base):
         return base
     for index in range(2, 100000):
-        candidate = sanitize_station_id(f"{base}-{index}", default="station")
+        candidate = f"{base}-{index}"
         if not taken(candidate):
             return candidate
     return f"{base}-{secrets.token_hex(3)}"
@@ -110,7 +121,9 @@ def _status_from_parts(public_id, image_row, reading_row, battery_value=None) ->
     next_online = None
     candidates = []
     if image_row is not None:
-        candidates.append((image_row.captured_at, image_row.next_online))
+        # Images count as device contact (last_online) but no longer carry a
+        # next_online hint; that comes from sensor readings' nextStart.
+        candidates.append((image_row.captured_at, None))
     if reading_row is not None:
         candidates.append((reading_row.recorded_at, reading_row.next_online))
     for ts, nxt in candidates:
@@ -212,6 +225,20 @@ def station_owner_id(public_id: str) -> str | None:
     with session_scope() as session:
         row = _station(session, public_id)
         return str(row.owner_id) if row is not None else None
+
+
+def station_name_token(public_id: str) -> str:
+    """Frozen, filename-safe name token for a station: transliterated title with fallbacks.
+
+    Used for the capture filename (so the dashboard download and the device's
+    local file are named ``<utc>_<name>[_<stream>]``) and returned to devices via
+    the config endpoint.
+    """
+    with session_scope() as session:
+        row = _station(session, public_id)
+        if row is None:
+            return _resolve_name_token("", public_id=public_id)
+        return _resolve_name_token(row.title, url_slug=row.url_slug, public_id=row.public_id)
 
 
 # ----- stations: read --------------------------------------------------------
@@ -431,7 +458,7 @@ def save_station_config(public_id: str, config: AppConfig) -> None:
             row.url_slug = _unique_url_slug(session, config.title, exclude_id=row.id)
 
 
-def append_image(public_id, *, filename, content_type, size_bytes, captured_at, next_online=None) -> None:
+def append_image(public_id, *, filename, content_type, size_bytes, captured_at) -> None:
     with session_scope() as session:
         row = _station(session, public_id)
         if row is None:
@@ -443,7 +470,6 @@ def append_image(public_id, *, filename, content_type, size_bytes, captured_at, 
             content_type=content_type,
             size_bytes=size_bytes,
             captured_at=parse_iso_timestamp(captured_at),
-            next_online=parse_iso_timestamp(next_online),
             storage_key=f"{public_id}/images/{filename}",
         )
         # Re-upload of the same capture minute updates the row instead of
@@ -456,7 +482,6 @@ def append_image(public_id, *, filename, content_type, size_bytes, captured_at, 
                 "content_type": stmt.excluded.content_type,
                 "size_bytes": stmt.excluded.size_bytes,
                 "captured_at": stmt.excluded.captured_at,
-                "next_online": stmt.excluded.next_online,
                 "storage_key": stmt.excluded.storage_key,
             },
         )
@@ -466,18 +491,18 @@ def append_image(public_id, *, filename, content_type, size_bytes, captured_at, 
 def append_reading(
     public_id,
     timestamp,
-    metrics,
+    channel_metrics,
     *,
-    channel=DEFAULT_CHANNEL,
     firmware_version=None,
     wake_reason=None,
     next_online=None,
 ) -> None:
-    """Persist one device check-in: an envelope row plus one observation per metric.
+    """Persist one device check-in: one envelope row plus observations across channels.
 
-    ``metrics`` is the numeric measurement dict; each entry resolves (creating if
-    needed) the (station, metric, channel) datastream and appends an observation.
-    Null values are skipped; booleans are stored as 0/1.
+    ``channel_metrics`` is an iterable of ``(channel, metrics)`` pairs; each metric
+    resolves (creating if needed) the (station, metric, channel) datastream and
+    appends an observation under the shared envelope. Null values are skipped;
+    booleans are stored as 0/1.
     """
     with session_scope() as session:
         row = _station(session, public_id)
@@ -493,18 +518,19 @@ def append_reading(
         )
         session.add(reading)
         session.flush()  # assign reading.id for the observation FK
-        for metric, value in (metrics or {}).items():
-            if value is None:
-                continue
-            datastream = resolve_datastream(session, row.id, metric, channel)
-            session.add(
-                Observation(
-                    datastream_id=datastream.id,
-                    reading_id=reading.id,
-                    recorded_at=recorded_at,
-                    value=float(value),
+        for channel, metrics in channel_metrics:
+            for metric, value in (metrics or {}).items():
+                if value is None:
+                    continue
+                datastream = resolve_datastream(session, row.id, metric, channel)
+                session.add(
+                    Observation(
+                        datastream_id=datastream.id,
+                        reading_id=reading.id,
+                        recorded_at=recorded_at,
+                        value=float(value),
+                    )
                 )
-            )
 
 
 # ----- device secrets --------------------------------------------------------

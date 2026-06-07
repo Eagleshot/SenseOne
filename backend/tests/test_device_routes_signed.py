@@ -76,6 +76,8 @@ def test_signed_device_config_succeeds(signed_client):
     assert body["stationStartMinute"] == 360
     assert body["stationStopMinute"] == 1200
     assert body["captureIntervalMinutes"] == 30
+    # The frozen, filename-safe station name token the device uses for capture filenames.
+    assert body["name"] == "test-station"
     # Fields the device may need for sunrise/sunset are present...
     for key in ("useSunriseSunset", "lat", "lon", "alt"):
         assert key in body
@@ -130,23 +132,21 @@ def test_signed_image_upload_defaults_filename_when_omitted(signed_client):
     )
     assert response.status_code == 201, response.text
     filename = response.json()["filename"]
-    assert re.fullmatch(r"\d{8}_\d{4}Z_default\.jpg", filename), filename
+    # The server stamps the current minute and injects the station's frozen name token.
+    assert re.fullmatch(r"\d{8}_\d{4}Z_test-station\.jpg", filename), filename
     assert _db.latest_image(station_id)["filename"] == filename
 
 
-def test_signed_image_upload_persists_next_online(signed_client):
+def test_signed_image_upload_expands_bare_timestamp_filename(signed_client):
+    # A device may upload just the timestamp; the server injects the station name.
     client, station_id, secret_b64 = signed_client
     path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
     response = _post_signed(
         client, secret_b64, station_id, path, _JPEG_BODY,
-        extra_headers={
-            "Content-Type": "image/jpeg",
-            "X-Filename": "20260524_1430Z_front.jpg",
-            "X-Next-Online": _NEXT_ONLINE,
-        },
+        extra_headers={"Content-Type": "image/jpeg", "X-Filename": "20260524_1430Z.jpg"},
     )
     assert response.status_code == 201, response.text
-    assert _db.latest_image(station_id)["next_online"] == _NEXT_ONLINE
+    assert response.json()["filename"] == "20260524_1430Z_test-station.jpg"
 
 
 def test_image_upload_without_signature_is_rejected(signed_client):
@@ -204,43 +204,68 @@ def test_image_upload_allowed_when_disk_guard_disabled(signed_client, monkeypatc
 def test_signed_sensor_reading_succeeds(signed_client):
     """Verifies dep-ordering: the HMAC dep consumes the body, then Pydantic still parses it."""
     client, station_id, secret_b64 = signed_client
-    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
-    body = json.dumps(_SENSOR_PAYLOAD).encode("utf-8")
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
+    body = json.dumps({"readings": [_SENSOR_PAYLOAD]}).encode("utf-8")
     response = _post_signed(
         client, secret_b64, station_id, path, body,
         extra_headers={"Content-Type": "application/json"},
     )
-    assert response.status_code == 201, response.text
-    parsed = response.json()
-    assert parsed["channel"] == "default"
-    assert parsed["metrics"]["temperature"] == _SENSOR_PAYLOAD["temperature"]
-    assert parsed["metrics"]["humidity"] == _SENSOR_PAYLOAD["humidity"]
+    # Success is a bare 204 with no body.
+    assert response.status_code == 204, response.text
+    assert response.content == b""
+    stored = _db.latest_reading(station_id)["metrics"]
+    assert stored["temperature"] == _SENSOR_PAYLOAD["temperature"]
+    assert stored["humidity"] == _SENSOR_PAYLOAD["humidity"]
     # windSpeed is an unregistered metric: accepted and stored, just without a unit.
-    assert parsed["metrics"]["windSpeed"] == _SENSOR_PAYLOAD["windSpeed"]
+    assert stored["windSpeed"] == _SENSOR_PAYLOAD["windSpeed"]
 
 
 def test_signed_sensor_reading_persists_next_online(signed_client):
     client, station_id, secret_b64 = signed_client
-    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
-    body = json.dumps({**_SENSOR_PAYLOAD, "nextStart": _NEXT_ONLINE}).encode("utf-8")
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
+    body = json.dumps({"readings": [_SENSOR_PAYLOAD], "nextStart": _NEXT_ONLINE}).encode("utf-8")
     response = _post_signed(
         client, secret_b64, station_id, path, body,
         extra_headers={"Content-Type": "application/json"},
     )
-    assert response.status_code == 201, response.text
+    assert response.status_code == 204, response.text
     assert _db.latest_reading(station_id)["next_online"] == _NEXT_ONLINE
+
+
+def test_signed_multi_channel_reading_persists_each_channel(signed_client):
+    client, station_id, secret_b64 = signed_client
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
+    body = json.dumps(
+        {
+            "wakeReason": "timer",
+            "readings": [
+                {"channel": "indoor", "temperature": 21.4, "humidity": 55},
+                {"channel": "outdoor", "temperature": 5.1},
+            ],
+        }
+    ).encode("utf-8")
+    response = _post_signed(
+        client, secret_b64, station_id, path, body,
+        extra_headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 204, response.text
+    # One envelope, observations split across the two channels' datastreams.
+    observations = _db.sensor_observations(station_id)
+    assert {"metric": "temperature", "channel": "indoor", "value": 21.4} in observations
+    assert {"metric": "temperature", "channel": "outdoor", "value": 5.1} in observations
+    assert {"metric": "humidity", "channel": "indoor", "value": 55.0} in observations
 
 
 def test_signed_sparse_sensor_log_succeeds(signed_client):
     client, station_id, secret_b64 = signed_client
-    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
     body = json.dumps(
         {
             "timestamp": "2026-05-24T14:30:00Z",
             "firmwareVersion": "openmv-test",
             "nextStart": "2026-05-24T15:00:00Z",
             "wakeReason": "timer",
-            "voltage": 3.92,
+            "readings": [{"voltage": 3.92}],
         }
     ).encode("utf-8")
     response = _post_signed(
@@ -248,30 +273,96 @@ def test_signed_sparse_sensor_log_succeeds(signed_client):
         extra_headers={"Content-Type": "application/json"},
     )
 
-    assert response.status_code == 201, response.text
-    parsed = response.json()
-    assert parsed["timestamp"] == "2026-05-24T14:30:00Z"
-    assert "temperature" not in parsed["metrics"]
-    assert "nextStart" not in parsed
-    # firmware/wake are envelope labels, not measurements.
-    assert parsed["firmwareVersion"] == "openmv-test"
-    assert parsed["wakeReason"] == "timer"
-    assert parsed["metrics"] == {"voltage": 3.92}
+    assert response.status_code == 204, response.text
+    assert response.content == b""
 
     row = _db.latest_reading(station_id)
     assert row["recorded_at"] == "2026-05-24T14:30:00Z"
     assert row["next_online"] == "2026-05-24T15:00:00Z"
+    # firmware/wake are envelope labels, not measurements.
     assert row["firmware_version"] == "openmv-test"
     assert row["wake_reason"] == "timer"
     assert row["metrics"] == {"voltage": 3.92}
 
 
+def test_envelope_only_heartbeat_succeeds(signed_client):
+    """A check-in with no readings is a valid online-status heartbeat (no observations)."""
+    client, station_id, secret_b64 = signed_client
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
+    body = json.dumps(
+        {"timestamp": "2026-05-24T14:30:00Z", "nextStart": _NEXT_ONLINE}
+    ).encode("utf-8")
+    response = _post_signed(
+        client, secret_b64, station_id, path, body,
+        extra_headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 204, response.text
+    row = _db.latest_reading(station_id)
+    assert row["next_online"] == _NEXT_ONLINE
+    assert row["metrics"] == {}
+
+
+def test_duplicate_channel_is_rejected(signed_client):
+    client, station_id, secret_b64 = signed_client
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
+    body = json.dumps(
+        {"readings": [{"temperature": 1.0}, {"temperature": 2.0}]}  # both -> "default"
+    ).encode("utf-8")
+    response = _post_signed(
+        client, secret_b64, station_id, path, body,
+        extra_headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_flat_top_level_metric_is_rejected(signed_client):
+    """The old flat shape (metrics at the top level) is no longer accepted."""
+    client, station_id, secret_b64 = signed_client
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
+    body = json.dumps({"temperature": 21.0}).encode("utf-8")
+    response = _post_signed(
+        client, secret_b64, station_id, path, body,
+        extra_headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_reserved_label_inside_reading_is_rejected(signed_client):
+    """Envelope labels (wakeReason/firmwareVersion) belong at the top level, not in a reading."""
+    client, station_id, secret_b64 = signed_client
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
+    body = json.dumps({"readings": [{"temperature": 1.0, "wakeReason": "timer"}]}).encode("utf-8")
+    response = _post_signed(
+        client, secret_b64, station_id, path, body,
+        extra_headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_too_many_observations_is_rejected(signed_client):
+    """Total measurements across all readings are capped per check-in."""
+    client, station_id, secret_b64 = signed_client
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
+    # 9 channels x 64 metrics = 576 observations, over the 512 cap (each reading is
+    # within the 64-field per-reading limit, so only the total cap can trip).
+    readings = [
+        {"channel": f"c{i}", **{f"m{j}": 1.0 for j in range(64)}}
+        for i in range(9)
+    ]
+    body = json.dumps({"readings": readings}).encode("utf-8")
+    response = _post_signed(
+        client, secret_b64, station_id, path, body,
+        extra_headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422, response.text
+
+
 def test_sensor_reading_without_signature_is_rejected(signed_client):
     client, station_id, _ = signed_client
-    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
     response = client.post(
         path,
-        content=json.dumps(_SENSOR_PAYLOAD).encode("utf-8"),
+        content=json.dumps({"readings": [_SENSOR_PAYLOAD]}).encode("utf-8"),
         headers={"Content-Type": "application/json"},
     )
     assert response.status_code == 401
@@ -280,9 +371,9 @@ def test_sensor_reading_without_signature_is_rejected(signed_client):
 def test_sensor_reading_with_tampered_body_is_rejected(signed_client):
     """Sign one payload, send a different one — signature should fail."""
     client, station_id, secret_b64 = signed_client
-    path = f"{INGEST_API_PREFIX}/stations/{station_id}/sensor-readings"
-    signed_body = json.dumps(_SENSOR_PAYLOAD).encode("utf-8")
-    tampered = json.dumps({**_SENSOR_PAYLOAD, "battery": 1}).encode("utf-8")
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
+    signed_body = json.dumps({"readings": [_SENSOR_PAYLOAD]}).encode("utf-8")
+    tampered = json.dumps({"readings": [{**_SENSOR_PAYLOAD, "battery": 1}]}).encode("utf-8")
     headers = eagleshot_signing.sign_request(
         station_id=station_id, secret_b64=secret_b64, method="POST", path=path, body=signed_body,
     )

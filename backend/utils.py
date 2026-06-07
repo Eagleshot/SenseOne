@@ -1,6 +1,7 @@
 """Utility functions for the Eagleshot API."""
 
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,10 +20,24 @@ _MEDIA_TYPE_TO_EXTENSION: dict[str, str] = {
     "image/webp": ".webp",
 }
 
+# Capture filename: YYYYMMDD_HHMMZ_<name>[_<stream>].<ext>
+#   group 1 date, 2 time, 3 name (optional), 4 stream (optional), 5 ext.
+# The frozen station-name token sits right after the timestamp; an optional
+# camera/stream token may follow it. Neither token may contain "_" (the
+# delimiter), so name and stream stay unambiguously separable.
 _IMAGE_CAPTURE_NAME = re.compile(
-    r"^(\d{8})_(\d{4})Z_([A-Za-z0-9._-]+)\.(?:jpe?g|png|webp)$",
+    r"^(\d{8})_(\d{4})Z(?:_([A-Za-z0-9.-]+)(?:_([A-Za-z0-9.-]+))?)?\.(jpe?g|png|webp)$",
     re.IGNORECASE,
 )
+
+# German umlauts expand to digraphs (ü→ue …) before the generic NFKD pass, so a
+# Swiss "Zürich" becomes "Zuerich" rather than "Zurich".
+_GERMAN_UMLAUTS = {
+    "ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
+    "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
+}
+_UMLAUT_TABLE = str.maketrans(_GERMAN_UMLAUTS)
+_NAME_TOKEN_MAX_LEN = 40
 
 
 def sanitize_filename(raw_name: str) -> str:
@@ -34,6 +49,35 @@ def sanitize_station_id(raw_name: str | None = None, default: str = "default") -
     """Sanitize a station ID."""
     raw = (raw_name or default).strip()
     return re.sub(r"[^a-zA-Z0-9._-]", "-", raw).strip("._-") or default
+
+
+def ascii_station_name(title: str) -> str:
+    """Transliterate a station title to a lowercase, filename-safe ASCII token.
+
+    German umlauts expand (ü→ue, ö→oe, ä→ae, ß→ss); any remaining non-ASCII is
+    dropped via NFKD. The result is lowercased, separators collapse to ``-`` (never
+    ``_``, which the capture filename uses to delimit the optional stream), and the
+    token is capped to keep paths short. The same token also backs the station's
+    url_slug, so a station's slug and its image filenames agree (e.g. 'Zürich' →
+    'zuerich'). Returns ``""`` when nothing survives (e.g. a non-Latin script) so
+    callers can fall back to a stable id — see :func:`station_name_token`.
+    """
+    expanded = (title or "").translate(_UMLAUT_TABLE)
+    ascii_only = unicodedata.normalize("NFKD", expanded).encode("ascii", "ignore").decode("ascii")
+    token = re.sub(r"[^A-Za-z0-9]+", "-", ascii_only).strip("-").lower()
+    return token[:_NAME_TOKEN_MAX_LEN].strip("-")
+
+
+def station_name_token(title: str, *, url_slug: str = "", public_id: str = "") -> str:
+    """Frozen, lowercase, filename-safe station-name token with fallbacks for an empty transliteration.
+
+    Falls back from the transliterated title to the url_slug, then the opaque
+    public_id, then ``"station"`` — never an empty token. Any ``_`` in a fallback
+    is replaced with ``-`` and the result is lowercased so the token can't break
+    name/stream parsing and matches the url_slug.
+    """
+    token = ascii_station_name(title) or url_slug or public_id or "station"
+    return token.replace("_", "-").lower()
 
 
 def normalize_content_type(raw_content_type: str | None) -> str | None:
@@ -87,7 +131,7 @@ def iso_utc(value: datetime) -> str:
 
 
 def image_timestamp_from_filename(filename: str) -> datetime | None:
-    """Parse a UTC capture timestamp from YYYYMMDD_HHMMZ_<camera> image names."""
+    """Parse a UTC capture timestamp from YYYYMMDD_HHMMZ[_<name>[_<stream>]] image names."""
     match = _IMAGE_CAPTURE_NAME.match(filename)
     if not match:
         return None
@@ -100,29 +144,45 @@ def image_timestamp_from_filename(filename: str) -> datetime | None:
 
 
 def stream_from_filename(filename: str) -> str | None:
-    """Parse the camera/stream token from a YYYYMMDD_HHMMZ_<stream> image name.
+    """Parse the optional camera/stream token from a YYYYMMDD_HHMMZ_<name>[_<stream>] image name.
 
-    Returns the ``<stream>`` token (e.g. ``thermal``, ``main``) or None when the
-    name doesn't match the capture format (the same names rejected on upload).
+    The token right after the timestamp is the (frozen) station name; the stream
+    is the *optional* token after it. Returns the ``<stream>`` token (e.g.
+    ``thermal``) or None when there is no stream or the name doesn't match the
+    capture format (the same names rejected on upload).
     """
     match = _IMAGE_CAPTURE_NAME.match(filename)
-    return match.group(3) if match else None
+    return match.group(4) if match else None
 
 
 def default_capture_filename(
-    content_type: str | None, *, camera: str = "default", now: datetime | None = None
+    content_type: str | None, *, name: str = "default", now: datetime | None = None
 ) -> str:
     """Build a capture-format filename for an upload that omitted ``X-Filename``.
 
-    Stamps the current UTC minute as the capture time and uses a default
-    camera/stream token, so the generated name still matches
-    ``YYYYMMDD_HHMMZ_<camera>.<ext>`` and flows through the same parsing as a
-    device-supplied name. The extension follows the body's content type,
-    defaulting to ``.jpg``.
+    Stamps the current UTC minute as the capture time and uses ``name`` as the
+    name token (the caller passes the station's frozen name token), so the
+    generated name still matches ``YYYYMMDD_HHMMZ_<name>.<ext>`` and flows through
+    the same parsing as a device-supplied name. The extension follows the body's
+    content type, defaulting to ``.jpg``.
     """
     moment = now or datetime.now(timezone.utc)
     extension = _MEDIA_TYPE_TO_EXTENSION.get(normalize_content_type(content_type) or "", ".jpg")
-    return f"{moment:%Y%m%d_%H%MZ}_{camera}{extension}"
+    return f"{moment:%Y%m%d_%H%MZ}_{name}{extension}"
+
+
+def inject_name_if_missing(filename: str, name: str) -> str:
+    """Expand a bare ``YYYYMMDD_HHMMZ.<ext>`` upload name with the station name token.
+
+    A device may upload just the timestamp; the server fills in the station's
+    frozen ASCII name so the stored file is self-identifying. A name that already
+    carries a token (``..._<name>`` or ``..._<name>_<stream>``) is returned
+    unchanged, as is anything that isn't capture-format.
+    """
+    match = _IMAGE_CAPTURE_NAME.match(filename)
+    if match and match.group(3) is None:
+        return f"{match.group(1)}_{match.group(2)}Z_{name}.{match.group(5)}"
+    return filename
 
 
 def is_supported_image_upload(filename: str, content_type: str | None) -> bool:

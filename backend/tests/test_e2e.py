@@ -77,18 +77,18 @@ def test_signed_device_flow(seeded_client):
     client.post("/v1/auth/login", json={"email": "alice@example.com", "password": "devpassword123"})
     secret = client.post(f"/v1/stations/{public_slug}/rotate-device-secret").json()["deviceHmacSecret"]
 
-    s_path = f"/v1/ingest/stations/{public_slug}/sensor-readings"
-    body = json.dumps({"temperature": 1.2, "battery": 88}).encode()
+    s_path = f"/v1/ingest/stations/{public_slug}/data"
+    body = json.dumps({"readings": [{"temperature": 1.2, "battery": 88}]}).encode()
     headers = sign_request(station_id=public_slug, secret_b64=secret, method="POST", path=s_path, body=body)
     headers["Content-Type"] = "application/json"
-    assert client.post(s_path, content=body, headers=headers).status_code == 201
+    assert client.post(s_path, content=body, headers=headers).status_code == 204
 
     i_path = f"/v1/ingest/stations/{public_slug}/images"
     headers = sign_request(station_id=public_slug, secret_b64=secret, method="POST", path=i_path, body=_JPEG)
     headers.update({"Content-Type": "image/jpeg", "X-Filename": "20260601_1200Z_front.jpg"})
     assert client.post(i_path, content=_JPEG, headers=headers).status_code == 201
 
-    assert len(client.get(f"/v1/stations/{public_slug}/sensor-readings?hours=24").json()) >= 1
+    assert len(client.get(f"/v1/stations/{public_slug}/data?hours=24").json()) >= 1
     caps = client.get(f"/v1/stations/{public_slug}/image-captures?count=5").json()
     assert len(caps) == 1
     # image-captures returns API-origin-relative URLs (no /v1); prepend it to hit

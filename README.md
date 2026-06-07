@@ -47,7 +47,7 @@ A local SQLite database holds all metadata (stations, users, readings, image met
 `APP_AUTH_PASSWORD` must be at least 12 characters when auth is enabled.
 `APP_CORS_ORIGINS` is required and should list the exact allowed frontend origins.
 Brute-force protection, login throttling, and account lockout are not built into the application code.
-Devices sign `/v1/ingest/stations/{station_id}/images` and `/v1/ingest/stations/{station_id}/sensor-readings` with the per-station HMAC secret.
+Devices sign `/v1/ingest/stations/{station_id}/images` and `/v1/ingest/stations/{station_id}/data` with the per-station HMAC secret.
 Plain HTTP cannot hide payload contents from someone who can inspect the network, so use it only on a trusted LAN or put the device API behind HTTPS, a VPN, or a private tunnel.
 
 ### 2) Install backend dependencies

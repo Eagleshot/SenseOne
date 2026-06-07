@@ -118,7 +118,6 @@ def upgrade() -> None:
     sa.Column('content_type', sa.Text(), nullable=True),
     sa.Column('size_bytes', sa.BigInteger(), nullable=False),
     sa.Column('captured_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('next_online', sa.DateTime(timezone=True), nullable=True),
     sa.Column('storage_key', sa.Text(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['station_id'], ['stations.id'], ondelete='CASCADE'),

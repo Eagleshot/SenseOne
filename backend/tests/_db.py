@@ -116,6 +116,7 @@ def add_reading(public_id: str, recorded_at, metrics: dict, next_online=None) ->
     the numeric measurements to become observations.
     """
     from db import sqlite_repo
+    from metrics_registry import DEFAULT_CHANNEL
     from utils import iso_utc
 
     data = dict(metrics or {})
@@ -126,7 +127,7 @@ def add_reading(public_id: str, recorded_at, metrics: dict, next_online=None) ->
     sqlite_repo.append_reading(
         public_id,
         timestamp,
-        data,
+        [(DEFAULT_CHANNEL, data)],
         firmware_version=firmware_version,
         wake_reason=wake_reason,
         next_online=next_online_iso,
@@ -179,7 +180,6 @@ def latest_image(public_id: str) -> dict | None:
             "content_type": img.content_type,
             "size_bytes": img.size_bytes,
             "captured_at": _iso(img.captured_at),
-            "next_online": _iso(img.next_online),
         }
 
 
@@ -207,3 +207,23 @@ def latest_reading(public_id: str) -> dict | None:
             "wake_reason": row.wake_reason,
             "metrics": {metric: value for metric, value in observations},
         }
+
+
+def sensor_observations(public_id: str) -> list[dict]:
+    """All stored observations for a station as ``{metric, channel, value}`` dicts.
+
+    Unlike ``latest_reading`` (which merges metrics for the newest envelope), this
+    keeps the channel, so multi-channel check-ins can be verified per channel.
+    """
+    from db.models import Datastream, Observation, Station
+    from db.session import session_scope
+
+    with session_scope() as session:
+        station = session.scalar(select(Station).where(Station.public_id == public_id))
+        rows = session.execute(
+            select(Datastream.metric, Datastream.channel, Observation.value)
+            .join(Observation, Observation.datastream_id == Datastream.id)
+            .where(Datastream.station_id == station.id)
+            .order_by(Datastream.metric, Datastream.channel)
+        ).all()
+        return [{"metric": m, "channel": c, "value": v} for m, c, v in rows]

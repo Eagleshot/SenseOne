@@ -33,7 +33,7 @@ from db.models import Datastream, Observation, SensorReading, Station, StationIm
 from db.sqlite_repo import resolve_datastream  # noqa: E402
 from db.session import get_engine  # noqa: E402
 from metrics_registry import DEFAULT_CHANNEL  # noqa: E402
-from utils import parse_iso_timestamp, sanitize_station_id  # noqa: E402
+from utils import parse_iso_timestamp, sanitize_station_id, station_name_token  # noqa: E402
 
 try:
     from .mock_data import (
@@ -179,14 +179,19 @@ def _seed_images(
     ensure_seed_images(images_dir, overwrite)
 
     now = datetime.now(timezone.utc)
+    # Frozen, filename-safe station name token — the same token the upload path bakes
+    # into stored filenames, so seeded data matches real captures.
+    name_token = station_name_token(
+        station.title, url_slug=station.url_slug, public_id=station.public_id
+    )
     for index in range(count):
         captured_at = now - timedelta(minutes=(count - index) * 30)
         # Alternate cameras so each station has more than one stream.
         stream = SEED_CAMERA_STREAMS[index % len(SEED_CAMERA_STREAMS)]
         source_name = SAMPLE_IMAGE_FILES[index % len(SAMPLE_IMAGE_FILES)]
-        # Device capture-format name (YYYYMMDD_HHMMZ_<camera>) so `stream` parses
-        # from it the same way a real device upload would.
-        filename = f"{captured_at:%Y%m%d_%H%MZ}_{stream}.png"
+        # Device capture-format name (YYYYMMDD_HHMMZ_<name>_<stream>) so `stream`
+        # parses from it the same way a real device upload would.
+        filename = f"{captured_at:%Y%m%d_%H%MZ}_{name_token}_{stream}.png"
         destination = images_dir / filename
         if not destination.exists() or overwrite:
             source_file = images_dir / source_name

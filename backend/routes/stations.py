@@ -180,7 +180,7 @@ def get_station_image_captures(
 
 
 @router.get(
-    "/{station_id}/sensor-readings",
+    "/{station_id}/data",
     response_model=list[SensorSeries],
     summary="Get sensor readings",
     description=(

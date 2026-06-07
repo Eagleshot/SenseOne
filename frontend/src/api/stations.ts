@@ -289,7 +289,7 @@ export const getStationDetail = (baseUrl: string, stationId: string, signal?: Ab
 export const DEFAULT_SENSOR_CHANNEL = "default";
 
 export const getStationSensorReadings = (baseUrl: string, stationId: string, hours: number, signal?: AbortSignal) =>
-  fetchJson<SensorSeriesResponse[]>(stationPath(stationId, `/sensor-readings?hours=${hours}`, baseUrl), {
+  fetchJson<SensorSeriesResponse[]>(stationPath(stationId, `/data?hours=${hours}`, baseUrl), {
     credentials: "include",
     signal,
     throwOnHttpError: false,

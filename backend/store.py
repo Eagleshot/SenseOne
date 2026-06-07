@@ -9,7 +9,6 @@ stable surface the routes import; it delegates to db.sqlite_repo.
 from __future__ import annotations
 
 from db import sqlite_repo
-from metrics_registry import DEFAULT_CHANNEL
 from models import AppConfig
 from station_db import StationStatus
 
@@ -33,6 +32,11 @@ def station_config(slug: str) -> AppConfig:
     return sqlite_repo.station_config(slug) or AppConfig()
 
 
+def station_name_token(slug: str) -> str:
+    """Frozen, filename-safe station name token (transliterated title with fallbacks)."""
+    return sqlite_repo.station_name_token(slug)
+
+
 def save_station_config(slug: str, config: AppConfig) -> None:
     sqlite_repo.save_station_config(slug, config)
 
@@ -49,28 +53,28 @@ def sensor_readings(slug: str, hours: int) -> list[dict[str, object]]:
     return sqlite_repo.sensor_readings(slug, hours)
 
 
-def append_image(slug: str, *, filename, content_type, size_bytes, captured_at, next_online=None) -> None:
+def append_image(slug: str, *, filename, content_type, size_bytes, captured_at) -> None:
     sqlite_repo.append_image(
         slug, filename=filename, content_type=content_type, size_bytes=size_bytes,
-        captured_at=captured_at, next_online=next_online,
+        captured_at=captured_at,
     )
 
 
 def append_reading(
     slug: str,
     timestamp,
-    metrics,
+    channel_metrics,
     *,
-    channel=DEFAULT_CHANNEL,
     firmware_version=None,
     wake_reason=None,
     next_online=None,
 ) -> None:
+    """Persist one device check-in. ``channel_metrics`` is an iterable of
+    ``(channel, metrics)`` pairs — one envelope row, observations across channels."""
     sqlite_repo.append_reading(
         slug,
         timestamp,
-        metrics,
-        channel=channel,
+        channel_metrics,
         firmware_version=firmware_version,
         wake_reason=wake_reason,
         next_online=next_online,
