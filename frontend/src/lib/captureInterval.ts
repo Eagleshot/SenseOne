@@ -20,13 +20,16 @@ export const getCaptureIntervalSelection = (value: string) =>
 export const getCustomCaptureIntervalInput = (value: string) => (isPresetCaptureInterval(value) ? "" : value);
 
 export const validateCaptureInterval = (value: string) => {
-  if (!value.trim()) {
+  const trimmed = value.trim();
+  if (!trimmed) {
     return "Enter a custom interval in minutes.";
   }
 
-  const numericValue = Number(value);
+  // Only plain decimal integers — reject the hex/exponential/'+' forms Number()
+  // would otherwise accept (e.g. "0x10", "1e3", "+30", "1.5").
+  const numericValue = Number(trimmed);
   if (
-    !Number.isInteger(numericValue) ||
+    !/^\d+$/.test(trimmed) ||
     numericValue < MIN_CAPTURE_INTERVAL_MINUTES ||
     numericValue > MAX_CAPTURE_INTERVAL_MINUTES
   ) {

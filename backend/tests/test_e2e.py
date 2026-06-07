@@ -11,30 +11,17 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from tests._db import TEST_DATABASE_URL as TEST_DB, stamp_head
 from tests._signing import sign_request
 
 _JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00" + b"\xff\xdb\x00C\x00" + b"\x08" * 64 + b"\xff\xd9"
 
 
 @pytest.fixture
-def seeded_client(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", TEST_DB)
+def seeded_client(db, tmp_data_dir, monkeypatch):
+    # `db` gives a fresh schema bound to the test DB (and stamps alembic head once);
+    # we only add this module's CORS/data-dir env and seed a minimal owner + stations.
     monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
-    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
-
-    import db.session as session_module
-
-    session_module._engine = None  # force a fresh engine bound to TEST_DATABASE_URL
-    session_module._sessionmaker = None
-
-    from db.models import Base
-    from db.session import get_engine
-
-    engine = get_engine()
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    stamp_head()  # so create_app()'s startup `alembic upgrade head` is a no-op
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
 
     import store
     import users
@@ -84,8 +71,11 @@ def test_signed_device_flow(seeded_client):
     assert client.post(s_path, content=body, headers=headers).status_code == 204
 
     i_path = f"/v1/ingest/stations/{public_slug}/images"
-    headers = sign_request(station_id=public_slug, secret_b64=secret, method="POST", path=i_path, body=_JPEG)
-    headers.update({"Content-Type": "image/jpeg", "X-Filename": "20260601_1200Z_front.jpg"})
+    headers = sign_request(
+        station_id=public_slug, secret_b64=secret, method="POST", path=i_path, body=_JPEG,
+        x_filename="20260601_1200Z_front.jpg",
+    )
+    headers["Content-Type"] = "image/jpeg"
     assert client.post(i_path, content=_JPEG, headers=headers).status_code == 201
 
     assert len(client.get(f"/v1/stations/{public_slug}/data?hours=24").json()) >= 1

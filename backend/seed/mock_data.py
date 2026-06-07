@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from utils import iso_utc
+
 WEBCAM_SEED = [
     {
         "id": "silvretta-glacier",
@@ -159,10 +161,6 @@ FIRMWARE_VERSIONS = ["1.0.3", "1.1.0", "1.2.0"]
 WAKE_REASONS = ["timer", "timer", "timer", "boot", "motion"]
 
 
-def _iso(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
 def generate_historical_data(
     hours: int = 24, station_id: str | None = None
 ) -> list[dict[str, Any]]:
@@ -192,7 +190,7 @@ def generate_historical_data(
         battery_level = max(20, round(battery_base - i * 0.8 + rng.random() * 5))
         data.append(
             {
-                "timestamp": _iso(timestamp),
+                "timestamp": iso_utc(timestamp),
                 "temperature": round((base_temp + temp_variation) * 10) / 10,
                 "humidity": round(
                     55

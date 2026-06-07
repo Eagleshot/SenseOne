@@ -134,6 +134,7 @@ export const parseForecast = (forecastData: ForecastResponse, fallbackOffsetSeco
   >();
 
   forecastData.list?.forEach((item) => {
+    if (!isFiniteNumber(item.dt)) return;  // skip entries with a missing/invalid timestamp
     const date = new Date(item.dt * 1000);
     const key = formatDateKeyWithOffset(date, offsetSeconds);
     const tempMin = isFiniteNumber(item.main?.temp_min) ? item.main!.temp_min! : item.main?.temp;

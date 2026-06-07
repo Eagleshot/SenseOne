@@ -6,6 +6,8 @@ import shutil
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi.encoders import jsonable_encoder
+from pydantic import ValidationError
 
 import store
 from config import get_data_dir
@@ -297,13 +299,30 @@ async def upload_station_image(
             )
         },
     },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {"schema": SensorReadingRequest.model_json_schema()}
+            },
+        }
+    },
 )
 async def create_sensor_reading(
     station_id: ValidStationId,
-    payload: SensorReadingRequest,
     request: Request,
 ) -> Response:
-    await verify_station_signature(station_id, request)
+    # Verify the signature before parsing the body so an unauthenticated caller
+    # can't trigger full Pydantic validation (matches the image route's verify-first
+    # ordering). The body param is documented via openapi_extra above instead.
+    body = await verify_station_signature(station_id, request)
+    try:
+        payload = SensorReadingRequest.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=jsonable_encoder(exc.errors()),
+        ) from exc
     timestamp = payload.timestamp or iso_utc(datetime.now(timezone.utc))
     channel_metrics = [(reading.resolved_channel, reading.metrics) for reading in payload.readings]
     store.append_reading(

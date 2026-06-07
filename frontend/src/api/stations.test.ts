@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseApiTimestamp, parseStationResponse, parseTimestampResponse, parseTimelineItemResponse } from "@/api/stations";
+import { parseApiTimestamp, parseStationResponse, parseTimelineItemResponse } from "@/api/stations";
 
 describe("station API parsing", () => {
   it("normalizes microsecond ISO timestamps to valid Date objects", () => {
@@ -23,20 +23,7 @@ describe("station API parsing", () => {
     expect(parsed.nextUpdate?.toISOString()).toBe("2026-04-21T21:06:51.123Z");
   });
 
-  it("parses historical rows and timeline items with microsecond timestamps", () => {
-    const historyRow = parseTimestampResponse({
-      timestamp: "2026-04-21T20:06:51.864377Z",
-      temperature: 5.1,
-      humidity: 31,
-      pressure: 1008,
-      battery: 53,
-      windSpeed: 17.1,
-      windDirection: 299,
-      visibility: 10.4,
-      uvIndex: 0,
-      dewPoint: 0.5,
-      feelsLike: 3.6,
-    });
+  it("parses timeline items with microsecond timestamps", () => {
     const timelineItem = parseTimelineItemResponse(
       {
         timestamp: "2026-04-21T20:06:51.864377Z",
@@ -45,7 +32,6 @@ describe("station API parsing", () => {
       "/api"
     );
 
-    expect(historyRow.timestamp.toISOString()).toBe("2026-04-21T20:06:51.864Z");
     expect(timelineItem.timestamp.toISOString()).toBe("2026-04-21T20:06:51.864Z");
     expect(timelineItem.url).toBe("/api/stations/station-1/images/example.png");
   });

@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 
 import { motion } from "framer-motion";
 import { Thermometer, Droplets, Wind, Gauge, Eye, Sunrise, Sunset, Navigation, CloudOff } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
 
 import { fetchStationWeather, formatTimeLabelWithOffset, type ForecastDay, type WeatherState } from "@/api/weather";
 import { useApp } from "@/contexts/AppContext";
 import { apiBaseUrl, isAbortError } from "@/lib/apiClient";
+import { formatRelativeShort } from "@/lib/datetime";
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 import { cn } from "@/lib/utils";
 import { baseWeatherTheme, resolveWeatherTheme } from "@/lib/weatherThemes";
@@ -35,6 +35,10 @@ export const WeatherDetail: React.FC = () => {
     const fetchWeather = async () => {
       // Skip polling while the tab is hidden to avoid wasting OpenWeather quota.
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        // ...but don't leave the panel stuck on its initial loading skeleton;
+        // the visibilitychange handler re-fetches when the tab becomes visible.
+        setIsLoading(false);
+        setIsForecastLoading(false);
         return;
       }
       setIsLoading(true);
@@ -85,10 +89,7 @@ export const WeatherDetail: React.FC = () => {
   const updatedLabel = useMemo(() => {
     if (isLoading) return LOADING_LABEL;
     if (!weather) return "Updated unavailable.";
-    const relative = formatDistanceToNow(weather.updatedAt, { addSuffix: true })
-      .replace("about ", "")
-      .replace(/minutes?/g, "min.");
-    return `Updated ${relative}.`;
+    return `Updated ${formatRelativeShort(weather.updatedAt)}.`;
   }, [isLoading, weather]);
 
   const daylightLabel = isLoading

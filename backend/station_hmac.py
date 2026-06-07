@@ -16,17 +16,20 @@ The signature is HMAC-SHA256 over the canonical string:
     <nonce>\\n
     <METHOD_UPPERCASE>\\n
     <request_path_no_query>\\n
-    <sha256(body)_hex_lowercase>
+    <sha256(body)_hex_lowercase>\\n
+    <x_filename_or_empty>
 
 Notes:
 - Query strings are NOT signed in v1. Don't put security-relevant data in
   the query string on signed routes.
+- The X-Filename header IS signed (it sets an uploaded image's capture
+  timestamp/stream, so it must not be tamperable). Requests that don't send
+  X-Filename sign an empty string for that line. Other headers are not signed.
 - The shared secret never goes over the wire.
 - Replay protection: timestamp must be within +-TIMESTAMP_SKEW_SECONDS,
   and each (station_id, nonce) is single-use within NONCE_RETENTION_SECONDS.
 """
 
-import base64
 import hashlib
 import hmac
 import secrets
@@ -39,6 +42,7 @@ from fastapi import HTTPException, Request, status
 from config import get_data_dir
 from db import sqlite_repo
 from station_access import require_station_exists
+from utils import b64url_decode_nopad, b64url_encode_nopad
 
 
 SIGNATURE_VERSION = "v1"
@@ -50,18 +54,9 @@ MIN_NONCE_HEX_LENGTH = 16
 SIGNATURE_HEX_LENGTH = 64
 
 
-def _b64encode_nopad(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _b64decode_nopad(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(value + padding)
-
-
 def generate_device_hmac_secret_b64() -> str:
     """Return a fresh base64url-encoded device HMAC secret (no padding)."""
-    return _b64encode_nopad(secrets.token_bytes(DEVICE_HMAC_SECRET_BYTES))
+    return b64url_encode_nopad(secrets.token_bytes(DEVICE_HMAC_SECRET_BYTES))
 
 
 def provision_device_hmac_secret(station_id: str) -> str:
@@ -83,6 +78,7 @@ def canonical_signing_string(
     method: str,
     path: str,
     body_sha256_hex: str,
+    x_filename: str = "",
 ) -> bytes:
     """Build the canonical string fed to HMAC. Must match client implementations exactly."""
     return "\n".join((
@@ -93,6 +89,7 @@ def canonical_signing_string(
         method.upper(),
         path,
         body_sha256_hex,
+        x_filename,
     )).encode("ascii")
 
 
@@ -158,7 +155,9 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
     if not (header_station and raw_timestamp and nonce and raw_signature):
         _reject("Missing signed-request headers.")
 
-    if not hmac.compare_digest(header_station, station_id):
+    # isascii() guards compare_digest, which raises TypeError on non-ASCII str;
+    # a non-ASCII station id can never match the (ASCII) path id anyway.
+    if not header_station.isascii() or not hmac.compare_digest(header_station, station_id):
         _reject("X-Station-Id does not match request path.")
 
     scheme_prefix = SIGNATURE_VERSION + "="
@@ -190,13 +189,21 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
         _reject("Station has no device HMAC secret provisioned.")
         return b""
     try:
-        secret = _b64decode_nopad(secret_b64)
-    except (ValueError, base64.binascii.Error):
+        secret = b64url_decode_nopad(secret_b64)
+    except ValueError:  # binascii.Error subclasses ValueError
         _reject("Station device HMAC secret is malformed.")
         return b""
 
     body = await request.body()
     body_sha256_hex = hashlib.sha256(body).hexdigest()
+
+    # X-Filename is signed (see module docstring): it sets an uploaded image's
+    # capture timestamp/stream, so an on-path attacker must not be able to alter
+    # it. An absent header signs as "". Non-ASCII can never match a valid
+    # signature (and would crash the ASCII canonical), so reject it as a 401.
+    x_filename = request.headers.get("x-filename", "")
+    if not x_filename.isascii():
+        _reject("Invalid X-Filename.")
 
     canonical = canonical_signing_string(
         station_id=station_id,
@@ -205,6 +212,7 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
         method=request.method,
         path=request.url.path,
         body_sha256_hex=body_sha256_hex,
+        x_filename=x_filename,
     )
     expected_sig_hex = hmac.new(secret, canonical, hashlib.sha256).hexdigest()
 

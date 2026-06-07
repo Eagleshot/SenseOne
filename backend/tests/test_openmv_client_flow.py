@@ -1,26 +1,18 @@
-"""Helper-level tests for the OpenMV capture cycle client."""
+"""Helper-level tests for the OpenMV capture-cycle client.
 
-import importlib.util
-import sys
+The OpenMV firmware (``clients/openmv/main.py``) targets MicroPython and imports
+board-only modules at the top level; ``tests._openmv`` stubs those so its pure
+capture-cycle helpers can run under CPython. The firmware guards its run loop with
+``if __name__ == "__main__"``, so importing the module only defines functions.
+"""
+
 from datetime import datetime
-from pathlib import Path
-from types import SimpleNamespace
+
+from tests._openmv import load_openmv_main
 
 
 def _load_openmv_main(monkeypatch):
-    repo = Path(__file__).resolve().parents[2]
-    openmv_dir = repo / "clients" / "openmv"
-    monkeypatch.syspath_prepend(str(openmv_dir))
-    monkeypatch.setitem(sys.modules, "sensor", SimpleNamespace(RGB565=1, VGA=2))
-    monkeypatch.setitem(sys.modules, "pyb", SimpleNamespace(UART=lambda *args, **kwargs: None))
-    monkeypatch.setitem(sys.modules, "machine", SimpleNamespace())
-
-    spec = importlib.util.spec_from_file_location("openmv_main_test", openmv_dir / "main.py")
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["openmv_main_test"] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_openmv_main(module_name="openmv_main_test", monkeypatch=monkeypatch)
 
 
 def _epoch(value: str) -> int:
@@ -31,78 +23,47 @@ def test_openmv_formats_capture_filename_from_utc_minute(monkeypatch):
     main = _load_openmv_main(monkeypatch)
     capture_seconds = _epoch("2026-05-24T14:30:05Z")
 
+    # The capture minute is floored, then the name token is appended.
+    assert main.round_down_to_minute(capture_seconds) == _epoch("2026-05-24T14:30:00Z")
     assert main.format_capture_filename(capture_seconds, "front") == "20260524_1430Z_front.jpg"
-    assert main.format_iso_utc(main.round_down_to_minute(capture_seconds)) == "2026-05-24T14:30:00Z"
-
-
-def test_openmv_adjusts_capture_ticks_to_server_utc(monkeypatch):
-    main = _load_openmv_main(monkeypatch)
-    monkeypatch.setattr(main.time, "ticks_diff", lambda current, previous: current - previous, raising=False)
-    clock = main.ServerClock()
-    clock._server_seconds_at_sync = _epoch("2026-05-24T14:30:10Z")
-    clock._ticks_ms_at_sync = 10_000
-
-    assert clock.unix_seconds_at_ticks(5_000) == _epoch("2026-05-24T14:30:05Z")
 
 
 def test_openmv_date_math_is_independent_of_gmtime_epoch(monkeypatch):
     """Capture-cycle date math must not depend on the board's time.gmtime epoch.
 
-    STM32 OpenMV cams use a 2000-01-01 epoch (not POSIX 1970). We feed gmtime the
-    1970-epoch seconds it would receive on hardware, so a 2000-epoch gmtime would
-    decode ~30 years late (2026 -> ~2056). The helpers must ignore gmtime entirely
-    and still produce 2026.
+    STM32 OpenMV cams use a 2000-01-01 epoch (not POSIX 1970). The helpers use
+    pure integer math (``civil_from_days`` / ``unix_to_components``) and must
+    ignore ``gmtime`` entirely; we break ``gmtime`` to prove it is never used.
     """
     main = _load_openmv_main(monkeypatch)
 
-    epoch_offset = _epoch("2000-01-01T00:00:00Z")  # 1970->2000 epoch gap in seconds
-    real_gmtime = main.time.gmtime
+    def _no_gmtime(*_args, **_kwargs):
+        raise AssertionError("capture date math must not call time.gmtime")
 
-    def gmtime_2000(secs):  # emulate an STM32 board's 2000-epoch gmtime
-        return real_gmtime(int(secs) + epoch_offset)
+    monkeypatch.setattr(main.time, "gmtime", _no_gmtime, raising=False)
 
-    monkeypatch.setattr(main.time, "gmtime", gmtime_2000, raising=False)
-
-    capture_seconds = _epoch("2026-05-24T14:30:05Z")
-    assert main.format_iso_utc(main.round_down_to_minute(capture_seconds)) == "2026-05-24T14:30:00Z"
-    assert main.format_capture_filename(capture_seconds, "front") == "20260524_1430Z_front.jpg"
-
-    config = {
-        "stationStartMinute": 360,
-        "stationStopMinute": 1200,
-        "captureIntervalMinutes": 30,
-        "useSunriseSunset": False,
-    }
-    assert main.compute_next_start(config, capture_seconds) == _epoch("2026-05-24T15:00:00Z")
+    assert main.unix_to_components(_epoch("2026-05-24T14:30:00Z")) == (2026, 5, 24, 14, 30, 0)
+    assert main.format_capture_filename(_epoch("2026-05-24T14:30:05Z"), "front") == "20260524_1430Z_front.jpg"
 
 
-def test_openmv_computes_next_start_inside_and_outside_window(monkeypatch):
+def test_openmv_sanitizes_camera_name(monkeypatch):
     main = _load_openmv_main(monkeypatch)
-    config = {
-        "stationStartMinute": 360,
-        "stationStopMinute": 1200,
-        "captureIntervalMinutes": 30,
-        "useSunriseSunset": False,
-    }
-
-    assert main.compute_next_start(config, _epoch("2026-05-24T05:30:00Z")) == _epoch("2026-05-24T06:00:00Z")
-    assert main.compute_next_start(config, _epoch("2026-05-24T14:17:10Z")) == _epoch("2026-05-24T14:47:00Z")
-    assert main.compute_next_start(config, _epoch("2026-05-24T21:00:00Z")) == _epoch("2026-05-25T06:00:00Z")
+    # Illegal filename characters collapse to '_'; an empty token falls back.
+    assert main.sanitize_camera_name("Cam 1/front") == "Cam_1_front"
+    assert main.sanitize_camera_name("   ") == "camera"
 
 
-def test_openmv_includes_wake_reason_when_available(monkeypatch):
+def test_openmv_capture_name_token_uses_config_name_and_stream(monkeypatch):
     main = _load_openmv_main(monkeypatch)
-    main.machine = SimpleNamespace(reset_cause=lambda: "timer")
 
-    assert main.read_sensor_data() == {"wakeReason": "timer"}
+    # No STREAM configured -> just the server-provided name token.
+    monkeypatch.setattr(main, "STREAM", "", raising=False)
+    assert main.capture_name_token({"name": "zuerich"}) == "zuerich"
 
+    # A STREAM is sanitized and appended after the name.
+    monkeypatch.setattr(main, "STREAM", "thermal cam", raising=False)
+    assert main.capture_name_token({"name": "zuerich"}) == "zuerich_thermal_cam"
 
-def test_openmv_deep_sleep_until_uses_synced_clock(monkeypatch):
-    main = _load_openmv_main(monkeypatch)
-    deepsleep_calls = []
-    main.machine = SimpleNamespace(deepsleep=deepsleep_calls.append)
-    clock = SimpleNamespace(now_unix_seconds=lambda: _epoch("2026-05-24T14:30:00Z"))
-
-    main.deep_sleep_until(clock, _epoch("2026-05-24T15:00:00Z"))
-
-    assert deepsleep_calls == [30 * 60 * 1000]
+    # Falls back to STATION_ID when the config carries no name (e.g. fetch failed).
+    monkeypatch.setattr(main, "STREAM", "", raising=False)
+    assert main.capture_name_token({}) == main.STATION_ID

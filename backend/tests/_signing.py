@@ -26,10 +26,15 @@ def sign_request(
     method: str,
     path: str,
     body: bytes,
+    x_filename: str = "",
     timestamp: int | None = None,
     nonce_hex: str | None = None,
 ) -> dict[str, str]:
-    """Return the four signed-request headers for a device call."""
+    """Return the signed-request headers for a device call.
+
+    When ``x_filename`` is given it is folded into the signature and returned as
+    the ``X-Filename`` header, so the signed value and the sent value can't drift.
+    """
     if timestamp is None:
         timestamp = int(time.time())
     if nonce_hex is None:
@@ -42,12 +47,16 @@ def sign_request(
         method=method,
         path=path,
         body_sha256_hex=hashlib.sha256(body).hexdigest(),
+        x_filename=x_filename,
     )
     secret = _b64decode_nopad(secret_b64)
     signature_hex = hmac.new(secret, canonical, hashlib.sha256).hexdigest()
-    return {
+    headers = {
         "X-Station-Id": station_id,
         "X-Timestamp": str(int(timestamp)),
         "X-Nonce": nonce_hex,
         "X-Signature": f"{SIGNATURE_VERSION}={signature_hex}",
     }
+    if x_filename:
+        headers["X-Filename"] = x_filename
+    return headers

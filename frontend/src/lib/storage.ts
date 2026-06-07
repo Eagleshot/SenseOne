@@ -18,7 +18,13 @@ export const getStored = <T = string>(
 ): T => {
   const value = readStoredValue(key);
   if (value === null) return fallback;
-  return parse ? parse(value) : (value as T);
+  if (!parse) return value as T;
+  try {
+    return parse(value);
+  } catch {
+    // A corrupt stored value (e.g. truncated JSON) falls back rather than throwing.
+    return fallback;
+  }
 };
 
 export const getStoredString = (key: string, fallback: string) => getStored(key, fallback);

@@ -124,9 +124,15 @@ def _seed_readings(session: Session, station: Station, seed: dict, overwrite: bo
         session.execute(delete(SensorReading).where(SensorReading.station_id == station.id))
         session.execute(delete(Datastream).where(Datastream.station_id == station.id))
 
+    now = datetime.now(timezone.utc)
+    # Honor the seed's declared status: anchor the generated timeline so its newest
+    # reading lands on `lastUpdateMinutesAgo`, and only give the station a future
+    # next_online (i.e. render it online) when the seed says isOnline.
+    last_seen = now - timedelta(minutes=int(seed.get("lastUpdateMinutesAgo") or 0))
+    shift = last_seen - now
     next_online = None
-    if seed.get("nextUpdateMinutesIn") is not None:
-        next_online = datetime.now(timezone.utc) + timedelta(minutes=int(seed["nextUpdateMinutesIn"]))
+    if seed.get("isOnline", True) and seed.get("nextUpdateMinutesIn") is not None:
+        next_online = now + timedelta(minutes=int(seed["nextUpdateMinutesIn"]))
 
     rows = generate_historical_data(SENSOR_HISTORY_HOURS, station_id=station.url_slug)
     datastreams: dict[str, Datastream] = {}
@@ -134,7 +140,7 @@ def _seed_readings(session: Session, station: Station, seed: dict, overwrite: bo
         measurements = {k: v for k, v in row.items() if k != "timestamp"}
         firmware_version = measurements.pop("firmwareVersion", None)
         wake_reason = measurements.pop("wakeReason", None)
-        recorded_at = parse_iso_timestamp(row["timestamp"])
+        recorded_at = parse_iso_timestamp(row["timestamp"]) + shift
         reading = SensorReading(
             station_id=station.id,
             recorded_at=recorded_at,
@@ -162,7 +168,7 @@ def _seed_readings(session: Session, station: Station, seed: dict, overwrite: bo
 
 
 def _seed_images(
-    session: Session, station: Station, count: int, overwrite: bool, data_dir: Path
+    session: Session, station: Station, seed: dict, count: int, overwrite: bool, data_dir: Path
 ) -> None:
     if count <= 0:
         return
@@ -178,14 +184,16 @@ def _seed_images(
     images_dir.mkdir(parents=True, exist_ok=True)
     ensure_seed_images(images_dir, overwrite)
 
-    now = datetime.now(timezone.utc)
+    # Anchor the timeline to the seed's declared "last update" time so the newest
+    # image isn't newer than the newest reading (which would override last_online).
+    last_seen = datetime.now(timezone.utc) - timedelta(minutes=int(seed.get("lastUpdateMinutesAgo") or 0))
     # Frozen, filename-safe station name token — the same token the upload path bakes
     # into stored filenames, so seeded data matches real captures.
     name_token = station_name_token(
         station.title, url_slug=station.url_slug, public_id=station.public_id
     )
     for index in range(count):
-        captured_at = now - timedelta(minutes=(count - index) * 30)
+        captured_at = last_seen - timedelta(minutes=(count - index) * 30)
         # Alternate cameras so each station has more than one stream.
         stream = SEED_CAMERA_STREAMS[index % len(SEED_CAMERA_STREAMS)]
         source_name = SAMPLE_IMAGE_FILES[index % len(SAMPLE_IMAGE_FILES)]
@@ -245,7 +253,7 @@ def main() -> None:
             owner = _ensure_owner(session, owner_email, args.owner_password)
             station = _upsert_station(session, seed, owner, args.overwrite)
             _seed_readings(session, station, seed, args.overwrite)
-            _seed_images(session, station, args.count, args.overwrite, data_dir)
+            _seed_images(session, station, seed, args.count, args.overwrite, data_dir)
 
         session.commit()
 

@@ -101,28 +101,27 @@ export const orderMetricKeys = (keys: Iterable<string>): string[] => {
 const metricEntries = (row: SensorData): [string, SensorMetricValue | Date | undefined][] =>
   Object.entries(row).filter(([key]) => key !== "timestamp");
 
-/**
- * Metric keys to show as data-table columns, ordered for display.
- * Excludes "info" metrics (device housekeeping surfaced elsewhere, e.g.
- * firmware version in the settings header).
- */
-export const collectMetricKeys = (data: SensorData[]): string[] => {
+const collectKeys = (
+  data: SensorData[],
+  include: (key: string, value: SensorMetricValue | Date | undefined) => boolean,
+): string[] => {
   const keys = new Set<string>();
   for (const row of data) {
     for (const [key, value] of metricEntries(row)) {
-      if (value !== undefined && metricDef(key)?.kind !== "info") keys.add(key);
+      if (include(key, value)) keys.add(key);
     }
   }
   return orderMetricKeys(keys);
 };
 
+/**
+ * Metric keys to show as data-table columns, ordered for display.
+ * Excludes "info" metrics (device housekeeping surfaced elsewhere, e.g.
+ * firmware version in the settings header).
+ */
+export const collectMetricKeys = (data: SensorData[]): string[] =>
+  collectKeys(data, (key, value) => value !== undefined && metricDef(key)?.kind !== "info");
+
 /** Metric keys with at least one numeric value — i.e. the chartable metrics. */
-export const collectNumericMetricKeys = (data: SensorData[]): string[] => {
-  const keys = new Set<string>();
-  for (const row of data) {
-    for (const [key, value] of metricEntries(row)) {
-      if (typeof value === "number") keys.add(key);
-    }
-  }
-  return orderMetricKeys(keys);
-};
+export const collectNumericMetricKeys = (data: SensorData[]): string[] =>
+  collectKeys(data, (_key, value) => typeof value === "number");

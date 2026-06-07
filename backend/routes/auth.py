@@ -5,7 +5,6 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from models import LoginRequest, AuthResponse, MeResponse
 from auth import (
-    AUTH_SESSIONS,
     bearer_scheme,
     check_login_throttle,
     clear_login_failures,
@@ -13,6 +12,7 @@ from auth import (
     ensure_auth_configured,
     get_current_user,
     record_login_failure,
+    remove_session,
     resolve_session_token,
 )
 from constants import AUTH_COOKIE_NAME, AUTH_COOKIE_SAMESITE, auth_cookie_secure
@@ -97,6 +97,6 @@ def logout(
 ) -> dict:
     token = resolve_session_token(request, credentials)
     if token:
-        AUTH_SESSIONS.pop(token, None)
+        remove_session(token)
     response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
     return {"success": True}

@@ -51,11 +51,14 @@ def signed_client(setup_station_dir, monkeypatch):
 
 
 def _post_signed(client, secret_b64, station_id, path, body, extra_headers=None):
+    extra_headers = dict(extra_headers or {})
+    # X-Filename is part of the signature; the rest (e.g. Content-Type) is not.
+    x_filename = extra_headers.pop("X-Filename", "")
     headers = eagleshot_signing.sign_request(
         station_id=station_id, secret_b64=secret_b64, method="POST", path=path, body=body,
+        x_filename=x_filename,
     )
-    if extra_headers:
-        headers.update(extra_headers)
+    headers.update(extra_headers)
     return client.post(path, content=body, headers=headers)
 
 
@@ -147,6 +150,24 @@ def test_signed_image_upload_expands_bare_timestamp_filename(signed_client):
     )
     assert response.status_code == 201, response.text
     assert response.json()["filename"] == "20260524_1430Z_test-station.jpg"
+
+
+def test_signed_image_upload_rejects_tampered_filename(signed_client):
+    """Sign one X-Filename, send a different (still valid-format) one — must fail.
+
+    X-Filename sets the stored image's capture timestamp/stream, so it is part of
+    the signature; an on-path attacker relabelling it can no longer slip through.
+    """
+    client, station_id, secret_b64 = signed_client
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
+    headers = eagleshot_signing.sign_request(
+        station_id=station_id, secret_b64=secret_b64, method="POST", path=path, body=_JPEG_BODY,
+        x_filename="20260524_1430Z_front.jpg",
+    )
+    headers["X-Filename"] = "20251201_0000Z_front.jpg"  # forge the capture time
+    headers["Content-Type"] = "image/jpeg"
+    response = client.post(path, content=_JPEG_BODY, headers=headers)
+    assert response.status_code == 401
 
 
 def test_image_upload_without_signature_is_rejected(signed_client):
@@ -302,56 +323,29 @@ def test_envelope_only_heartbeat_succeeds(signed_client):
     assert row["metrics"] == {}
 
 
-def test_duplicate_channel_is_rejected(signed_client):
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # Duplicate channel: both readings collapse to the "default" channel.
+        pytest.param({"readings": [{"temperature": 1.0}, {"temperature": 2.0}]}, id="duplicate-channel"),
+        # The old flat shape (metrics at the top level) is no longer accepted.
+        pytest.param({"temperature": 21.0}, id="flat-top-level-metric"),
+        # Envelope labels (wakeReason/firmwareVersion) belong at the top level, not in a reading.
+        pytest.param({"readings": [{"temperature": 1.0, "wakeReason": "timer"}]}, id="reserved-label-in-reading"),
+        # 9 channels x 64 metrics = 576 observations, over the 512 per-check-in cap (each
+        # reading is within the 64-field per-reading limit, so only the total cap can trip).
+        pytest.param(
+            {"readings": [{"channel": f"c{i}", **{f"m{j}": 1.0 for j in range(64)}} for i in range(9)]},
+            id="too-many-observations",
+        ),
+    ],
+)
+def test_invalid_sensor_payload_is_rejected(signed_client, payload):
+    """Malformed sensor payloads are rejected with 422 before anything is stored."""
     client, station_id, secret_b64 = signed_client
     path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
-    body = json.dumps(
-        {"readings": [{"temperature": 1.0}, {"temperature": 2.0}]}  # both -> "default"
-    ).encode("utf-8")
     response = _post_signed(
-        client, secret_b64, station_id, path, body,
-        extra_headers={"Content-Type": "application/json"},
-    )
-    assert response.status_code == 422, response.text
-
-
-def test_flat_top_level_metric_is_rejected(signed_client):
-    """The old flat shape (metrics at the top level) is no longer accepted."""
-    client, station_id, secret_b64 = signed_client
-    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
-    body = json.dumps({"temperature": 21.0}).encode("utf-8")
-    response = _post_signed(
-        client, secret_b64, station_id, path, body,
-        extra_headers={"Content-Type": "application/json"},
-    )
-    assert response.status_code == 422, response.text
-
-
-def test_reserved_label_inside_reading_is_rejected(signed_client):
-    """Envelope labels (wakeReason/firmwareVersion) belong at the top level, not in a reading."""
-    client, station_id, secret_b64 = signed_client
-    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
-    body = json.dumps({"readings": [{"temperature": 1.0, "wakeReason": "timer"}]}).encode("utf-8")
-    response = _post_signed(
-        client, secret_b64, station_id, path, body,
-        extra_headers={"Content-Type": "application/json"},
-    )
-    assert response.status_code == 422, response.text
-
-
-def test_too_many_observations_is_rejected(signed_client):
-    """Total measurements across all readings are capped per check-in."""
-    client, station_id, secret_b64 = signed_client
-    path = f"{INGEST_API_PREFIX}/stations/{station_id}/data"
-    # 9 channels x 64 metrics = 576 observations, over the 512 cap (each reading is
-    # within the 64-field per-reading limit, so only the total cap can trip).
-    readings = [
-        {"channel": f"c{i}", **{f"m{j}": 1.0 for j in range(64)}}
-        for i in range(9)
-    ]
-    body = json.dumps({"readings": readings}).encode("utf-8")
-    response = _post_signed(
-        client, secret_b64, station_id, path, body,
+        client, secret_b64, station_id, path, json.dumps(payload).encode("utf-8"),
         extra_headers={"Content-Type": "application/json"},
     )
     assert response.status_code == 422, response.text

@@ -43,33 +43,44 @@ def _weather_tile_client() -> httpx.AsyncClient:
     return _tile_client
 
 
-# Process-wide tile cache shared across all users. Low-zoom world tiles are the
-# same for everyone, so caching them ~10 minutes collapses many viewers' tile
-# requests into one upstream OpenWeather call (the main cost lever).
+class TTLCache:
+    """Process-wide, size-bounded cache of values with per-entry expiry.
+
+    Stored as key -> (expiry_monotonic, value). Caching one upstream OpenWeather
+    response and replaying it for the refresh window collapses many viewers'
+    identical requests into a single upstream call (the main cost lever). On
+    overflow we drop expired entries first, then the oldest by insertion order.
+    Not thread-safe, but the async routes that use it don't await between get/put.
+    """
+
+    def __init__(self, max_entries: int):
+        self._max_entries = max_entries
+        self._store: dict = {}
+
+    def get(self, key):
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        expiry, value = entry
+        if expiry < time.monotonic():
+            self._store.pop(key, None)
+            return None
+        return value
+
+    def put(self, key, value, ttl: float) -> None:
+        if len(self._store) >= self._max_entries:
+            now = time.monotonic()
+            for stale in [k for k, (expiry, _) in self._store.items() if expiry < now]:
+                self._store.pop(stale, None)
+            while len(self._store) >= self._max_entries:
+                self._store.pop(next(iter(self._store)), None)  # drop oldest insertion
+        self._store[key] = (time.monotonic() + ttl, value)
+
+
+# Tile cache: low-zoom world tiles are identical for everyone; cache value is
+# (content_bytes, media_type). 4000 entries ~= a few viewers' worth of panning.
 _TILE_CACHE_TTL = 600  # seconds; OpenWeather refreshes these layers ~every 10 min
-_TILE_CACHE_MAX = 4000
-_tile_cache: dict[tuple[str, int, int, int], tuple[float, bytes, str]] = {}
-
-
-def _tile_cache_get(key: tuple[str, int, int, int]) -> tuple[bytes, str] | None:
-    entry = _tile_cache.get(key)
-    if entry is None:
-        return None
-    expiry, content, media_type = entry
-    if expiry < time.monotonic():
-        _tile_cache.pop(key, None)
-        return None
-    return content, media_type
-
-
-def _tile_cache_put(key: tuple[str, int, int, int], content: bytes, media_type: str) -> None:
-    if len(_tile_cache) >= _TILE_CACHE_MAX:
-        now = time.monotonic()
-        for stale in [k for k, v in _tile_cache.items() if v[0] < now]:
-            _tile_cache.pop(stale, None)
-        while len(_tile_cache) >= _TILE_CACHE_MAX:
-            _tile_cache.pop(next(iter(_tile_cache)), None)  # drop oldest insertion
-    _tile_cache[key] = (time.monotonic() + _TILE_CACHE_TTL, content, media_type)
+_tile_cache = TTLCache(max_entries=4000)
 
 
 # A 1x1 transparent PNG served (and cached) for tiles OpenWeather has no data for,
@@ -79,32 +90,9 @@ _TRANSPARENT_TILE = base64.b64decode(
 )
 
 
-# Cache for OpenWeather data responses (current weather / forecast). Many viewers
-# of the same station request identical coordinates, so caching collapses them
-# into one upstream call per refresh window.
-_WEATHER_DATA_CACHE_MAX = 500
-_weather_data_cache: dict[tuple[str, float, float, str], tuple[float, dict]] = {}
-
-
-def _weather_data_cache_get(key: tuple[str, float, float, str]) -> dict | None:
-    entry = _weather_data_cache.get(key)
-    if entry is None:
-        return None
-    expiry, data = entry
-    if expiry < time.monotonic():
-        _weather_data_cache.pop(key, None)
-        return None
-    return data
-
-
-def _weather_data_cache_put(key: tuple[str, float, float, str], data: dict, ttl: int) -> None:
-    if len(_weather_data_cache) >= _WEATHER_DATA_CACHE_MAX:
-        now = time.monotonic()
-        for stale in [k for k, v in _weather_data_cache.items() if v[0] < now]:
-            _weather_data_cache.pop(stale, None)
-        while len(_weather_data_cache) >= _WEATHER_DATA_CACHE_MAX:
-            _weather_data_cache.pop(next(iter(_weather_data_cache)), None)
-    _weather_data_cache[key] = (time.monotonic() + ttl, data)
+# Weather data cache (current weather / forecast), keyed by endpoint+coords+units;
+# cache value is the parsed JSON dict. TTL is supplied per put by the caller.
+_weather_data_cache = TTLCache(max_entries=500)
 
 
 @router.get(
@@ -146,7 +134,7 @@ async def fetch_openweather(
     import logging
 
     cache_key = (endpoint, round(lat, 3), round(lon, 3), units)
-    cached = _weather_data_cache_get(cache_key)
+    cached = _weather_data_cache.get(cache_key)
     if cached is not None:
         return cached
 
@@ -173,7 +161,7 @@ async def fetch_openweather(
         raise HTTPException(status_code=502, detail="OpenWeather request failed.")
 
     data = response.json()
-    _weather_data_cache_put(cache_key, data, cache_ttl)
+    _weather_data_cache.put(cache_key, data, cache_ttl)
     return data
 
 
@@ -244,7 +232,7 @@ async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
         raise HTTPException(status_code=404, detail="Unknown weather layer.")
 
     cache_key = (layer, z, x, y)
-    cached = _tile_cache_get(cache_key)
+    cached = _tile_cache.get(cache_key)
     if cached is not None:
         content, media_type = cached
         return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=900"})
@@ -265,7 +253,7 @@ async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
     # tile and cache it so repeat pans/zooms don't re-hit upstream.
     if response.status_code == 404:
         logging.debug("OpenWeather tile has no data (404): %s/%s/%s/%s", layer, z, x, y)
-        _tile_cache_put(cache_key, _TRANSPARENT_TILE, "image/png")
+        _tile_cache.put(cache_key, (_TRANSPARENT_TILE, "image/png"), _TILE_CACHE_TTL)
         return Response(
             content=_TRANSPARENT_TILE,
             media_type="image/png",
@@ -277,7 +265,7 @@ async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
         raise HTTPException(status_code=502, detail="OpenWeather tile request failed.")
 
     media_type = response.headers.get("content-type", "image/png")
-    _tile_cache_put(cache_key, response.content, media_type)
+    _tile_cache.put(cache_key, (response.content, media_type), _TILE_CACHE_TTL)
     return Response(
         content=response.content,
         media_type=media_type,

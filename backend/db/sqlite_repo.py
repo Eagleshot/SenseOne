@@ -117,19 +117,19 @@ def _status_from_parts(public_id, image_row, reading_row, battery_value=None) ->
             "url": f"/stations/{public_id}/images/{image_row.filename}",
         }
 
-    latest_at = None
-    next_online = None
-    candidates = []
-    if image_row is not None:
-        # Images count as device contact (last_online) but no longer carry a
-        # next_online hint; that comes from sensor readings' nextStart.
-        candidates.append((image_row.captured_at, None))
-    if reading_row is not None:
-        candidates.append((reading_row.recorded_at, reading_row.next_online))
-    for ts, nxt in candidates:
-        if latest_at is None or ts > latest_at or (ts == latest_at and nxt):
-            latest_at = ts
-            next_online = nxt
+    # last_online is the most recent device contact (image OR reading); next_online
+    # is the latest reading's nextStart hint. The two are independent: a newer image
+    # must not wipe out the reading's next_online, since images carry no such hint.
+    contact_times = [
+        ts
+        for ts in (
+            image_row.captured_at if image_row is not None else None,
+            reading_row.recorded_at if reading_row is not None else None,
+        )
+        if ts is not None
+    ]
+    latest_at = max(contact_times) if contact_times else None
+    next_online = reading_row.next_online if reading_row is not None else None
 
     return StationStatus(
         capture=capture,
@@ -509,6 +509,11 @@ def append_reading(
         if row is None:
             raise LookupError(f"Unknown station {public_id!r}")
         recorded_at = parse_iso_timestamp(timestamp)
+        if recorded_at is None:
+            # recorded_at is NOT NULL; fail loudly rather than hit an opaque
+            # IntegrityError on flush. The route pre-validates, so this guards
+            # internal/test callers passing a malformed timestamp.
+            raise ValueError(f"append_reading needs a valid ISO timestamp, got {timestamp!r}")
         reading = SensorReading(
             station_id=row.id,
             recorded_at=recorded_at,

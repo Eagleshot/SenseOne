@@ -49,6 +49,66 @@ const WeatherControls: React.FC<WeatherControlsProps> = ({ value, onChange }) =>
   </Select>
 );
 
+// The Map/Satellite segmented toggle, shared by the inline and fullscreen headers.
+const MapStyleToggle: React.FC = () => {
+  const { mapStyle, setMapStyle } = useApp();
+  return (
+    <div className="chrome-shell-stroke inline-flex items-center gap-1 rounded-lg border border-sidebar-border/90 bg-[hsl(var(--sidebar-accent))]">
+      <Button
+        type="button"
+        size="sm"
+        variant={mapStyle === 'abstract' ? 'default' : 'ghost'}
+        onClick={() => setMapStyle('abstract')}
+        aria-pressed={mapStyle === 'abstract'}
+        className={cn(mapStyle !== 'abstract' && 'text-sidebar-foreground')}
+      >
+        Map
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant={mapStyle === 'satellite' ? 'default' : 'ghost'}
+        onClick={() => setMapStyle('satellite')}
+        aria-pressed={mapStyle === 'satellite'}
+        className={cn(mapStyle !== 'satellite' && 'text-sidebar-foreground')}
+      >
+        Satellite
+      </Button>
+    </div>
+  );
+};
+
+type MapToolbarProps = {
+  // The inline and fullscreen headers differ only in their row layout, heading
+  // size, and trailing action button — everything else (title, style toggle,
+  // weather control) is identical, so it lives here once.
+  rowClassName: string;
+  headingClassName: string;
+  weatherSelection: string;
+  onWeatherChange: (value: string) => void;
+  action: React.ReactNode;
+};
+
+const MapToolbar: React.FC<MapToolbarProps> = ({
+  rowClassName,
+  headingClassName,
+  weatherSelection,
+  onWeatherChange,
+  action,
+}) => (
+  <div className={rowClassName}>
+    <div className="flex items-center gap-2">
+      <Map className="h-5 w-5 text-muted-foreground" />
+      <h2 className={headingClassName}>Map</h2>
+    </div>
+    <div className="flex flex-wrap items-center gap-2">
+      <MapStyleToggle />
+      <WeatherControls value={weatherSelection} onChange={onWeatherChange} />
+      {action}
+    </div>
+  </div>
+);
+
 // OpenWeather's official Maps 1.0 default palettes (see /api/map_legend),
 // mirrored for the on-map legend. Keys are the layer ids in WEATHER_LAYERS; the
 // labels are the layer's real units/range. Pressure is shown in hPa (OpenWeather
@@ -293,7 +353,7 @@ const MapCanvas: React.FC<MapCanvasProps> = ({ fullscreen = false, weatherLayer 
 };
 
 export const InteractiveMap: React.FC = () => {
-  const { activeWebcam, mapStyle, setMapStyle } = useApp();
+  const { activeWebcam } = useApp();
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [weatherEnabled, setWeatherEnabled] = useState(false);
   const [weatherLayer, setWeatherLayer] = useState<string>(WEATHER_LAYERS[0].value);
@@ -329,35 +389,12 @@ export const InteractiveMap: React.FC = () => {
     >
       <div className="relative h-full flex flex-col">
         <div className="p-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2">
-              <Map className="h-5 w-5 text-muted-foreground" />
-              <h2 className="text-2xl font-bold text-foreground">Map</h2>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="chrome-shell-stroke inline-flex items-center gap-1 rounded-lg border border-sidebar-border/90 bg-[hsl(var(--sidebar-accent))]">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={mapStyle === 'abstract' ? 'default' : 'ghost'}
-                  onClick={() => setMapStyle('abstract')}
-                  aria-pressed={mapStyle === 'abstract'}
-                  className={cn(mapStyle !== 'abstract' && 'text-sidebar-foreground')}
-                >
-                  Map
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={mapStyle === 'satellite' ? 'default' : 'ghost'}
-                  onClick={() => setMapStyle('satellite')}
-                  aria-pressed={mapStyle === 'satellite'}
-                  className={cn(mapStyle !== 'satellite' && 'text-sidebar-foreground')}
-                >
-                  Satellite
-                </Button>
-              </div>
-              <WeatherControls value={weatherSelection} onChange={handleWeatherChange} />
+          <MapToolbar
+            rowClassName="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+            headingClassName="text-2xl font-bold text-foreground"
+            weatherSelection={weatherSelection}
+            onWeatherChange={handleWeatherChange}
+            action={
               <Button
                 variant="outline"
                 size="sm"
@@ -367,8 +404,8 @@ export const InteractiveMap: React.FC = () => {
                 <Maximize2 className="w-4 h-4" />
                 Fullscreen
               </Button>
-            </div>
-          </div>
+            }
+          />
         </div>
 
         <MapCanvas weatherLayer={activeWeatherLayer} />
@@ -417,35 +454,12 @@ export const InteractiveMap: React.FC = () => {
       >
         <div className="flex h-full min-h-0 flex-col">
           <div className="border-b border-border px-4 py-4 sm:px-6">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Map className="h-5 w-5 text-muted-foreground" />
-                <h2 className="text-xl font-semibold text-foreground">Map</h2>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="chrome-shell-stroke inline-flex items-center gap-1 rounded-lg border border-sidebar-border/90 bg-[hsl(var(--sidebar-accent))]">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={mapStyle === 'abstract' ? 'default' : 'ghost'}
-                    onClick={() => setMapStyle('abstract')}
-                    aria-pressed={mapStyle === 'abstract'}
-                    className={cn(mapStyle !== 'abstract' && 'text-sidebar-foreground')}
-                  >
-                    Map
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={mapStyle === 'satellite' ? 'default' : 'ghost'}
-                    onClick={() => setMapStyle('satellite')}
-                    aria-pressed={mapStyle === 'satellite'}
-                    className={cn(mapStyle !== 'satellite' && 'text-sidebar-foreground')}
-                  >
-                    Satellite
-                  </Button>
-                </div>
-                <WeatherControls value={weatherSelection} onChange={handleWeatherChange} />
+            <MapToolbar
+              rowClassName="flex flex-wrap items-center justify-between gap-3"
+              headingClassName="text-xl font-semibold text-foreground"
+              weatherSelection={weatherSelection}
+              onWeatherChange={handleWeatherChange}
+              action={
                 <Button
                   type="button"
                   size="sm"
@@ -456,8 +470,8 @@ export const InteractiveMap: React.FC = () => {
                   <Minimize2 className="h-4 w-4" />
                   Exit Fullscreen
                 </Button>
-              </div>
-            </div>
+              }
+            />
           </div>
           <div className="min-h-0 flex-1">
             <MapCanvas fullscreen weatherLayer={activeWeatherLayer} />

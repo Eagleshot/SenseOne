@@ -65,7 +65,7 @@ class AppConfig(ApiModel):
         description="Optional flag emoji shown next to the country name.",
     )
     is_public: bool = Field(
-        default=True,
+        default=False,
         description="When false, the station is hidden from anonymous and non-owner callers.",
     )
     last_online: str | None = Field(
@@ -353,8 +353,9 @@ class ChannelReading(ApiModel):
                 )
             if len(key) > MAX_METRIC_KEY_LENGTH:
                 raise ValueError(f"Metric key '{key[:16]}…' is too long.")
-            if value is None or isinstance(value, bool):
-                continue  # null skipped at ingest; bool stored as 0/1
+            if value is None:
+                continue  # null is skipped at ingest
+            # bool is an int subclass: it stores as 0/1 and is range-checked as such.
             if not isinstance(value, (int, float)):
                 raise ValueError(f"Metric '{key}' must be a number (or null).")
             spec = METRICS.get(key)

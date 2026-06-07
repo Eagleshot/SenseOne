@@ -110,10 +110,11 @@ def test_device_image_route_accepts_signed_request(client):
     path = f"/v1/ingest/stations/{station_id}/images"
     signed_headers = eagleshot_signing.sign_request(
         station_id=station_id, secret_b64=secret_b64, method="POST", path=path, body=_JPEG_BODY,
+        x_filename="20260524_1430Z_front.jpg",
     )
     response = client.post(
         path,
-        headers={**signed_headers, "X-Filename": "20260524_1430Z_front.jpg", "Content-Type": "image/jpeg"},
+        headers={**signed_headers, "Content-Type": "image/jpeg"},
         content=_JPEG_BODY,
     )
 

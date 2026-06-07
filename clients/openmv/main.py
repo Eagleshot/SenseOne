@@ -43,7 +43,7 @@ def _b64decode_urlsafe_nopad(value):
     return binascii.a2b_base64(s + ("=" * pad))
 def _hexlify(data):
     return binascii.hexlify(data).decode("ascii")
-def sign_request(station_id, secret_b64, method, path, body, timestamp, nonce_hex=None):
+def sign_request(station_id, secret_b64, method, path, body, timestamp, nonce_hex=None, x_filename=""):
     if nonce_hex is None:
         nonce_hex = _hexlify(os.urandom(NONCE_BYTES))
     canonical = "\n".join((
@@ -54,15 +54,19 @@ def sign_request(station_id, secret_b64, method, path, body, timestamp, nonce_he
         method.upper(),
         path,
         _hexlify(_sha256(body)),
+        x_filename,
     )).encode("ascii")
     secret = _b64decode_urlsafe_nopad(secret_b64)
     signature_hex = _hexlify(hmac_sha256(secret, canonical))
-    return {
+    headers = {
         "X-Station-Id": station_id,
         "X-Timestamp": str(int(timestamp)),
         "X-Nonce": nonce_hex,
         "X-Signature": "%s=%s" % (SIGNATURE_VERSION, signature_hex),
     }
+    if x_filename:
+        headers["X-Filename"] = x_filename
+    return headers
 def round_down_to_minute(unix_seconds):
     return int(unix_seconds) - (int(unix_seconds) % 60)
 def civil_from_days(z):
@@ -166,9 +170,9 @@ def upload_image(jpeg, filename, timestamp):
         path=UPLOAD_PATH,
         body=body,
         timestamp=timestamp,
+        x_filename=filename,
     )
     headers["Content-Type"] = "image/jpeg"
-    headers["X-Filename"] = filename
     response = requests.post(api_url(UPLOAD_PATH), data=body, headers=headers)
     try:
         if not 200 <= response.status_code < 300:

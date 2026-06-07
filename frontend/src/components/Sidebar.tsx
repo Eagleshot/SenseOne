@@ -102,6 +102,8 @@ export const Sidebar: React.FC = () => {
   const sidebarSurfaceClass =
     "border-sidebar-border/90 bg-sidebar-accent shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]";
   const sidebarActionButtonClass = `${sidebarSurfaceClass} text-sidebar-foreground hover:border-primary/25 hover:bg-sidebar-accent/80 ${sidebarInsetFocusClass}`;
+  // Full-width "solid" variant (translucent page background) used by the New station / Logout buttons.
+  const sidebarSolidActionButtonClass = `w-full justify-center gap-2 border-sidebar-border/90 bg-background/60 text-sidebar-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] hover:border-primary/25 hover:bg-background/80 ${sidebarInsetFocusClass}`;
   const sidebarIconButtonClass = `chrome-shell-stroke rounded-lg border border-sidebar-border/80 bg-sidebar-accent/80 p-2 text-sidebar-foreground transition-colors hover:bg-sidebar-accent ${sidebarInsetFocusClass}`;
   const sidebarFieldClass = `${sidebarSurfaceClass} ${sidebarInsetFocusClass}`;
 
@@ -461,10 +463,7 @@ export const Sidebar: React.FC = () => {
                     type="button"
                     variant="outline"
                     size="sm"
-                    className={cn(
-                      "w-full justify-center gap-2 border-sidebar-border/90 bg-background/60 text-sidebar-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] hover:border-primary/25 hover:bg-background/80",
-                      sidebarInsetFocusClass
-                    )}
+                    className={sidebarSolidActionButtonClass}
                   >
                     <Plus className="h-3.5 w-3.5" />
                     New station
@@ -685,10 +684,7 @@ export const Sidebar: React.FC = () => {
                 variant="outline"
                 size="sm"
                 onClick={handleLogout}
-                className={cn(
-                  "w-full justify-center gap-2 border-sidebar-border/90 bg-background/60 text-sidebar-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] hover:border-primary/25 hover:bg-background/80",
-                  sidebarInsetFocusClass
-                )}
+                className={sidebarSolidActionButtonClass}
               >
                 <LogOut className="h-3.5 w-3.5" />
                 Logout

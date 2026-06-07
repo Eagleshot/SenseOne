@@ -1,6 +1,5 @@
 """Authentication and session management."""
 
-import base64
 import hashlib
 import hmac
 import time
@@ -12,6 +11,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from constants import AUTH_COOKIE_NAME
+from utils import b64url_decode_nopad, b64url_encode_nopad
 
 PBKDF2_ALGO = "pbkdf2_sha256"
 PBKDF2_ITERATIONS = 600_000
@@ -29,8 +29,11 @@ if _BOOTSTRAP_PASSWORD and len(_BOOTSTRAP_PASSWORD) < 12:
 AUTH_TOKEN_TTL_SECONDS = 43200
 
 # In-memory session storage. For multi-replica deploys, swap for Redis or signed JWTs.
-# Stored as token -> (username, expires_at).
+# Stored as token -> (username, expires_at). Sync route deps run in FastAPI's
+# threadpool, so every access is serialised through _sessions_lock to avoid a
+# "dictionary changed size during iteration" crash when pruning races a login.
 AUTH_SESSIONS: dict[str, tuple[str, float]] = {}
+_sessions_lock = threading.Lock()
 bearer_scheme = HTTPBearer(auto_error=False)
 
 # Login throttling: track recent failures per IP and per username.
@@ -56,15 +59,23 @@ def create_session(username: str) -> tuple[str, int]:
     """Create a new session for a user."""
     token = secrets.token_urlsafe(32)
     expires_at = time.time() + AUTH_TOKEN_TTL_SECONDS
-    AUTH_SESSIONS[token] = (username, expires_at)
+    with _sessions_lock:
+        AUTH_SESSIONS[token] = (username, expires_at)
     return token, AUTH_TOKEN_TTL_SECONDS
 
 
 def prune_expired_sessions() -> None:
     """Remove expired sessions from storage."""
     now = time.time()
-    expired_tokens = [token for token, (_, expires_at) in AUTH_SESSIONS.items() if expires_at <= now]
-    for token in expired_tokens:
+    with _sessions_lock:
+        expired_tokens = [token for token, (_, expires_at) in AUTH_SESSIONS.items() if expires_at <= now]
+        for token in expired_tokens:
+            AUTH_SESSIONS.pop(token, None)
+
+
+def remove_session(token: str) -> None:
+    """Invalidate a session token, if present (used on logout)."""
+    with _sessions_lock:
         AUTH_SESSIONS.pop(token, None)
 
 
@@ -85,14 +96,15 @@ def _validate_session_token(token: str | None) -> str | None:
     """Return the username for a valid unexpired session token, or None."""
     if token is None:
         return None
-    session = AUTH_SESSIONS.get(token)
-    if session is None:
-        return None
-    username, expires_at = session
-    if expires_at <= time.time():
-        AUTH_SESSIONS.pop(token, None)
-        return None
-    return username
+    with _sessions_lock:
+        session = AUTH_SESSIONS.get(token)
+        if session is None:
+            return None
+        username, expires_at = session
+        if expires_at <= time.time():
+            AUTH_SESSIONS.pop(token, None)
+            return None
+        return username
 
 
 def get_current_username(
@@ -192,14 +204,9 @@ def hash_secret(secret: str) -> str:
     return "${algo}${iters}${salt}${hash}".format(
         algo=PBKDF2_ALGO,
         iters=PBKDF2_ITERATIONS,
-        salt=base64.urlsafe_b64encode(salt).decode("ascii").rstrip("="),
-        hash=base64.urlsafe_b64encode(digest).decode("ascii").rstrip("="),
+        salt=b64url_encode_nopad(salt),
+        hash=b64url_encode_nopad(digest),
     )
-
-
-def _b64_decode(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(value + padding)
 
 
 def verify_secret(secret: str, stored: str | None) -> bool:
@@ -211,9 +218,9 @@ def verify_secret(secret: str, stored: str | None) -> bool:
         return False
     try:
         iterations = int(parts[2])
-        salt = _b64_decode(parts[3])
-        expected = _b64_decode(parts[4])
-    except (ValueError, base64.binascii.Error):
+        salt = b64url_decode_nopad(parts[3])
+        expected = b64url_decode_nopad(parts[4])
+    except ValueError:  # binascii.Error subclasses ValueError
         return False
     digest = hashlib.pbkdf2_hmac(
         "sha256",

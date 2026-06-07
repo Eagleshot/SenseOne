@@ -13,8 +13,28 @@ export { collectMetricKeys };
 const cellValue = (value: SensorMetricValue | Date | undefined): string =>
   value === null || value === undefined || value instanceof Date ? "" : `${value}`;
 
-const numericSortValue = (value: SensorMetricValue | Date | undefined, direction: SortDirection) =>
-  typeof value === "number" ? value : direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+const isMissingValue = (value: SensorMetricValue | Date | undefined): boolean =>
+  value === null || value === undefined || value === "";
+
+// Compare two cell values for sorting: numbers numerically, everything else
+// lexically (numeric-aware so "1.10" > "1.9"). Missing values always sort to the
+// end regardless of direction. Using a real comparator (not Infinity arithmetic)
+// is what lets string columns like wakeReason actually sort.
+const compareCellValues = (
+  a: SensorMetricValue | Date | undefined,
+  b: SensorMetricValue | Date | undefined,
+  direction: SortDirection,
+): number => {
+  if (isMissingValue(a) || isMissingValue(b)) {
+    if (isMissingValue(a) && isMissingValue(b)) return 0;
+    return isMissingValue(a) ? 1 : -1;
+  }
+  const result =
+    typeof a === "number" && typeof b === "number"
+      ? a - b
+      : String(a).localeCompare(String(b), undefined, { numeric: true });
+  return direction === "asc" ? result : -result;
+};
 
 export const createFormattedTimestampMap = (data: SensorData[], timezone: string) =>
   new Map(data.map((row) => [row, formatDateTimeLabel(row.timestamp, timezone)]));
@@ -49,9 +69,11 @@ export const filterAndSortSensorRows = ({
   }
 
   working.sort((a, b) => {
-    const aVal = sortField === "timestamp" ? a.timestamp.getTime() : numericSortValue(a[sortField], sortDirection);
-    const bVal = sortField === "timestamp" ? b.timestamp.getTime() : numericSortValue(b[sortField], sortDirection);
-    return sortDirection === "asc" ? aVal - bVal : bVal - aVal;
+    if (sortField === "timestamp") {
+      const diff = a.timestamp.getTime() - b.timestamp.getTime();
+      return sortDirection === "asc" ? diff : -diff;
+    }
+    return compareCellValues(a[sortField], b[sortField], sortDirection);
   });
 
   return working;
@@ -65,6 +87,12 @@ const csvHeader = (column: string): string => {
   return unit ? `${metricLabel(column)} (${unit})` : metricLabel(column);
 };
 
+// RFC 4180: a field containing a comma, quote, or newline must be wrapped in
+// double quotes with internal quotes doubled. Without this a value like
+// "Motion, low battery" would split into two columns and corrupt the row.
+const escapeCsvCell = (value: string): string =>
+  /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+
 export const buildSensorCsv = (data: SensorData[], timezone: string, columns: string[]) => {
   const headers = ["Timestamp", ...columns.map(csvHeader)];
   const rows = data.map((row) => [
@@ -72,7 +100,7 @@ export const buildSensorCsv = (data: SensorData[], timezone: string, columns: st
     ...columns.map((column) => cellValue(row[column])),
   ]);
 
-  return [headers, ...rows].map((row) => row.join(",")).join("\n");
+  return [headers, ...rows].map((row) => row.map(escapeCsvCell).join(",")).join("\n");
 };
 
 export const sensorCsvFilename = (date = new Date()) => `sensor-data-${format(date, "yyyy-MM-dd")}.csv`;

@@ -1,4 +1,4 @@
-import { extractErrorDetail, fetchJson } from "@/lib/apiClient";
+import { fetchJson, postJson } from "@/lib/apiClient";
 
 export type LoginResponse = {
   expiresIn: number;
@@ -28,36 +28,15 @@ export const loginUser = async (
   email: string,
   password: string
 ): Promise<AuthResult & { email?: string }> => {
-  try {
-    const response = await fetch(`${apiBaseUrl}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-      credentials: "include",
-    });
-
-    if (!response.ok) {
-      const fallback =
-        response.status === 429
-          ? "Too many login attempts. Try again later."
-          : "Invalid email or password.";
-      let message = fallback;
-
-      try {
-        const payload = await response.json();
-        message = extractErrorDetail(payload, fallback);
-      } catch {
-        // Keep fallback when response body is not JSON.
-      }
-
-      return { success: false, error: message };
-    }
-
-    const payload = (await response.json()) as LoginResponse;
-    return { success: true, email: payload.email };
-  } catch {
-    return { success: false, error: "Unable to reach authentication service." };
-  }
+  const result = await postJson<LoginResponse>(`${apiBaseUrl}/auth/login`, {
+    body: { email, password },
+    errorFallback: (status) =>
+      status === 429 ? "Too many login attempts. Try again later." : "Invalid email or password.",
+    networkError: "Unable to reach authentication service.",
+  });
+  return result.ok
+    ? { success: true, email: result.data.email }
+    : { success: false, error: result.error };
 };
 
 export const logoutUser = (apiBaseUrl: string) =>

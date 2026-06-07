@@ -1,6 +1,5 @@
-import { formatDistanceToNow } from "date-fns";
-
 import { useApp } from "@/contexts/AppContext";
+import { formatRelativeShort } from "@/lib/datetime";
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 import { cn } from "@/lib/utils";
 
@@ -10,14 +9,12 @@ export const StatusSummary: React.FC = () => {
   const isOnline = activeWebcam.isOnline;
   const hasStatus = typeof isOnline === "boolean";
   const pendingLabel = activeWebcam.id ? LOADING_LABEL : UNAVAILABLE_LABEL;
-  const lastUpdateAgo = activeWebcam.lastUpdate
-    ? formatDistanceToNow(activeWebcam.lastUpdate, { addSuffix: true }).replace("about ", "").replace(/minutes?/g, "min.")
-    : pendingLabel;
+  const lastUpdateAgo = activeWebcam.lastUpdate ? formatRelativeShort(activeWebcam.lastUpdate) : pendingLabel;
 
   const now = new Date();
   const nextUpdateIn =
     activeWebcam.nextUpdate && activeWebcam.nextUpdate > now
-      ? `in ${Math.round((activeWebcam.nextUpdate.getTime() - now.getTime()) / (60 * 1000))} min.`
+      ? `in ${Math.max(1, Math.round((activeWebcam.nextUpdate.getTime() - now.getTime()) / (60 * 1000)))} min.`
       : UNAVAILABLE_LABEL;
 
   return (

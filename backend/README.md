@@ -93,7 +93,7 @@ The response includes the base64url secret exactly once — flash it to the devi
 Reference signers:
 
 - Python: [`clients/python/eagleshot.py`](../clients/python/eagleshot.py)
-- MicroPython / OpenMV: [`clients/openmv/eagleshot_signing.py`](../clients/openmv/eagleshot_signing.py)
+- MicroPython / OpenMV: the signer is inlined in [`clients/openmv/main.py`](../clients/openmv/main.py) (single self-contained file to flash)
 
 Devices without an RTC can call the unauthenticated `GET /clock` once at boot and track the offset against a monotonic counter.
 
@@ -103,11 +103,11 @@ Any device that can issue an HTTP request and compute HMAC-SHA256 can push to th
 
 1. **Sign the request** exactly as in the table above (canonical string + four headers; see `station_hmac.py`). Reuse a shared signer where you can:
    - **Raspberry Pi / any CPython host** — `import eagleshot` from [`clients/python/eagleshot.py`](../clients/python/eagleshot.py) and POST with `requests` (see steps 6–7). Works over WiFi, Ethernet, or cellular; no board-specific firmware needed.
-   - **OpenMV / MicroPython** — copy [`clients/openmv/eagleshot_signing.py`](../clients/openmv/eagleshot_signing.py) next to your `main.py` and `from eagleshot_signing import sign_request` (the reference firmware does exactly this).
+   - **OpenMV / MicroPython** — start from [`clients/openmv/main.py`](../clients/openmv/main.py), which inlines a pure-Python `sign_request` (no `hmac` module needed); it's a single self-contained file to flash to the board.
    - **ESP32-CAM (Arduino/C++)** — there's no shared lib for C++, so reimplement the signer with mbedTLS (bundled in arduino-esp32): SHA-256 the JPEG framebuffer (`mbedtls_sha256`), build the same `\n`-joined canonical string, HMAC it with `mbedtls_md_hmac` (`MBEDTLS_MD_SHA256`), hex-encode lowercase, and send via `HTTPClient`. **Mind the secret encoding:** it's base64**url** and routinely contains `-`/`_`, so translate `-`→`+`, `_`→`/` and re-pad before `mbedtls_base64_decode`. Validate against the known-answer vector below before touching hardware.
 2. **Pick the transport** (see *Transport / TLS* below): prefer HTTPS where the board supports it; fall back to plain HTTP only where it can't.
 3. **Honor the upload contract:**
-   - `X-Filename` is optional: when supplied it must be `YYYYMMDD_HHMMZ_<camera>.jpg` (UTC capture minute) and becomes the stored capture timestamp; when omitted the server stamps a default name from the current UTC minute.
+   - `X-Filename` is optional: when supplied it must be `YYYYMMDD_HHMMZ_<camera>.jpg` (UTC capture minute) and becomes the stored capture timestamp; when omitted the server stamps a default name from the current UTC minute. **It is folded into the HMAC signature** (it sets the stored capture time/stream, so it must not be tamperable); requests that omit it sign an empty string for that line.
    - `Content-Type` `image/jpeg|png|webp`; the body must be a real image (the server sniffs the bytes).
    - Default size cap 25 MB (`APP_MAX_UPLOAD_BYTES`).
    - `X-Timestamp` must be within ±300 s of the server clock; RTC-less boards sync via `GET /clock` as above.
@@ -117,14 +117,16 @@ Any device that can issue an HTTP request and compute HMAC-SHA256 can push to th
 
 ```
 secret_b64 = abcdef0123456789-_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA   # base64url: note the - and _
+station_id = silvretta-glacier
 method     = POST
 path       = /v1/ingest/stations/silvretta-glacier/images
 body       = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
 timestamp  = 1748000000
 nonce      = 0123456789abcdef0123456789abcdef
+x_filename = 20260524_1430Z_front.jpg   # signed (8th canonical line); "" when omitted
 
 sha256(body) = 03f2833d8de9b8473d2afa2d09d180a5ebe9144de756a480b24e2b6aee17d0ec
-X-Signature  = v1=d8ed61d2612bc32ff168da82a763c784637e7de22529d9ca4de37b625d160a3f
+X-Signature  = v1=41b58876208d0fca3bc532bd1c1c1084019f9f43740c214455585c4af2115faf
 ```
 
 #### Transport / TLS
@@ -150,8 +152,9 @@ headers = eagleshot.sign_request(
     method="POST",
     path=path,
     body=body,
+    x_filename="20260524_1430Z_front.jpg",  # signed; returned as the X-Filename header
 )
-headers.update({"Content-Type": "image/jpeg", "X-Filename": "20260524_1430Z_front.jpg"})
+headers["Content-Type"] = "image/jpeg"
 
 response = requests.post(f"http://127.0.0.1:3000{path}", data=body, headers=headers)
 print(response.status_code, response.text)

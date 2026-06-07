@@ -49,11 +49,12 @@ const ChartTooltip = ({
   );
 };
 
+type ChartRow = Omit<SensorData, "timestamp"> & { time: string; fullTime: string };
+
 type ChartCardProps = {
   metric: string;
   Icon: LucideIcon;
-  data: SensorData[];
-  timezone: string;
+  chartData: ChartRow[];
   isDarkMode: boolean;
   colorIndex: number;
 };
@@ -61,21 +62,11 @@ type ChartCardProps = {
 // One read-only plot for a single metric. The chart configurability (titles,
 // metric selection, icons, colours, reordering) was removed and will be
 // re-implemented later; for now each numeric metric simply gets its own plot.
-const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, data, timezone, isDarkMode, colorIndex }) => {
+const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, chartData, isDarkMode, colorIndex }) => {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const iconRef = useRef<SVGSVGElement>(null);
   const color = metricColor(colorIndex);
   const unit = metricUnit(metric);
-
-  const chartData = useMemo(
-    () =>
-      data.map(({ timestamp, ...metrics }) => ({
-        ...metrics,
-        time: formatTimeLabel(timestamp, timezone),
-        fullTime: formatDateTimeLabel(timestamp, timezone),
-      })),
-    [data, timezone]
-  );
 
   const formatYAxisTick = (value: number | string) => (unit ? `${value} ${unit}` : `${value}`);
 
@@ -161,6 +152,17 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data }) => {
   const { timezone, isDarkMode } = useApp();
   // One plot per numeric metric present in the (already date-filtered) data.
   const metrics = useMemo(() => collectNumericMetricKeys(data), [data]);
+  // Map the rows (with their formatted time labels) once and share across cards,
+  // rather than re-mapping the whole dataset inside every per-metric ChartCard.
+  const chartData = useMemo<ChartRow[]>(
+    () =>
+      data.map(({ timestamp, ...values }) => ({
+        ...values,
+        time: formatTimeLabel(timestamp, timezone),
+        fullTime: formatDateTimeLabel(timestamp, timezone),
+      })),
+    [data, timezone]
+  );
 
   if (metrics.length === 0) {
     return (
@@ -184,8 +186,7 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data }) => {
             key={metric}
             metric={metric}
             Icon={Icon}
-            data={data}
-            timezone={timezone}
+            chartData={chartData}
             isDarkMode={isDarkMode}
             colorIndex={index}
           />

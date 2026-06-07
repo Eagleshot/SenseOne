@@ -1,5 +1,6 @@
 """Utility functions for the Eagleshot API."""
 
+import base64
 import re
 import unicodedata
 from datetime import datetime, timezone
@@ -49,6 +50,17 @@ def sanitize_station_id(raw_name: str | None = None, default: str = "default") -
     """Sanitize a station ID."""
     raw = (raw_name or default).strip()
     return re.sub(r"[^a-zA-Z0-9._-]", "-", raw).strip("._-") or default
+
+
+def b64url_encode_nopad(data: bytes) -> str:
+    """Base64url-encode without padding (device-secret / HMAC / password-hash wire format)."""
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def b64url_decode_nopad(value: str) -> bytes:
+    """Decode a base64url string, re-adding any stripped '=' padding."""
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value + padding)
 
 
 def ascii_station_name(title: str) -> str:

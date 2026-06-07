@@ -30,6 +30,7 @@ def canonical_signing_string(
     method: str,
     path: str,
     body_sha256_hex: str,
+    x_filename: str = "",
 ) -> bytes:
     """Build the canonical string fed to HMAC. Mirrors the server exactly."""
     return "\n".join((
@@ -40,6 +41,7 @@ def canonical_signing_string(
         method.upper(),
         path,
         body_sha256_hex,
+        x_filename,
     )).encode("ascii")
 
 
@@ -50,13 +52,16 @@ def sign_request(
     method: str,
     path: str,
     body: bytes,
+    x_filename: str = "",
     timestamp: int | None = None,
     nonce_hex: str | None = None,
 ) -> dict[str, str]:
-    """Return the four signed-request headers for a device call.
+    """Return the signed-request headers for a device call.
 
     ``timestamp`` defaults to the current unix time and ``nonce_hex`` to a fresh
-    16-byte random hex string; pass them explicitly only for tests.
+    16-byte random hex string; pass them explicitly only for tests. When
+    ``x_filename`` is given it is folded into the signature and returned as the
+    ``X-Filename`` header, so the signed value and the sent value can't drift.
     """
     if timestamp is None:
         timestamp = int(time.time())
@@ -70,15 +75,19 @@ def sign_request(
         method=method,
         path=path,
         body_sha256_hex=hashlib.sha256(body).hexdigest(),
+        x_filename=x_filename,
     )
     secret = _b64decode_urlsafe_nopad(secret_b64)
     signature_hex = hmac.new(secret, canonical, hashlib.sha256).hexdigest()
-    return {
+    headers = {
         "X-Station-Id": station_id,
         "X-Timestamp": str(int(timestamp)),
         "X-Nonce": nonce_hex,
         "X-Signature": f"{SIGNATURE_VERSION}={signature_hex}",
     }
+    if x_filename:
+        headers["X-Filename"] = x_filename
+    return headers
 
 
 class EagleshotClient:
@@ -97,13 +106,14 @@ class EagleshotClient:
         self.secret_b64 = secret_b64
         self.timeout = timeout
 
-    def _send(self, *, method: str, path: str, body: bytes, extra_headers: dict[str, str] | None = None) -> tuple[int, str]:
+    def _send(self, *, method: str, path: str, body: bytes, x_filename: str = "", extra_headers: dict[str, str] | None = None) -> tuple[int, str]:
         headers = sign_request(
             station_id=self.station_id,
             secret_b64=self.secret_b64,
             method=method,
             path=path,
             body=body,
+            x_filename=x_filename,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -159,14 +169,12 @@ class EagleshotClient:
         filename: str | None = None,
     ) -> tuple[int, str]:
         """POST one image as raw bytes. ``filename`` (X-Filename) must be YYYYMMDD_HHMMZ_<camera>.<ext>."""
-        extra = {"Content-Type": content_type}
-        if filename:
-            extra["X-Filename"] = filename
         return self._send(
             method="POST",
             path=f"/v1/ingest/stations/{self.station_id}/images",
             body=image_bytes,
-            extra_headers=extra,
+            x_filename=filename or "",
+            extra_headers={"Content-Type": content_type},
         )
 
     def get_config(self) -> tuple[int, str]:

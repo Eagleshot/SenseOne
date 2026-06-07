@@ -12,15 +12,14 @@ any such drift.
 import importlib.util
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from tests import _signing as reference
+from tests._openmv import load_openmv_main
 
 
 REPO = Path(__file__).resolve().parents[2]
-OPENMV_DIR = REPO / "clients" / "openmv"
 PYTHON_CLIENT = REPO / "clients" / "python" / "eagleshot.py"
 
 
@@ -34,15 +33,7 @@ def _load_from_path(module_name, path):
 
 
 def _load_openmv_main():
-    sys.modules.setdefault("sensor", SimpleNamespace(RGB565=1, VGA=2))
-    sys.modules.setdefault("pyb", SimpleNamespace(UART=lambda *a, **kw: None))
-    sys.modules.setdefault("machine", SimpleNamespace())
-    # main.py does a bare `import eagleshot_signing`; on the board that module
-    # sits next to it, so put its directory on sys.path for the import to
-    # resolve here too.
-    if str(OPENMV_DIR) not in sys.path:
-        sys.path.insert(0, str(OPENMV_DIR))
-    return _load_from_path("openmv_main_for_signer_test", OPENMV_DIR / "main.py")
+    return load_openmv_main(module_name="openmv_main_for_signer_test")
 
 
 @pytest.fixture(scope="module")
@@ -52,8 +43,8 @@ def openmv():
 
 @pytest.fixture(scope="module")
 def openmv_signer(openmv):
-    # Importing main.py pulled in the shared signer that ships beside it.
-    return sys.modules["eagleshot_signing"]
+    # The signer is inlined into main.py now (no separate module).
+    return openmv
 
 
 @pytest.fixture(scope="module")
@@ -68,6 +59,7 @@ _IMAGE_UPLOAD = dict(
     method="POST",
     path="/v1/ingest/stations/silvretta-glacier/images",
     body=b"\xff\xd8\xff\xe0fake-jpeg-bytes",
+    x_filename="20260524_1430Z_front.jpg",
     timestamp=1748000000,
     nonce_hex="0123456789abcdef0123456789abcdef",
 )

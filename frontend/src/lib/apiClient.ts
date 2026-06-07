@@ -37,6 +37,52 @@ export const fetchJson = async <T,>(
   }
 };
 
+export type PostJsonResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+type PostJsonOptions = {
+  /** JSON-serialized into the body (and sets Content-Type) when present; omit for an empty POST. */
+  body?: unknown;
+  /** Per-status error message used when the response carries no usable `detail`. */
+  errorFallback: (status: number) => string;
+  /** Message returned when the request never reaches the server (or the success body isn't JSON). */
+  networkError: string;
+};
+
+/**
+ * POST helper for mutating endpoints that need a per-status error message.
+ * Centralizes the fetch / `!ok` -> status-fallback + `extractErrorDetail` / network-catch
+ * scaffold; callers map `data` to their own success shape.
+ */
+export const postJson = async <T,>(
+  url: string,
+  { body, errorFallback, networkError }: PostJsonOptions,
+): Promise<PostJsonResult<T>> => {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      ...(body !== undefined
+        ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+        : {}),
+    });
+
+    if (!response.ok) {
+      const fallback = errorFallback(response.status);
+      let message = fallback;
+      try {
+        message = extractErrorDetail(await response.json(), fallback);
+      } catch {
+        // Keep the status fallback when the error body is empty or invalid JSON.
+      }
+      return { ok: false, error: message };
+    }
+
+    return { ok: true, data: (await response.json()) as T };
+  } catch {
+    return { ok: false, error: networkError };
+  }
+};
+
 /**
  * FastAPI returns `detail` as either a string or a list of validation
  * errors. Normalize to a single string for display.

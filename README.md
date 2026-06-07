@@ -140,14 +140,15 @@ In production also set `APP_REQUIRE_HTTPS=true` in the root `.env` (defense in d
 
 The canonical device firmware is the OpenMV (MicroPython) client at
 [`clients/openmv/main.py`](clients/openmv/main.py): the cellular modem driver,
-server clock sync, capture scheduling, and deep sleep. HMAC request signing is
-factored into [`clients/openmv/eagleshot_signing.py`](clients/openmv/eagleshot_signing.py),
-shared with the CPython client in [`clients/python/`](clients/python/). Porting
-to other boards (ESP32-CAM, Raspberry Pi) is covered in
+server clock sync, capture scheduling, and deep sleep. It is a single
+self-contained file — HMAC request signing is inlined (pure-Python, no `hmac`
+module needed) so there's nothing else to copy to the board. The same wire
+format is implemented by the CPython client in [`clients/python/`](clients/python/).
+Porting to other boards (ESP32-CAM, Raspberry Pi) is covered in
 [`backend/README.md`](backend/README.md#porting-to-other-devices-esp32-cam-raspberry-pi-).
 
 To provision a device: create the station, then `POST
 /stations/<id>/rotate-device-secret` in the admin UI. Set `STATION_ID` in
 `main.py` to the station's stable opaque `id` (the `id` field in the API, not the
 display name or pretty URL slug) and paste the returned secret into
-`STATION_SECRET_B64`. Copy both `main.py` and `eagleshot_signing.py` to the board.
+`STATION_SECRET_B64`. Copy `main.py` to the board (it's self-contained).
