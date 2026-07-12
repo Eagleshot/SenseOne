@@ -2,16 +2,29 @@
 
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from metrics_registry import DEFAULT_CHANNEL, METRICS, RESERVED_READING_KEYS
-from utils import parse_iso_timestamp, iso_utc
+from utils import parse_iso_timestamp, iso_utc, strip_control_characters
+
+# Altitude bounds in metres: below the deepest land depression, above any
+# terrestrial mount point. Also keeps non-finite floats (1e999 -> inf) out of
+# stored rows, where they would break JSON serialization of every response
+# that includes the station.
+MIN_ALTITUDE_M = -500
+MAX_ALTITUDE_M = 9000
 
 
 def to_camel(value: str) -> str:
     """Convert a snake_case field name to the public camelCase API name."""
     first, *rest = value.split("_")
     return first + "".join(part.title() for part in rest)
+
+
+def clean_text(value: str, allow_newlines: bool = False) -> str:
+    """Strip control characters and bidi-override marks (UI-spoofing vectors)
+    plus surrounding whitespace from a user-supplied text field."""
+    return strip_control_characters(value, allow_newlines=allow_newlines).strip()
 
 
 class ApiModel(BaseModel):
@@ -49,19 +62,29 @@ class AppConfig(ApiModel):
         le=1440,
         description="Minutes between captures during the active window (1 to 1440).",
     )
-    title: str = Field(default="", description="Human-readable station title shown in the UI.")
+    title: str = Field(
+        default="", max_length=120, description="Human-readable station title shown in the UI."
+    )
     description: str = Field(
         default="",
         max_length=500,
         description="Free-form description shown on the station detail page. Up to 500 chars.",
     )
-    lat: float = Field(default=0.0, description="Latitude in decimal degrees (-90 to 90).")
-    lon: float = Field(default=0.0, description="Longitude in decimal degrees (-180 to 180).")
-    alt: float = Field(default=0.0, description="Altitude in metres above sea level.")
-    location: str = Field(default="", description="Place name shown in the UI (e.g. valley or peak).")
-    country: str = Field(default="", description="ISO country name in plain text.")
+    lat: float = Field(default=0.0, ge=-90, le=90, description="Latitude in decimal degrees (-90 to 90).")
+    lon: float = Field(default=0.0, ge=-180, le=180, description="Longitude in decimal degrees (-180 to 180).")
+    alt: float = Field(
+        default=0.0,
+        ge=MIN_ALTITUDE_M,
+        le=MAX_ALTITUDE_M,
+        description="Altitude in metres above sea level (-500 to 9000).",
+    )
+    location: str = Field(
+        default="", max_length=160, description="Place name shown in the UI (e.g. valley or peak)."
+    )
+    country: str = Field(default="", max_length=80, description="ISO country name in plain text.")
     country_emoji: str = Field(
         default="",
+        max_length=16,
         description="Optional flag emoji shown next to the country name.",
     )
     is_public: bool = Field(
@@ -87,8 +110,9 @@ class AppConfig(ApiModel):
 
     @field_validator("title", "description", "location", "country", "country_emoji")
     @classmethod
-    def validate_text_field(cls, value: str) -> str:
-        return value.strip()
+    def validate_text_field(cls, value: str, info: ValidationInfo) -> str:
+        # The description keeps its newlines (rendered multi-line).
+        return clean_text(value, allow_newlines=info.field_name == "description")
 
     @field_validator("last_online", "next_online")
     @classmethod
@@ -190,13 +214,18 @@ class StationCreateRequest(ApiModel):
     country_emoji: str = Field(default="", max_length=16, description="Optional flag emoji or short marker.")
     lat: float = Field(default=0.0, ge=-90, le=90, description="Latitude in decimal degrees.")
     lon: float = Field(default=0.0, ge=-180, le=180, description="Longitude in decimal degrees.")
-    alt: float = Field(default=0.0, description="Altitude in metres above sea level.")
+    alt: float = Field(
+        default=0.0,
+        ge=MIN_ALTITUDE_M,
+        le=MAX_ALTITUDE_M,
+        description="Altitude in metres above sea level (-500 to 9000).",
+    )
     is_public: bool = Field(default=False, description="Whether anonymous visitors can see the station.")
 
     @field_validator("title")
     @classmethod
     def validate_title(cls, value: str) -> str:
-        cleaned = value.strip()
+        cleaned = clean_text(value)
         if not cleaned:
             raise ValueError("Title must not be blank.")
         return cleaned
@@ -204,7 +233,7 @@ class StationCreateRequest(ApiModel):
     @field_validator("location", "country", "country_emoji")
     @classmethod
     def validate_text_field(cls, value: str) -> str:
-        return value.strip()
+        return clean_text(value)
 
 
 class StationDeviceSecretResponse(ApiModel):
@@ -308,7 +337,8 @@ class ChannelReading(ApiModel):
     unknown numeric metrics are still accepted so a device can report a new field
     without a server-side schema change. Values must be numbers — ``null`` is
     skipped and booleans store as 0/1; any other non-numeric value is rejected. At
-    most 64 metric fields, each key at most 64 characters.
+    most 64 metric fields; each key at most 64 characters of letters, digits,
+    '.', '_' and '-' (same charset as channels).
     """
 
     model_config = ConfigDict(
@@ -353,6 +383,12 @@ class ChannelReading(ApiModel):
                 )
             if len(key) > MAX_METRIC_KEY_LENGTH:
                 raise ValueError(f"Metric key '{key[:16]}…' is too long.")
+            # Same charset as channels: metric names become datastream rows and
+            # chart titles, so control/bidi characters must not sneak through.
+            if not re.fullmatch(r"[A-Za-z0-9._-]+", key):
+                raise ValueError(
+                    f"Metric key '{key[:16]}' may only contain letters, digits, '.', '_' and '-'."
+                )
             if value is None:
                 continue  # null is skipped at ingest
             # bool is an int subclass: it stores as 0/1 and is range-checked as such.

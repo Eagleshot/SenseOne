@@ -10,16 +10,29 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 
-import { useApp } from "@/contexts/AppContext";
-import { createDefaultHistoryDateRange, filterHistoricalData } from "@/lib/historyFilters";
+import { usePreferences, useStationData } from "@/contexts/AppContext";
+import {
+  createDefaultHistoryDateRange,
+  filterHistoricalData,
+  historyWindowHoursForRange,
+  minSelectableHistoryDate,
+} from "@/lib/historyFilters";
 import { HistoricalCharts } from "./HistoricalCharts";
 import { RawDataTable } from "./RawDataTable";
 
 export const SensorHistoryPanel: React.FC = () => {
-  const { historicalData, timezone } = useApp();
+  const { historicalData, historicalDataError, setHistoryWindowHours } = useStationData();
+  const { timezone } = usePreferences();
   const [dateRange, setDateRange] = useState<DateRange | undefined>(createDefaultHistoryDateRange);
   const [timeFrom, setTimeFrom] = useState("00:00");
   const [timeTo, setTimeTo] = useState("23:59");
+
+  // Picking a range widens the backend fetch window to cover it (the data was
+  // previously always just the last 24h, so older days silently came up empty).
+  const handleDateRangeSelect = (range: DateRange | undefined) => {
+    setDateRange(range);
+    setHistoryWindowHours(historyWindowHoursForRange(range?.from));
+  };
 
   const filteredData = useMemo(() => {
     return filterHistoricalData({
@@ -65,8 +78,11 @@ export const SensorHistoryPanel: React.FC = () => {
                     mode="range"
                     defaultMonth={dateRange?.from}
                     selected={dateRange}
-                    onSelect={setDateRange}
+                    onSelect={handleDateRangeSelect}
                     numberOfMonths={1}
+                    // Only days the backend's 7-day lookback can actually
+                    // serve; future days hold nothing either.
+                    disabled={[{ before: minSelectableHistoryDate() }, { after: new Date() }]}
                   />
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs text-muted-foreground">Time</span>
@@ -92,7 +108,7 @@ export const SensorHistoryPanel: React.FC = () => {
       </div>
 
       <div className="space-y-6 px-4 pb-4 pt-0 sm:px-6 sm:pb-6">
-        <HistoricalCharts data={filteredData} />
+        <HistoricalCharts data={filteredData} loadFailed={historicalDataError} />
         <RawDataTable data={filteredData} />
       </div>
     </motion.div>

@@ -4,10 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RawDataTable } from "@/components/RawDataTable";
 import { TEMPERATURE_UNIT } from "@/lib/units";
 
-const mockUseApp = vi.fn();
+const mockUsePreferences = vi.fn();
 
 vi.mock("@/contexts/AppContext", () => ({
-  useApp: () => mockUseApp(),
+  usePreferences: () => mockUsePreferences(),
 }));
 
 const duplicateTimestampRows = [
@@ -49,8 +49,8 @@ const readBlobAsText = (blob: Blob) =>
 
 describe("RawDataTable", () => {
   beforeEach(() => {
-    mockUseApp.mockReset();
-    mockUseApp.mockReturnValue({
+    mockUsePreferences.mockReset();
+    mockUsePreferences.mockReturnValue({
       timezone: "UTC",
     });
   });

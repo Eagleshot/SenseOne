@@ -177,6 +177,18 @@ def test_image_upload_without_signature_is_rejected(signed_client):
     assert response.status_code == 401
 
 
+def test_unknown_station_is_401_not_404(signed_client):
+    """Signed routes must not reveal which station ids exist to unauthenticated callers."""
+    client, _, secret_b64 = signed_client
+    bogus_station = "aaaabbbbcccc"
+    path = f"{INGEST_API_PREFIX}/stations/{bogus_station}/images"
+    response = _post_signed(
+        client, secret_b64, bogus_station, path, _JPEG_BODY,
+        extra_headers={"Content-Type": "image/jpeg"},
+    )
+    assert response.status_code == 401
+
+
 def test_image_upload_with_wrong_secret_is_rejected(signed_client):
     client, station_id, _ = signed_client
     bogus_secret = generate_device_hmac_secret_b64()
@@ -189,10 +201,12 @@ def test_image_upload_with_wrong_secret_is_rejected(signed_client):
 
 
 def test_image_upload_rejected_when_disk_nearly_full(signed_client, monkeypatch):
+    import image_store
+
     client, station_id, secret_b64 = signed_client
-    monkeypatch.setattr(device_ingestion, "MIN_FREE_DISK_BYTES", 500 * 1024 * 1024)
+    monkeypatch.setenv("APP_MIN_FREE_DISK_BYTES", str(500 * 1024 * 1024))
     monkeypatch.setattr(
-        device_ingestion.shutil, "disk_usage",
+        image_store.shutil, "disk_usage",
         lambda _path: SimpleNamespace(total=1, used=1, free=1024),
     )
     path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"
@@ -208,10 +222,12 @@ def test_image_upload_rejected_when_disk_nearly_full(signed_client, monkeypatch)
 
 
 def test_image_upload_allowed_when_disk_guard_disabled(signed_client, monkeypatch):
+    import image_store
+
     client, station_id, secret_b64 = signed_client
-    monkeypatch.setattr(device_ingestion, "MIN_FREE_DISK_BYTES", 0)
+    monkeypatch.setenv("APP_MIN_FREE_DISK_BYTES", "0")
     monkeypatch.setattr(
-        device_ingestion.shutil, "disk_usage",
+        image_store.shutil, "disk_usage",
         lambda _path: SimpleNamespace(total=1, used=1, free=0),
     )
     path = f"{INGEST_API_PREFIX}/stations/{station_id}/images"

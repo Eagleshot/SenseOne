@@ -1,16 +1,16 @@
 """Weather and image serving routes."""
 
 import base64
-import os
 import time
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
-import store
-from auth import get_optional_current_user
-from config import get_data_dir
+from auth import get_current_user, get_optional_current_user
+from db import sqlite_repo
+from image_store import get_image_store
+from settings import get_settings
 from station_access import require_station_view
 from utils import media_type_from_path, sanitize_filename
 from routes import ValidStationId
@@ -27,20 +27,28 @@ WEATHER_TILE_LAYERS = {
     "pressure_new",
 }
 
-# A map view fires off dozens of tile requests at once. Reuse one pooled client
-# with HTTP keep-alive so we don't pay a fresh TLS handshake to OpenWeather per
-# tile (the main source of overlay slowness).
-_tile_client: "httpx.AsyncClient | None" = None
+# Highest zoom the proxy forwards upstream. The endpoint is unauthenticated and
+# every distinct (layer, z, x, y) is a potential upstream call, so the tile
+# keyspace must be bounded; weather data is ~km-scale anyway, so deeper tiles
+# carry no extra information. The frontend overlay sets maxNativeZoom to match
+# and upscales beyond it (InteractiveMap.tsx).
+MAX_WEATHER_TILE_ZOOM = 12
+
+# A map view fires off dozens of tile requests at once, and the data endpoints
+# hit the same upstream. Reuse one pooled client with HTTP keep-alive so we
+# don't pay a fresh TLS handshake to OpenWeather per request (the main source
+# of overlay slowness).
+_openweather_client: "httpx.AsyncClient | None" = None
 
 
-def _weather_tile_client() -> httpx.AsyncClient:
-    global _tile_client
-    if _tile_client is None or _tile_client.is_closed:
-        _tile_client = httpx.AsyncClient(
+def _get_openweather_client() -> httpx.AsyncClient:
+    global _openweather_client
+    if _openweather_client is None or _openweather_client.is_closed:
+        _openweather_client = httpx.AsyncClient(
             timeout=15,
             limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
         )
-    return _tile_client
+    return _openweather_client
 
 
 class TTLCache:
@@ -114,11 +122,24 @@ def get_station_image(
         raise HTTPException(status_code=400, detail="Invalid filename.")
 
     require_station_view(station_id, user)
-    data_dir = get_data_dir()
-    image_path = data_dir / station_id / "images" / filename
+    # The DB row's storage_key is the source of truth: a blob is only served if
+    # its metadata row exists, and the stored key decides where the blob lives.
+    storage_key = sqlite_repo.image_storage_key(station_id, filename)
+    if storage_key is None:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    image_path = get_image_store().path(storage_key)
     if not image_path.is_file():
         raise HTTPException(status_code=404, detail="Image not found.")
-    return FileResponse(image_path, media_type=media_type_from_path(image_path))
+    return FileResponse(
+        image_path,
+        media_type=media_type_from_path(image_path),
+        # Captures are immutable in practice (a new capture gets a new
+        # filename; only a same-minute re-upload replaces in place), so let
+        # browsers reuse them for a day instead of revalidating every scrub
+        # step. `private`: stations can be non-public, shared caches must not
+        # keep these.
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 async def fetch_openweather(
@@ -138,7 +159,7 @@ async def fetch_openweather(
     if cached is not None:
         return cached
 
-    api_key = os.getenv("OPENWEATHER_API_KEY")
+    api_key = get_settings().openweather_api_key
     if not api_key:
         raise HTTPException(status_code=500, detail="Missing OPENWEATHER_API_KEY.")
 
@@ -146,8 +167,7 @@ async def fetch_openweather(
     params = {"lat": lat, "lon": lon, "units": units, "appid": api_key}
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.get(url, params=params)
+        response = await _get_openweather_client().get(url, params=params)
     except httpx.RequestError as exc:
         logging.warning("OpenWeather request error: %s", exc)
         raise HTTPException(status_code=502, detail="OpenWeather request failed.") from exc
@@ -167,7 +187,9 @@ async def fetch_openweather(
 
 def station_coordinates_for_weather(station_id: str) -> tuple[float, float]:
     """Get coordinates for weather API calls."""
-    config = store.station_config(station_id)
+    config = sqlite_repo.station_config(station_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Unknown station id.")
     lat = config.lat
     lon = config.lon
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
@@ -215,6 +237,57 @@ async def get_station_weather_forecast(
 
 
 @router.get(
+    "/geo/reverse",
+    summary="Reverse geocode coordinates",
+    description=(
+        "Resolve coordinates to the nearest place name and ISO country code via "
+        "OpenWeather's geocoding API (the API key stays server-side). Used to "
+        "prefill the location/country fields when placing a new station on the "
+        "map. Signed-in users only; results are cached server-side for a day. "
+        "Returns nulls when OpenWeather knows no place there (e.g. open ocean)."
+    ),
+)
+async def reverse_geocode(
+    lat: float = Query(..., ge=-90, le=90, description="Latitude in decimal degrees."),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude in decimal degrees."),
+    user=Depends(get_current_user),
+) -> dict:
+    import logging
+
+    # Geocoding results are static; cache by ~110 m grid so map nudges hit cache.
+    cache_key = ("geo", round(lat, 3), round(lon, 3))
+    cached = _weather_data_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    api_key = get_settings().openweather_api_key
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Missing OPENWEATHER_API_KEY.")
+
+    url = "https://api.openweathermap.org/geo/1.0/reverse"
+    try:
+        response = await _get_openweather_client().get(
+            url, params={"lat": lat, "lon": lon, "limit": 1, "appid": api_key}
+        )
+    except httpx.RequestError as exc:
+        logging.warning("OpenWeather reverse-geocode request error: %s", exc)
+        raise HTTPException(status_code=502, detail="Reverse geocoding failed.") from exc
+    if response.status_code >= 400:
+        logging.warning("OpenWeather reverse-geocode upstream returned %s", response.status_code)
+        raise HTTPException(status_code=502, detail="Reverse geocoding failed.")
+
+    items = response.json() or []
+    first = items[0] if items else {}
+    result = {
+        "name": first.get("name"),
+        "countryCode": first.get("country"),
+        "state": first.get("state"),
+    }
+    _weather_data_cache.put(cache_key, result, 24 * 3600)
+    return result
+
+
+@router.get(
     "/weather/map/{layer}/{z}/{x}/{y}",
     summary="Get a weather map overlay tile",
     description=(
@@ -230,6 +303,11 @@ async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
 
     if layer not in WEATHER_TILE_LAYERS:
         raise HTTPException(status_code=404, detail="Unknown weather layer.")
+    # Bound the tile keyspace: z capped, x/y must be valid tile indices for z.
+    # Otherwise this open proxy lets anyone mint unlimited cache-missing keys,
+    # each one an upstream OpenWeather call against the API quota.
+    if not (0 <= z <= MAX_WEATHER_TILE_ZOOM) or not (0 <= x < 2**z) or not (0 <= y < 2**z):
+        raise HTTPException(status_code=404, detail="Tile coordinates out of range.")
 
     cache_key = (layer, z, x, y)
     cached = _tile_cache.get(cache_key)
@@ -237,13 +315,13 @@ async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
         content, media_type = cached
         return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=900"})
 
-    api_key = os.getenv("OPENWEATHER_API_KEY")
+    api_key = get_settings().openweather_api_key
     if not api_key:
         raise HTTPException(status_code=500, detail="Missing OPENWEATHER_API_KEY.")
 
     url = f"https://tile.openweathermap.org/map/{layer}/{z}/{x}/{y}.png"
     try:
-        response = await _weather_tile_client().get(url, params={"appid": api_key})
+        response = await _get_openweather_client().get(url, params={"appid": api_key})
     except httpx.RequestError as exc:
         logging.warning("OpenWeather tile request error: %s", exc)
         raise HTTPException(status_code=502, detail="OpenWeather tile request failed.") from exc

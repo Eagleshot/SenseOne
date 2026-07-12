@@ -39,7 +39,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, Request, status
 
-from config import get_data_dir
+from settings import get_data_dir
 from db import sqlite_repo
 from station_access import require_station_exists
 from utils import b64url_decode_nopad, b64url_encode_nopad
@@ -52,6 +52,11 @@ DEVICE_HMAC_SECRET_BYTES = 32
 NONCE_DB_FILENAME = "device_nonces.db"
 MIN_NONCE_HEX_LENGTH = 16
 SIGNATURE_HEX_LENGTH = 64
+# Ceiling on a signed request body. Verification must hash the whole body, so it
+# is read before the signature verdict — without a cap an unauthenticated caller
+# could stream an unbounded (chunked, no Content-Length) body into memory.
+# Routes pass their own tighter cap; this default backstops direct callers.
+DEFAULT_MAX_SIGNED_BODY_BYTES = 25 * 1024 * 1024
 
 
 def generate_device_hmac_secret_b64() -> str:
@@ -93,9 +98,25 @@ def canonical_signing_string(
     )).encode("ascii")
 
 
+# Prune expired nonces at most this often: an expired nonce can't replay anyway
+# (the timestamp window rejects it first), so per-request DELETEs would be pure
+# overhead on the signed hot path.
+NONCE_PRUNE_INTERVAL_SECONDS = 60.0
+
+_ensured_nonce_db_path: Path | None = None
+_last_nonce_prune = 0.0
+
+
 def _ensure_nonce_db(db_path: Path) -> None:
+    """Create the nonce DB schema, once per process (per path; tests swap data dirs)."""
+    global _ensured_nonce_db_path
+    if _ensured_nonce_db_path == db_path:
+        return
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as connection:
+        # WAL so concurrent signed requests (one nonce write each) don't fail
+        # with "database is locked". Persistent per DB file.
+        connection.execute("PRAGMA journal_mode=WAL")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS device_nonces (
@@ -110,15 +131,20 @@ def _ensure_nonce_db(db_path: Path) -> None:
             "CREATE INDEX IF NOT EXISTS idx_device_nonces_seen_at ON device_nonces(seen_at)"
         )
         connection.commit()
+    _ensured_nonce_db_path = db_path
 
 
 def _register_nonce(station_id: str, nonce: str, now: float) -> bool:
     """Insert (station_id, nonce). Returns True if fresh, False on replay."""
+    global _last_nonce_prune
     db_path = get_data_dir() / NONCE_DB_FILENAME
     _ensure_nonce_db(db_path)
-    cutoff = now - NONCE_RETENTION_SECONDS
     with sqlite3.connect(db_path) as connection:
-        connection.execute("DELETE FROM device_nonces WHERE seen_at < ?", (cutoff,))
+        if now - _last_nonce_prune >= NONCE_PRUNE_INTERVAL_SECONDS:
+            connection.execute(
+                "DELETE FROM device_nonces WHERE seen_at < ?", (now - NONCE_RETENTION_SECONDS,)
+            )
+            _last_nonce_prune = now
         try:
             connection.execute(
                 "INSERT INTO device_nonces (station_id, nonce, seen_at) VALUES (?, ?, ?)",
@@ -138,15 +164,43 @@ def _reject(detail: str) -> None:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
 
 
-async def verify_station_signature(station_id: str, request: Request) -> bytes:
+async def _read_body_capped(request: Request, max_bytes: int) -> bytes:
+    """Read the request body, rejecting with 413 once it exceeds max_bytes.
+
+    Streamed chunk-by-chunk so a request without a Content-Length header (e.g.
+    chunked transfer encoding) cannot buffer an unbounded body in memory before
+    the signature check."""
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Request body too large. Maximum is {max_bytes} bytes.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def verify_station_signature(
+    station_id: str,
+    request: Request,
+    *,
+    max_body_bytes: int = DEFAULT_MAX_SIGNED_BODY_BYTES,
+) -> bytes:
     """Verify the HMAC signature on a station device request.
 
     Returns the raw request body on success. Raises HTTPException(401) on any
-    failure. The body is read into memory once here; route handlers should
-    use the returned bytes rather than re-streaming the request.
-    """
-    require_station_exists(station_id)
+    failure, or 413 when the body exceeds ``max_body_bytes``. The body is read
+    into memory once here; route handlers should use the returned bytes rather
+    than re-streaming the request.
 
+    Deliberately no existence check before authentication: an unknown station
+    falls through to the secret lookup and 401s exactly like an existing station
+    with no secret provisioned, so unauthenticated callers can't probe which
+    station ids exist (404 vs 401).
+    """
     header_station = request.headers.get("X-Station-Id", "").strip()
     raw_timestamp = request.headers.get("X-Timestamp", "").strip()
     nonce = request.headers.get("X-Nonce", "").strip().lower()
@@ -184,9 +238,10 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
     ):
         _reject("Invalid X-Signature.")
 
+    # Unknown station and station-without-secret give the same 401 (see docstring).
     secret_b64 = sqlite_repo.read_device_secret_b64(station_id)
     if not secret_b64:
-        _reject("Station has no device HMAC secret provisioned.")
+        _reject("Unknown station or no device HMAC secret provisioned.")
         return b""
     try:
         secret = b64url_decode_nopad(secret_b64)
@@ -194,7 +249,7 @@ async def verify_station_signature(station_id: str, request: Request) -> bytes:
         _reject("Station device HMAC secret is malformed.")
         return b""
 
-    body = await request.body()
+    body = await _read_body_capped(request, max_body_bytes)
     body_sha256_hex = hashlib.sha256(body).hexdigest()
 
     # X-Filename is signed (see module docstring): it sets an uploaded image's

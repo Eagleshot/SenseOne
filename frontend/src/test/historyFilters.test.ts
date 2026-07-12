@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   createDefaultHistoryDateRange,
+  DEFAULT_HISTORY_HOURS,
   filterHistoricalData,
+  historyWindowHoursForRange,
   isMinuteWithinRange,
+  MAX_HISTORY_HOURS,
+  minSelectableHistoryDate,
   parseTimeToMinutes,
 } from "@/lib/historyFilters";
 
@@ -19,6 +23,42 @@ const createRow = (isoTimestamp: string) => ({
   uvIndex: 0,
   dewPoint: 0,
   feelsLike: 0,
+});
+
+describe("historyWindowHoursForRange", () => {
+  const now = new Date("2026-06-11T15:30:00");
+
+  it("defaults when no range start is picked", () => {
+    expect(historyWindowHoursForRange(undefined, now)).toBe(DEFAULT_HISTORY_HOURS);
+  });
+
+  it("covers back to the start of the picked first day", () => {
+    // 3 days ago at local midnight -> 3*24h + the 15.5h elapsed today, ceiled.
+    const from = new Date("2026-06-08T10:00:00");
+    expect(historyWindowHoursForRange(from, now)).toBe(88);
+  });
+
+  it("never shrinks below the default window", () => {
+    const from = new Date("2026-06-11T01:00:00"); // today: only ~16h needed
+    expect(historyWindowHoursForRange(from, now)).toBe(DEFAULT_HISTORY_HOURS);
+  });
+
+  it("clamps to the backend's 7-day cap", () => {
+    const from = new Date("2026-05-01T00:00:00");
+    expect(historyWindowHoursForRange(from, now)).toBe(MAX_HISTORY_HOURS);
+  });
+});
+
+describe("minSelectableHistoryDate", () => {
+  it("is the start of the earliest day the max lookback reaches", () => {
+    const now = new Date("2026-06-11T15:30:00");
+    const earliest = minSelectableHistoryDate(now);
+    expect(earliest.getHours()).toBe(0);
+    expect(earliest.getMinutes()).toBe(0);
+    // 168h before Jun 11 15:30 is Jun 4 15:30 -> floored to Jun 4 00:00 local.
+    expect(earliest.getDate()).toBe(4);
+    expect(earliest.getMonth()).toBe(5);
+  });
 });
 
 describe("historyFilters", () => {

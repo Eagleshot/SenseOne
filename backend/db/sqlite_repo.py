@@ -1,7 +1,7 @@
 """SQLite implementation of the data/access/user operations.
 
-The repository the service layer calls through `store.py`, `station_access.py`,
-`users.py` and `station_hmac.py`. Synchronous so it slots into the sync route
+The repository the routes and the `station_access.py` / `users.py` /
+`station_hmac.py` helpers call. Synchronous so it slots into the sync route
 handlers via FastAPI's threadpool.
 
 Stations have two external handles (see db.models.Station):
@@ -19,13 +19,23 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import aliased
 
 from auth import hash_secret, verify_secret
-from db.models import Datastream, Observation, SensorReading, Station, StationDeviceSecret, StationImage, User
+from db.models import (
+    AuthSession,
+    Datastream,
+    Observation,
+    SensorReading,
+    Station,
+    StationDeviceSecret,
+    StationImage,
+    User,
+)
 from db.session import session_scope
+from image_store import station_image_key
 from metrics_registry import DEFAULT_CHANNEL, metric_unit
 from models import AppConfig
 from station_db import StationStatus, _coerce_battery
@@ -183,20 +193,35 @@ def resolve_datastream(session, station_id, metric, channel=DEFAULT_CHANNEL) -> 
 
     The unit is resolved from the metric registry at creation and frozen on the
     row, so stored history stays self-describing even if the registry changes.
+
+    Creation is an upsert (ON CONFLICT DO NOTHING + re-select) so two concurrent
+    check-ins that both first-see the same stream can't race a plain INSERT into
+    a unique-constraint failure on uq_datastreams_station_metric_channel.
     """
-    datastream = session.scalar(
-        select(Datastream).where(
-            Datastream.station_id == station_id,
-            Datastream.metric == metric,
-            Datastream.channel == channel,
+
+    def _get() -> Datastream | None:
+        return session.scalar(
+            select(Datastream).where(
+                Datastream.station_id == station_id,
+                Datastream.metric == metric,
+                Datastream.channel == channel,
+            )
         )
-    )
+
+    datastream = _get()
     if datastream is None:
-        datastream = Datastream(
-            station_id=station_id, metric=metric, channel=channel, unit=metric_unit(metric)
+        session.execute(
+            sqlite_insert(Datastream)
+            .values(
+                id=uuid.uuid4(),
+                station_id=station_id,
+                metric=metric,
+                channel=channel,
+                unit=metric_unit(metric),
+            )
+            .on_conflict_do_nothing(index_elements=["station_id", "metric", "channel"])
         )
-        session.add(datastream)
-        session.flush()
+        datastream = _get()
     return datastream
 
 
@@ -284,17 +309,16 @@ def list_station_views(user) -> list[tuple[str, str, AppConfig, StationStatus, b
     Three queries total regardless of station count: the visible stations, then
     the latest image and latest reading per station — no N+1.
     """
+    owner_id = (getattr(user, "owner_id", None) or None) if user is not None else None
+    is_admin = bool(getattr(user, "is_admin", False)) if user is not None else False
     with session_scope() as session:
-        stations = session.scalars(select(Station).order_by(Station.url_slug)).all()
-        if not stations:
-            return []
-
-        owner_id = getattr(user, "owner_id", None) if user is not None else None
-        is_admin = bool(getattr(user, "is_admin", False)) if user is not None else False
-        visible = [
-            s for s in stations
-            if s.is_public or is_admin or (owner_id is not None and str(s.owner_id) == owner_id)
-        ]
+        stmt = select(Station).order_by(Station.url_slug)
+        if not is_admin:
+            visibility = Station.is_public.is_(True)
+            if owner_id is not None:
+                visibility = or_(visibility, Station.owner_id == uuid.UUID(owner_id))
+            stmt = stmt.where(visibility)
+        visible = session.scalars(stmt).all()
         if not visible:
             return []
         ids = [s.id for s in visible]
@@ -366,6 +390,25 @@ def list_station_views(user) -> list[tuple[str, str, AppConfig, StationStatus, b
             can_edit = is_admin or (owner_id is not None and str(s.owner_id) == owner_id)
             result.append((s.public_id, s.url_slug, _config_from_row(s, status), status, can_edit))
         return result
+
+
+def image_storage_key(public_id: str, filename: str) -> str | None:
+    """The stored blob key for one station image, or None if no such row.
+
+    Serving resolves the blob through this (the DB is the source of truth for
+    what exists) rather than rebuilding a path from URL parts, so a file on disk
+    without a metadata row is not exposed.
+    """
+    with session_scope() as session:
+        row = _station(session, public_id)
+        if row is None:
+            return None
+        return session.scalar(
+            select(StationImage.storage_key).where(
+                StationImage.station_id == row.id,
+                StationImage.filename == filename,
+            )
+        )
 
 
 def image_captures(public_id: str, count: int) -> list[dict[str, str]]:
@@ -487,6 +530,21 @@ def save_station_config(public_id: str, config: AppConfig) -> None:
             row.url_slug = _unique_url_slug(session, config.title, exclude_id=row.id)
 
 
+def delete_station(public_id: str) -> bool:
+    """Delete a station row; returns False if it didn't exist.
+
+    Child rows (images, readings, observations, datastreams, device secrets) go
+    with it via the DB-level ON DELETE CASCADEs — no need to load them. Blobs on
+    disk are NOT touched here; the caller removes them through the image store.
+    """
+    with session_scope() as session:
+        row = _station(session, public_id)
+        if row is None:
+            return False
+        session.execute(delete(Station).where(Station.id == row.id))
+        return True
+
+
 def append_image(public_id, *, filename, content_type, size_bytes, captured_at) -> None:
     with session_scope() as session:
         row = _station(session, public_id)
@@ -499,7 +557,7 @@ def append_image(public_id, *, filename, content_type, size_bytes, captured_at) 
             content_type=content_type,
             size_bytes=size_bytes,
             captured_at=parse_iso_timestamp(captured_at),
-            storage_key=f"{public_id}/images/{filename}",
+            storage_key=station_image_key(public_id, filename),
         )
         # Re-upload of the same capture minute updates the row instead of
         # duplicating the timeline entry.
@@ -601,6 +659,57 @@ def provision_device_secret(public_id: str) -> str:
         session.execute(delete(StationDeviceSecret).where(StationDeviceSecret.station_id == row.id))
         session.add(StationDeviceSecret(station_id=row.id, secret_enc=secret_b64.encode("ascii")))
     return secret_b64
+
+
+# ----- auth sessions ---------------------------------------------------------
+# Sessions are stored by token *hash* (the caller hashes; see auth.py), so the
+# control DB never holds a live bearer token.
+
+def session_create(token_hash: str, email: str, expires_at: datetime) -> None:
+    with session_scope() as session:
+        session.add(AuthSession(token_hash=token_hash, email=email, expires_at=expires_at))
+
+
+def session_email(token_hash: str) -> str | None:
+    """The email behind a valid, unexpired session token hash, or None."""
+    now = datetime.now(timezone.utc)
+    with session_scope() as session:
+        return session.scalar(
+            select(AuthSession.email).where(
+                AuthSession.token_hash == token_hash,
+                AuthSession.expires_at > now,
+            )
+        )
+
+
+def session_user(token_hash: str) -> dict | None:
+    """The user behind a valid, unexpired session token hash, or None.
+
+    One joined query, used by the per-request auth dependencies instead of a
+    session lookup followed by a separate user lookup.
+    """
+    now = datetime.now(timezone.utc)
+    with session_scope() as session:
+        row = session.scalar(
+            select(User)
+            .join(AuthSession, AuthSession.email == User.email)
+            .where(
+                AuthSession.token_hash == token_hash,
+                AuthSession.expires_at > now,
+            )
+        )
+        return _user_dict(row) if row is not None else None
+
+
+def session_delete(token_hash: str) -> None:
+    with session_scope() as session:
+        session.execute(delete(AuthSession).where(AuthSession.token_hash == token_hash))
+
+
+def sessions_prune_expired() -> None:
+    now = datetime.now(timezone.utc)
+    with session_scope() as session:
+        session.execute(delete(AuthSession).where(AuthSession.expires_at <= now))
 
 
 # ----- users -----------------------------------------------------------------

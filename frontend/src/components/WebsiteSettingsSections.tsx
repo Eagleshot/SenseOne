@@ -1,8 +1,17 @@
-import { Check, Lock, Save, Trash2, Unlock, Upload, X } from "lucide-react";
-import type { RefObject } from "react";
+import { AlertTriangle, Check, KeyRound, Lock, Save, Trash2, Unlock, Upload, X } from "lucide-react";
+import { useRef, useState, type RefObject } from "react";
 
+import { ProvisioningValue } from "@/components/CreateStationDialog";
 import { AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -216,6 +225,240 @@ export const VisibilitySection = ({
     </AccordionContent>
   </AccordionItem>
 );
+
+type DangerZoneSectionProps = {
+  stationId: string;
+  stationName: string;
+  isDeleteDialogOpen: boolean;
+  setDeleteDialogOpen: (open: boolean) => void;
+  isDeleting: boolean;
+  deleteError: string | null;
+  handleConfirmDelete: () => void;
+  onRotateSecret: () => Promise<{ success: boolean; secret?: string; error?: string }>;
+};
+
+export const DangerZoneSection = ({
+  stationId,
+  stationName,
+  isDeleteDialogOpen,
+  setDeleteDialogOpen,
+  isDeleting,
+  deleteError,
+  handleConfirmDelete,
+  onRotateSecret,
+}: DangerZoneSectionProps) => {
+  // Secret-rotation state is local; the panel remounts this section per
+  // station (key), so it can't leak across stations.
+  const [isRotateDialogOpen, setRotateDialogOpen] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
+  const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
+  const [secretCopied, setSecretCopied] = useState(false);
+  const copyResetRef = useRef<number | undefined>(undefined);
+
+  const handleRotateDialogChange = (open: boolean) => {
+    if (isRotating) return;
+    // While the one-time secret is on screen, only the Done button closes.
+    if (!open && rotatedSecret) return;
+    setRotateDialogOpen(open);
+    if (!open) setRotateError(null);
+  };
+
+  const handleRotateDone = () => {
+    setRotateDialogOpen(false);
+    setRotatedSecret(null);
+    setSecretCopied(false);
+  };
+
+  const handleConfirmRotate = async () => {
+    setIsRotating(true);
+    setRotateError(null);
+    const result = await onRotateSecret();
+    setIsRotating(false);
+    if (result.success && result.secret) {
+      setRotatedSecret(result.secret);
+    } else {
+      setRotateError(result.error ?? "Unable to rotate the device secret.");
+    }
+  };
+
+  const handleCopySecret = async () => {
+    if (!rotatedSecret) return;
+    try {
+      await navigator.clipboard.writeText(rotatedSecret);
+      setSecretCopied(true);
+      window.clearTimeout(copyResetRef.current);
+      copyResetRef.current = window.setTimeout(() => setSecretCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable; the value is still selectable in the field.
+    }
+  };
+
+  return (
+  <AccordionItem value="danger-zone" className="rounded-xl border border-destructive/40 bg-transparent">
+    <AccordionTrigger className="px-4 text-sm font-semibold text-destructive hover:no-underline">
+      Danger zone
+    </AccordionTrigger>
+    <AccordionContent className="px-4 pb-4 pt-0">
+      <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-medium text-foreground">Rotate device secret</p>
+          <p className="text-xs text-muted-foreground">
+            Mints a new signing secret and invalidates the current one immediately — the device
+            stops working until it is re-flashed with the new secret.
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setRotateDialogOpen(true)}
+          className="btn-panel shrink-0"
+        >
+          <KeyRound className="h-4 w-4" />
+          Rotate secret
+        </Button>
+      </div>
+
+      <div className="mt-4 flex flex-col gap-3 border-t border-border/60 pt-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-medium text-foreground">Delete this station</p>
+          <p className="text-xs text-muted-foreground">
+            Permanently removes the station, its images, and all sensor history. This cannot be undone.
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          onClick={() => setDeleteDialogOpen(true)}
+          className="shrink-0"
+        >
+          <Trash2 className="h-4 w-4" />
+          Delete station
+        </Button>
+      </div>
+      {deleteError && (
+        <p role="alert" className="pt-2 text-xs text-destructive">
+          {deleteError}
+        </p>
+      )}
+
+      <Dialog open={isRotateDialogOpen} onOpenChange={handleRotateDialogChange}>
+        <DialogContent
+          className="max-w-md"
+          hideCloseButton={Boolean(rotatedSecret)}
+          onInteractOutside={(event) => rotatedSecret && event.preventDefault()}
+          onEscapeKeyDown={(event) => rotatedSecret && event.preventDefault()}
+        >
+          {rotatedSecret ? (
+            <div className="space-y-4">
+              <DialogHeader>
+                <DialogTitle>New device secret</DialogTitle>
+                <DialogDescription>
+                  Flash this into the device firmware (with the unchanged station ID below).
+                </DialogDescription>
+              </DialogHeader>
+              <ProvisioningValue
+                id="rotated-station-id"
+                label="Station ID (unchanged)"
+                hint="STATION_ID stays the same — only the secret rotated."
+                value={stationId}
+                copied={false}
+                onCopy={() => void navigator.clipboard.writeText(stationId).catch(() => {})}
+              />
+              <ProvisioningValue
+                id="rotated-station-secret"
+                label="Device secret"
+                hint="Set STATION_SECRET_B64 to this value."
+                value={rotatedSecret}
+                copied={secretCopied}
+                onCopy={() => void handleCopySecret()}
+              />
+              <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <p className="text-xs text-foreground">
+                  This secret is shown <span className="font-semibold">only once</span>. The old
+                  secret no longer works.
+                </p>
+              </div>
+              <DialogFooter>
+                <Button type="button" onClick={handleRotateDone}>
+                  Done
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <DialogHeader>
+                <DialogTitle>Rotate the device secret for “{stationName}”?</DialogTitle>
+                <DialogDescription>
+                  The current secret stops working <span className="font-semibold">immediately</span>:
+                  the device will fail to upload until it is re-flashed with the new secret. Rotate
+                  if the secret leaked or the device is being replaced.
+                </DialogDescription>
+              </DialogHeader>
+              {rotateError && (
+                <p role="alert" className="text-sm text-destructive">
+                  {rotateError}
+                </p>
+              )}
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => handleRotateDialogChange(false)}
+                  disabled={isRotating}
+                  className="btn-panel"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={() => void handleConfirmRotate()}
+                  disabled={isRotating}
+                >
+                  <KeyRound className="h-4 w-4" />
+                  {isRotating ? "Rotating..." : "Rotate now"}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isDeleteDialogOpen} onOpenChange={(open) => !isDeleting && setDeleteDialogOpen(open)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete “{stationName}”?</DialogTitle>
+            <DialogDescription>
+              This permanently deletes the station, every stored image, and its entire sensor
+              history. A device still flashed with this station&apos;s secret will stop working.{" "}
+              <span className="font-semibold text-destructive">This cannot be undone.</span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeleteDialogOpen(false)}
+              disabled={isDeleting}
+              className="btn-panel"
+            >
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={handleConfirmDelete} disabled={isDeleting}>
+              <Trash2 className="h-4 w-4" />
+              {isDeleting ? "Deleting..." : "Delete permanently"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </AccordionContent>
+  </AccordionItem>
+  );
+};
 
 type ThemeBrandingSectionProps = {
   colorTheme: ColorThemeKey;

@@ -7,7 +7,6 @@ test_auth.py so it runs without a database.
 
 from fastapi.testclient import TestClient
 
-from auth import AUTH_SESSIONS
 from main import create_app
 from station_hmac import provision_device_hmac_secret
 
@@ -16,7 +15,6 @@ def _client(tmp_data_dir, monkeypatch, *, require_https: bool, base_url: str = "
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
     monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
     monkeypatch.setenv("APP_REQUIRE_HTTPS", "true" if require_https else "false")
-    AUTH_SESSIONS.clear()
     return TestClient(create_app(), base_url=base_url)
 
 

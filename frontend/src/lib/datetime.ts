@@ -54,6 +54,28 @@ export const formatTimeLabel = (timestamp: Date, timeZone?: string) => {
   return formatTimeLabelIntl(timestamp, tz);
 };
 
+/** True when the two instants fall on different calendar days in the zone —
+ * the signal that chart axis ticks need a date, not just a time. */
+export const spansMultipleDays = (first: Date, last: Date, timeZone?: string) => {
+  const tz = resolveTimeZone(timeZone);
+  return formatDateKey(first, tz) !== formatDateKey(last, tz);
+};
+
+const formatShortDateIntl = (timestamp: Date, timeZone: string) =>
+  new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "short",
+    day: "numeric",
+  }).format(timestamp);
+
+/** Chart axis tick: "14:00" within a single day, "Jun 9, 14:00" across days
+ * (time-only labels repeat ambiguously on multi-day ranges). */
+export const formatChartTickLabel = (timestamp: Date, timeZone: string | undefined, includeDate: boolean) => {
+  const tz = resolveTimeZone(timeZone);
+  const time = formatTimeLabelIntl(timestamp, tz);
+  return includeDate ? `${formatShortDateIntl(timestamp, tz)}, ${time}` : time;
+};
+
 // "in about 5 minutes" -> "in 5 min.": drop date-fns' "about " hedge and
 // abbreviate "minutes". Shared by the status / weather "last online" labels.
 export const formatRelativeShort = (date: Date) =>

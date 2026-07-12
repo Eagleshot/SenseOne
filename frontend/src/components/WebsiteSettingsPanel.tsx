@@ -4,7 +4,8 @@ import { motion } from "framer-motion";
 import { Settings } from "lucide-react";
 
 import { Accordion } from "@/components/ui/accordion";
-import { useApp } from "@/contexts/AppContext";
+import { useToast } from "@/components/Toaster";
+import { usePreferences, useStationData } from "@/contexts/AppContext";
 import {
   CUSTOM_CAPTURE_INTERVAL_VALUE,
   getCaptureIntervalSelection,
@@ -13,32 +14,36 @@ import {
   validateCaptureInterval,
 } from "@/lib/captureInterval";
 import {
+  DangerZoneSection,
   ScheduleSettingsSection,
   ThemeBrandingSection,
   VisibilitySection,
 } from "./WebsiteSettingsSections";
 
 export const WebsiteSettingsPanel: React.FC = () => {
+  const { colorTheme, setColorTheme, brandLogoUrl, setBrandLogoUrl } = usePreferences();
   const {
     activeWebcam,
-    colorTheme,
-    setColorTheme,
-    brandLogoUrl,
-    setBrandLogoUrl,
     stationStartTime,
     stationStopTime,
     useSunriseSunset,
     captureInterval,
     saveStationSchedule,
+    deleteStation,
+    rotateDeviceSecret,
     isStationConfigLoading,
     isStationConfigSaving,
     stationConfigError,
     isPublic,
     setIsPublic,
     canEdit,
-  } = useApp();
+  } = useStationData();
+  const { showToast } = useToast();
 
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isDeleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const isPrivate = !isPublic;
 
@@ -77,11 +82,39 @@ export const WebsiteSettingsPanel: React.FC = () => {
     setScheduleError(null);
   }, [stationStartTime, stationStopTime, useSunriseSunset, captureInterval]);
 
+  // Clear delete-state when the station changes (incl. right after a deletion,
+  // when the selection moves to the next station).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: reset delete dialog/error per station
+    setDeleteDialogOpen(false);
+    setDeleteError(null);
+  }, [activeWebcam.id]);
+
   const scheduleControlsDisabled = isStationConfigLoading;
   const logoPreviewUrl = brandLogoUrl || "/logo.png";
 
   const handleToggleVisibility = (nextPrivate: boolean) => {
-    void setIsPublic(!nextPrivate);
+    void (async () => {
+      const saved = await setIsPublic(!nextPrivate);
+      if (saved) showToast(nextPrivate ? "Station is now private." : "Station is now public.");
+    })();
+  };
+
+  const handleConfirmDelete = async () => {
+    setIsDeleting(true);
+    setDeleteError(null);
+    const stationName = activeWebcam.name;
+    const result = await deleteStation(activeWebcam.id);
+    setIsDeleting(false);
+    if (result.success) {
+      // The selection has already moved on to another station; acknowledge,
+      // since otherwise the page just switching reads like a glitch.
+      setDeleteDialogOpen(false);
+      showToast(`Station “${stationName}” deleted.`);
+    } else {
+      setDeleteDialogOpen(false);
+      setDeleteError(result.error ?? "Unable to delete the station.");
+    }
   };
 
   const clearScheduleError = () => setScheduleError(null);
@@ -119,12 +152,15 @@ export const WebsiteSettingsPanel: React.FC = () => {
 
   const handleSaveSchedule = () => {
     if (!validateScheduleTimes()) return;
-    void saveStationSchedule({
-      stationStartTime: draftStationStartTime,
-      stationStopTime: draftStationStopTime,
-      useSunriseSunset: draftUseSunriseSunset,
-      captureInterval: draftCaptureInterval,
-    });
+    void (async () => {
+      const saved = await saveStationSchedule({
+        stationStartTime: draftStationStartTime,
+        stationStopTime: draftStationStopTime,
+        useSunriseSunset: draftUseSunriseSunset,
+        captureInterval: draftCaptureInterval,
+      });
+      if (saved) showToast("Schedule saved.");
+    })();
   };
 
   const handleCancelScheduleEdit = () => {
@@ -238,6 +274,22 @@ export const WebsiteSettingsPanel: React.FC = () => {
             setBrandLogoUrl={setBrandLogoUrl}
             uploadError={uploadError}
           />
+
+          {canEdit && (
+            <DangerZoneSection
+              // Remount per station so the rotation dialog's local state
+              // (incl. a displayed one-time secret) can't leak across stations.
+              key={activeWebcam.id}
+              stationId={activeWebcam.id}
+              stationName={activeWebcam.name}
+              isDeleteDialogOpen={isDeleteDialogOpen}
+              setDeleteDialogOpen={setDeleteDialogOpen}
+              isDeleting={isDeleting}
+              deleteError={deleteError}
+              handleConfirmDelete={() => void handleConfirmDelete()}
+              onRotateSecret={() => rotateDeviceSecret(activeWebcam.id)}
+            />
+          )}
         </Accordion>
       </div>
     </motion.div>

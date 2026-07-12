@@ -4,6 +4,31 @@ import { SensorData } from "@/data/types";
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
+// How much history is fetched from the backend. The default matches the
+// fetch on page load; the maximum mirrors the backend's cap (hours<=168).
+export const DEFAULT_HISTORY_HOURS = 24;
+export const MAX_HISTORY_HOURS = 168;
+
+/** Backend fetch window (in hours back from now) needed to cover a picked
+ * range: from the start of the range's first day, clamped to the backend cap
+ * and never below the default (so the latest-reading consumers always have
+ * the most recent day). */
+export const historyWindowHoursForRange = (from: Date | undefined, now: Date = new Date()): number => {
+  if (!from) return DEFAULT_HISTORY_HOURS;
+  const startOfFromDay = new Date(from);
+  startOfFromDay.setHours(0, 0, 0, 0);
+  const hours = Math.ceil((now.getTime() - startOfFromDay.getTime()) / (60 * 60 * 1000));
+  return Math.min(MAX_HISTORY_HOURS, Math.max(DEFAULT_HISTORY_HOURS, hours));
+};
+
+/** Earliest calendar day the date picker should allow: the start of the day
+ * that the backend's maximum lookback window can still reach. */
+export const minSelectableHistoryDate = (now: Date = new Date()): Date => {
+  const earliest = new Date(now.getTime() - MAX_HISTORY_HOURS * 60 * 60 * 1000);
+  earliest.setHours(0, 0, 0, 0);
+  return earliest;
+};
+
 type HistoryFilterOptions = {
   data: SensorData[];
   dateRange?: DateRange;

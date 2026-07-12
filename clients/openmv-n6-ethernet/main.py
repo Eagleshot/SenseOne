@@ -1,5 +1,4 @@
 # OpenMV N6 Ethernet image uploader (PoE)
-
 import binascii
 import gc
 import hashlib
@@ -11,13 +10,11 @@ import csi
 import network
 import requests
 
-
-
 # ----- Configuration ---------------------------------------------------------
 
-BASE_URL = "http://192.168.0.123:3000"
-STATION_ID = "8fdf6d13ad32"
-STATION_SECRET_B64 = "_BvEeSsUo5PRBExW6Ag5VcGDS0HHsAEJaxHysBtHPJA"
+BASE_URL = "http://api.eagleshot.org"
+STATION_ID = "fa2d76110cd8"
+STATION_SECRET_B64 = "Yj7DagG5az05ymWc89CEYqz6eNnyminLP5jNonqp-Jw"
 STREAM = ""  # optional camera/stream token for multi-camera stations; "" = the single default camera
 
 UPLOAD_PATH = "/v1/ingest/stations/%s/images" % STATION_ID

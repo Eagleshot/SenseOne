@@ -15,10 +15,11 @@ _EXTENSION_TO_MEDIA_TYPE: dict[str, str] = {
     ".webp": "image/webp",
 }
 
+# Derived reverse map; the FIRST extension listed for a media type above is
+# canonical (".jpg" over ".jpeg"), hence the reversed iteration.
 _MEDIA_TYPE_TO_EXTENSION: dict[str, str] = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
+    media_type: extension
+    for extension, media_type in reversed(_EXTENSION_TO_MEDIA_TYPE.items())
 }
 
 # Capture filename: YYYYMMDD_HHMMZ_<name>[_<stream>].<ext>
@@ -39,6 +40,23 @@ _GERMAN_UMLAUTS = {
 }
 _UMLAUT_TABLE = str.maketrans(_GERMAN_UMLAUTS)
 _NAME_TOKEN_MAX_LEN = 40
+
+
+# Characters never legitimate in user-facing text: C0 control characters
+# (incl. DEL) and the Unicode bidi override/isolate marks (LRM/RLM, LRE..RLO,
+# LRI..PDI), which enable right-to-left display spoofing of names shown in the
+# UI. Newlines sit in the control range; fields that allow them (the
+# description) use the second form.
+_TEXT_DISALLOWED = re.compile("[\x00-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_TEXT_DISALLOWED_KEEP_NEWLINE = re.compile(
+    "[\x00-\x09\x0b-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+)
+
+
+def strip_control_characters(value: str, *, allow_newlines: bool = False) -> str:
+    """Remove control characters and bidi-override marks from user text."""
+    pattern = _TEXT_DISALLOWED_KEEP_NEWLINE if allow_newlines else _TEXT_DISALLOWED
+    return pattern.sub("", value)
 
 
 def sanitize_filename(raw_name: str) -> str:

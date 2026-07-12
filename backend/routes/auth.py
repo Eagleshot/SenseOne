@@ -5,17 +5,19 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from models import LoginRequest, AuthResponse, MeResponse
 from auth import (
+    auth_cookie_secure,
     bearer_scheme,
     check_login_throttle,
     clear_login_failures,
     create_session,
     ensure_auth_configured,
     get_current_user,
+    prune_expired_sessions,
     record_login_failure,
     remove_session,
     resolve_session_token,
 )
-from constants import AUTH_COOKIE_NAME, AUTH_COOKIE_SAMESITE, auth_cookie_secure
+from constants import AUTH_COOKIE_NAME, AUTH_COOKIE_SAMESITE
 from users import authenticate_user
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -54,6 +56,7 @@ def login(payload: LoginRequest, request: Request, response: Response) -> AuthRe
         )
 
     clear_login_failures(client_ip, user.email)
+    prune_expired_sessions()  # logins are rare enough to carry the cleanup
     token, expires_in = create_session(user.email)
     response.set_cookie(
         key=AUTH_COOKIE_NAME,

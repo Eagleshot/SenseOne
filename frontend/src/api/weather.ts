@@ -8,8 +8,10 @@ export type WeatherState = {
   visibilityKm?: number;
   windSpeedKmh: number;
   windDirection: number;
-  sunrise: string;
-  sunset: string;
+  // Instants, not preformatted strings: the component renders them in the
+  // app-wide display timezone so weather agrees with every other timestamp.
+  sunriseAt: Date;
+  sunsetAt: Date;
   description?: string;
   main?: string;
   iconCode?: string;
@@ -57,13 +59,15 @@ type CurrentWeatherResponse = {
   name?: string;
 };
 
+// Offset-based formatters remain for FORECAST bucketing only: forecast rows
+// group into the station's local days (that is what a daily forecast means),
+// using the offset OpenWeather reports alongside the data.
 const makeOffsetFormatter = (options: Intl.DateTimeFormatOptions) =>
   (timestamp: Date, offsetSeconds: number) =>
     new Intl.DateTimeFormat("en-US", { timeZone: "UTC", ...options }).format(
       new Date(timestamp.getTime() + offsetSeconds * 1000)
     );
 
-export const formatTimeLabelWithOffset = makeOffsetFormatter({ hour: "2-digit", minute: "2-digit", hour12: false });
 const formatDateKeyWithOffset = makeOffsetFormatter({ year: "numeric", month: "2-digit", day: "2-digit" });
 const formatDayLabelWithOffset = makeOffsetFormatter({ weekday: "short" });
 
@@ -109,8 +113,8 @@ export const parseCurrentWeather = (data: CurrentWeatherResponse): WeatherState 
       : undefined,
     windSpeedKmh: Math.round(windSpeed * 3.6 * 10) / 10,
     windDirection: data.wind?.deg ?? 0,
-    sunrise: formatTimeLabelWithOffset(sunriseDate, timezoneOffsetSeconds),
-    sunset: formatTimeLabelWithOffset(sunsetDate, timezoneOffsetSeconds),
+    sunriseAt: sunriseDate,
+    sunsetAt: sunsetDate,
     description: data.weather?.[0]?.description,
     main: data.weather?.[0]?.main,
     iconCode,

@@ -8,10 +8,9 @@ import { FullscreenDialog } from '@/components/FullscreenDialog';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-import { useApp } from '@/contexts/AppContext';
+import { useMapUi, usePreferences, useStationData } from '@/contexts/AppContext';
 import { apiBaseUrl } from '@/lib/apiClient';
 import { formatLocationWithFlag } from '@/lib/location';
-import { OPEN_FULLSCREEN_MAP_EVENT } from '@/lib/mapEvents';
 import { cn } from '@/lib/utils';
 
 const WEATHER_OFF = 'off';
@@ -51,7 +50,7 @@ const WeatherControls: React.FC<WeatherControlsProps> = ({ value, onChange }) =>
 
 // The Map/Satellite segmented toggle, shared by the inline and fullscreen headers.
 const MapStyleToggle: React.FC = () => {
-  const { mapStyle, setMapStyle } = useApp();
+  const { mapStyle, setMapStyle } = usePreferences();
   return (
     <div className="chrome-shell-stroke inline-flex items-center gap-1 rounded-lg border border-sidebar-border/90 bg-[hsl(var(--sidebar-accent))]">
       <Button
@@ -227,7 +226,8 @@ type MapCanvasProps = {
 };
 
 const MapCanvas: React.FC<MapCanvasProps> = ({ fullscreen = false, weatherLayer = null }) => {
-  const { activeWebcam, webcamList, setActiveWebcam, isDarkMode, mapStyle } = useApp();
+  const { activeWebcam, webcamList, setActiveWebcam } = useStationData();
+  const { isDarkMode, mapStyle } = usePreferences();
 
   // The base map always follows the theme + Map/Satellite toggle, including when a
   // weather overlay is on (the overlay just renders on top of it).
@@ -288,6 +288,10 @@ const MapCanvas: React.FC<MapCanvasProps> = ({ fullscreen = false, weatherLayer 
             errorTileUrl="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
             keepBuffer={2}
             updateWhenZooming={false}
+            // The backend proxy rejects tiles beyond zoom 12 (MAX_WEATHER_TILE_ZOOM);
+            // past that Leaflet upscales the z=12 tiles instead of requesting deeper
+            // ones (weather data is ~km-scale, so there's nothing more to show anyway).
+            maxNativeZoom={12}
           />
         )}
         <ActiveMarkerCenter
@@ -353,8 +357,10 @@ const MapCanvas: React.FC<MapCanvasProps> = ({ fullscreen = false, weatherLayer 
 };
 
 export const InteractiveMap: React.FC = () => {
-  const { activeWebcam } = useApp();
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const { activeWebcam } = useStationData();
+  // Fullscreen state lives in context so the sidebar's "Open Map" button can
+  // open it — including before this lazy component has mounted.
+  const { isMapFullscreen: isFullscreen, setMapFullscreen: setIsFullscreen } = useMapUi();
   const [weatherEnabled, setWeatherEnabled] = useState(false);
   const [weatherLayer, setWeatherLayer] = useState<string>(WEATHER_LAYERS[0].value);
   const activeWeatherLayer = weatherEnabled ? weatherLayer : null;
@@ -367,13 +373,6 @@ export const InteractiveMap: React.FC = () => {
     setWeatherLayer(value);
     setWeatherEnabled(true);
   };
-
-  useEffect(() => {
-    const openFullscreenMap = () => setIsFullscreen(true);
-
-    window.addEventListener(OPEN_FULLSCREEN_MAP_EVENT, openFullscreenMap);
-    return () => window.removeEventListener(OPEN_FULLSCREEN_MAP_EVENT, openFullscreenMap);
-  }, []);
 
   const googleMapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(
     `${activeWebcam.coordinates.lat},${activeWebcam.coordinates.lng}`

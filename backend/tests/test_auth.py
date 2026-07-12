@@ -1,56 +1,57 @@
 ﻿"""Tests for authentication."""
 
-import time
+from datetime import datetime, timedelta, timezone
 
 from auth import (
+    AUTH_TOKEN_TTL_SECONDS,
+    _hash_session_token,
+    _validate_session_token,
     create_session,
     prune_expired_sessions,
-    AUTH_SESSIONS,
-    AUTH_TOKEN_TTL_SECONDS,
+    remove_session,
 )
 
 
 class TestSessionManagement:
-    """Test session creation and management."""
+    """Sessions are stored (hashed) in the control DB, so these need the db fixture."""
 
-    def test_create_session(self):
-        """Test creating a new session."""
-        AUTH_SESSIONS.clear()
-        token, ttl = create_session("testuser")
-        
+    def test_create_session_roundtrip(self, db):
+        token, ttl = create_session("testuser@example.com")
+
         assert isinstance(token, str)
         assert len(token) > 20  # Should be reasonably long
         assert ttl == AUTH_TOKEN_TTL_SECONDS
-        assert token in AUTH_SESSIONS
-        assert AUTH_SESSIONS[token][0] == "testuser"
+        assert _validate_session_token(token) == "testuser@example.com"
 
-    def test_session_has_expiry(self):
-        """Test that sessions have expiry time."""
-        AUTH_SESSIONS.clear()
-        token, _ = create_session("testuser")
-        
-        username, expires_at = AUTH_SESSIONS[token]
-        assert expires_at > time.time()
-        assert expires_at - time.time() <= AUTH_TOKEN_TTL_SECONDS + 1
+    def test_token_is_stored_hashed_not_plaintext(self, db):
+        from db import sqlite_repo
 
-    def test_prune_expired_sessions(self):
-        """Test pruning expired sessions."""
-        AUTH_SESSIONS.clear()
-        
-        # Create a session with very short TTL
-        token = "expired_token"
-        AUTH_SESSIONS[token] = ("testuser", time.time() - 1)
-        
+        token, _ = create_session("testuser@example.com")
+        # The raw token is not a valid key; only its hash is.
+        assert sqlite_repo.session_email(token) is None
+        assert sqlite_repo.session_email(_hash_session_token(token)) == "testuser@example.com"
+
+    def test_remove_session_invalidates_token(self, db):
+        token, _ = create_session("testuser@example.com")
+        remove_session(token)
+        assert _validate_session_token(token) is None
+
+    def test_expired_session_is_invalid_and_pruned(self, db):
+        from db import sqlite_repo
+
+        sqlite_repo.session_create(
+            _hash_session_token("expired_token"),
+            "testuser@example.com",
+            datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+        assert _validate_session_token("expired_token") is None
         prune_expired_sessions()
-        assert token not in AUTH_SESSIONS
+        assert sqlite_repo.session_email(_hash_session_token("expired_token")) is None
 
-    def test_prune_keeps_valid_sessions(self):
-        """Test that pruning doesn't remove valid sessions."""
-        AUTH_SESSIONS.clear()
-        token, _ = create_session("testuser")
-        
+    def test_prune_keeps_valid_sessions(self, db):
+        token, _ = create_session("testuser@example.com")
         prune_expired_sessions()
-        assert token in AUTH_SESSIONS
+        assert _validate_session_token(token) == "testuser@example.com"
 
 
 class TestCredentialVerification:
@@ -105,7 +106,7 @@ class TestUserEnumerationTiming:
 
 def test_auth_cookie_secure_tracks_require_https(monkeypatch):
     """The session cookie's Secure flag follows APP_REQUIRE_HTTPS so it isn't dropped in HTTP dev."""
-    from constants import auth_cookie_secure
+    from auth import auth_cookie_secure
 
     monkeypatch.setenv("APP_REQUIRE_HTTPS", "true")
     assert auth_cookie_secure() is True
@@ -113,13 +114,5 @@ def test_auth_cookie_secure_tracks_require_https(monkeypatch):
     assert auth_cookie_secure() is False
     monkeypatch.delenv("APP_REQUIRE_HTTPS", raising=False)
     assert auth_cookie_secure() is False
-
-
-def test_session_storage_is_mutable():
-    """Test that AUTH_SESSIONS can be modified for testing."""
-    AUTH_SESSIONS["test_token"] = ("user", time.time() + 3600)
-    assert "test_token" in AUTH_SESSIONS
-    AUTH_SESSIONS.pop("test_token")
-    assert "test_token" not in AUTH_SESSIONS
 
 

@@ -37,11 +37,8 @@ def can_edit_station(station_id: str, user) -> bool:
 def require_station_edit(station_id: str, user) -> None:
     """Allow only admins or the owning user to edit a station."""
     require_station_exists(station_id)
-    if user.is_admin:
-        return
-    if sqlite_repo.station_owner_id(station_id) == getattr(user, "owner_id", None):
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have access to this station.",
-    )
+    if not can_edit_station(station_id, user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this station.",
+        )

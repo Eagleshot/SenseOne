@@ -1,6 +1,6 @@
 import { SensorData, Webcam } from "@/data/types";
 import { apiBaseUrl, fetchJson, postJson } from "@/lib/apiClient";
-import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
+import { LOADING_LABEL, NOT_FOUND_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 
 export type WebcamCoordinatesResponse = {
   lat: number;
@@ -22,8 +22,6 @@ export type StationSummaryResponse = {
 
 export type StationDetailResponse = StationSummaryResponse & {
   description?: string;
-  country?: string;
-  countryEmoji?: string;
   battery?: number | null;
   currentImage?: string | null;
   isOnline?: boolean;
@@ -127,6 +125,15 @@ export const UNAVAILABLE_WEBCAM: Webcam = {
   name: UNAVAILABLE_LABEL,
 };
 
+// Shown when the URL names a station the caller can't see (nonexistent or
+// private to someone else). The page renders this instead of silently showing
+// a different station than the address bar claims.
+export const NOT_FOUND_WEBCAM: Webcam = {
+  ...FALLBACK_WEBCAM,
+  name: NOT_FOUND_LABEL,
+  description: "This station does not exist or is private. Sign in if it is yours.",
+};
+
 export const FALLBACK_STATION_SCHEDULE_CONFIG: StationScheduleConfig = {
   stationStartTime: "06:00",
   stationStopTime: "20:00",
@@ -134,9 +141,23 @@ export const FALLBACK_STATION_SCHEDULE_CONFIG: StationScheduleConfig = {
   captureInterval: "30",
 };
 
-// `ref` is the URL token, which may be the stable id or the editable url_slug.
-export const selectActiveWebcam = (webcams: Webcam[], ref: string) =>
-  webcams.find((webcam) => webcam.id === ref || webcam.urlSlug === ref) ?? webcams[0] ?? FALLBACK_WEBCAM;
+/**
+ * Resolve which station the current selection refers to once the list is known.
+ * `current.id` holds the URL token (stable id or editable url_slug) until it
+ * resolves. A token that matches nothing becomes the not-found sentinel —
+ * keeping the token so the same URL can resolve after sign-in — rather than
+ * silently showing a different station than the address bar claims. While auth
+ * is still settling (`authReady` false) the selection is left alone, since the
+ * list refetches per auth state and a private station may yet appear.
+ */
+export const resolveStationSelection = (list: Webcam[], current: Webcam, authReady: boolean): Webcam => {
+  if (list.length === 0) return { ...UNAVAILABLE_WEBCAM, id: current.id };
+  const ref = current.id;
+  if (!ref) return list[0];
+  const matched = list.find((webcam) => webcam.id === ref || webcam.urlSlug === ref);
+  if (matched) return matched;
+  return authReady ? { ...NOT_FOUND_WEBCAM, id: ref } : current;
+};
 
 export const resolveApiMediaUrl = (url: string | null | undefined, baseUrl: string): string | null => {
   if (!url) return null;
@@ -222,6 +243,24 @@ export const rotateStationDeviceSecret = async (
     return { success: false, error: "Device secret missing from response." };
   }
   return { success: true, secret: result.data.deviceHmacSecret };
+};
+
+export type StationDeleteResult = { success: boolean; error?: string };
+
+/** Permanently delete a station (owner/admin only). The backend removes the
+ * row, its history, and the stored image files; returns 204 on success. */
+export const deleteStation = async (baseUrl: string, stationId: string): Promise<StationDeleteResult> => {
+  const result = await postJson<void>(stationPath(stationId, "", baseUrl), {
+    method: "DELETE",
+    errorFallback: (status) =>
+      status === 401
+        ? "Sign in again to delete this station."
+        : status === 403
+          ? "Only the station owner can delete it."
+          : "Unable to delete the station.",
+    networkError: "Unable to reach station service.",
+  });
+  return result.ok ? { success: true } : { success: false, error: result.error };
 };
 
 export const getStationConfig = (baseUrl: string, stationId: string, signal?: AbortSignal) =>

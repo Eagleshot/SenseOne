@@ -40,7 +40,9 @@ export const fetchJson = async <T,>(
 export type PostJsonResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 type PostJsonOptions = {
-  /** JSON-serialized into the body (and sets Content-Type) when present; omit for an empty POST. */
+  /** HTTP method; defaults to POST. */
+  method?: "POST" | "DELETE";
+  /** JSON-serialized into the body (and sets Content-Type) when present; omit for an empty request. */
   body?: unknown;
   /** Per-status error message used when the response carries no usable `detail`. */
   errorFallback: (status: number) => string;
@@ -49,17 +51,18 @@ type PostJsonOptions = {
 };
 
 /**
- * POST helper for mutating endpoints that need a per-status error message.
+ * Helper for mutating endpoints (POST/DELETE) that need a per-status error message.
  * Centralizes the fetch / `!ok` -> status-fallback + `extractErrorDetail` / network-catch
- * scaffold; callers map `data` to their own success shape.
+ * scaffold; callers map `data` to their own success shape. Empty success bodies
+ * (e.g. 204 on DELETE) yield `data: undefined`.
  */
 export const postJson = async <T,>(
   url: string,
-  { body, errorFallback, networkError }: PostJsonOptions,
+  { method = "POST", body, errorFallback, networkError }: PostJsonOptions,
 ): Promise<PostJsonResult<T>> => {
   try {
     const response = await fetch(url, {
-      method: "POST",
+      method,
       credentials: "include",
       ...(body !== undefined
         ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
@@ -77,7 +80,8 @@ export const postJson = async <T,>(
       return { ok: false, error: message };
     }
 
-    return { ok: true, data: (await response.json()) as T };
+    const text = await response.text();
+    return { ok: true, data: (text ? JSON.parse(text) : undefined) as T };
   } catch {
     return { ok: false, error: networkError };
   }

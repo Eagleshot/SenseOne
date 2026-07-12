@@ -10,7 +10,6 @@ dev needs no configuration. The schema is owned by the Alembic migrations and
 brought up to head at startup (see db.migrate.run_migrations).
 """
 
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -18,7 +17,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from config import get_data_dir
+from settings import get_settings
 
 
 def database_url() -> str:
@@ -27,12 +26,11 @@ def database_url() -> str:
     DATABASE_URL wins when set; otherwise default to a SQLite file in the data
     directory. The parent dir is created so the file can be opened.
     """
-    url = os.getenv("DATABASE_URL")
-    if url:
-        return url
-    data_dir = get_data_dir()
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return f"sqlite:///{(data_dir / 'control.db').as_posix()}"
+    settings = get_settings()
+    if settings.database_url:
+        return settings.database_url
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{(settings.data_dir / 'control.db').as_posix()}"
 
 
 _engine: Engine | None = None
@@ -48,11 +46,21 @@ def get_engine() -> Engine:
             database_url(), future=True, connect_args={"check_same_thread": False}
         )
 
-        # SQLite enforces foreign keys (the ON DELETE CASCADEs) only when this
-        # pragma is set, and it must be set per connection.
-        @event.listens_for(_engine, "connect")
-        def _enable_foreign_keys(dbapi_connection, _record):  # noqa: ANN001
-            dbapi_connection.execute("PRAGMA foreign_keys=ON")
+        # Per-connection SQLite pragmas (skipped if DATABASE_URL points elsewhere):
+        # - foreign_keys: enforces the ON DELETE CASCADEs; off by default.
+        # - journal_mode=WAL: readers don't block the writer, so concurrent
+        #   device uploads + page loads don't throw "database is locked".
+        #   (Persistent per DB file, but cheap to re-assert per connection.)
+        # - synchronous=NORMAL: the recommended pairing with WAL.
+        # - busy_timeout: wait for a competing writer instead of failing fast.
+        if _engine.url.get_backend_name() == "sqlite":
+
+            @event.listens_for(_engine, "connect")
+            def _set_sqlite_pragmas(dbapi_connection, _record):  # noqa: ANN001
+                dbapi_connection.execute("PRAGMA foreign_keys=ON")
+                dbapi_connection.execute("PRAGMA journal_mode=WAL")
+                dbapi_connection.execute("PRAGMA synchronous=NORMAL")
+                dbapi_connection.execute("PRAGMA busy_timeout=5000")
 
         _sessionmaker = sessionmaker(bind=_engine, expire_on_commit=False, future=True)
     return _engine

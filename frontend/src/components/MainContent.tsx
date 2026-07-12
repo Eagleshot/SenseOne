@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, ReactNode, Suspense, useEffect, useState } from "react";
 
 import { motion } from "framer-motion";
 import { Copy, Pencil, Save, X } from "lucide-react";
@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { DESCRIPTION_MAX_LENGTH } from "@/api/stations";
 
+import { ErrorBoundary, SectionErrorFallback } from "./ErrorBoundary";
 import { HeroImage } from "./HeroImage";
-import { useApp } from "@/contexts/AppContext";
+import { useToast } from "@/components/Toaster";
+import { useAuth, useStationData } from "@/contexts/AppContext";
 import { createStationUrl } from "@/lib/stationLinks";
 
 const WeatherDetail = lazy(() => import("./WeatherDetail").then((module) => ({ default: module.WeatherDetail })));
@@ -22,10 +24,18 @@ const InteractiveMap = lazy(() => import("./InteractiveMap").then((module) => ({
 
 const SectionFallback = () => <div className="panel-shell min-h-[10rem] animate-pulse" aria-hidden="true" />;
 
+// One page section: errors stay contained to the section, lazy chunks get a
+// loading skeleton.
+const Section: React.FC<{ children: ReactNode }> = ({ children }) => (
+  <ErrorBoundary fallback={<SectionErrorFallback />}>
+    <Suspense fallback={<SectionFallback />}>{children}</Suspense>
+  </ErrorBoundary>
+);
+
 export const MainContent: React.FC = () => {
+  const { isAuthenticated } = useAuth();
   const {
     activeWebcam,
-    isAuthenticated,
     canEdit,
     description,
     descriptionDraft,
@@ -34,7 +44,8 @@ export const MainContent: React.FC = () => {
     isDescriptionSaving,
     descriptionError,
     isStationConfigLoading,
-  } = useApp();
+  } = useStationData();
+  const { showToast } = useToast();
   const [stationIdCopied, setStationIdCopied] = useState(false);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
 
@@ -44,6 +55,7 @@ export const MainContent: React.FC = () => {
     const didSave = await saveDescription();
     if (didSave) {
       setIsEditingDescription(false);
+      showToast("Description saved.");
     }
   };
 
@@ -88,7 +100,9 @@ export const MainContent: React.FC = () => {
         transition={{ duration: 0.4 }}
         className="mx-auto max-w-6xl space-y-[2.625rem] p-4 md:p-6 lg:p-8"
       >
-        <HeroImage />
+        <Section>
+          <HeroImage />
+        </Section>
         {showDescriptionSection && (
           <section className="space-y-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -160,20 +174,20 @@ export const MainContent: React.FC = () => {
             </div>
           </section>
         )}
-        <Suspense fallback={<SectionFallback />}>
+        <Section>
           <WeatherDetail />
-        </Suspense>
-        <Suspense fallback={<SectionFallback />}>
+        </Section>
+        <Section>
           <SensorHistoryPanel />
-        </Suspense>
+        </Section>
         {isAuthenticated && (
-          <Suspense fallback={<SectionFallback />}>
+          <Section>
             <WebsiteSettingsPanel />
-          </Suspense>
+          </Section>
         )}
-        <Suspense fallback={<SectionFallback />}>
+        <Section>
           <InteractiveMap />
-        </Suspense>
+        </Section>
 
         <footer className="border-t border-border py-8">
           <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3 md:items-center">

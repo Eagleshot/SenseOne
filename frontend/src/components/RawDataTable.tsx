@@ -8,8 +8,13 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 import { cn } from "@/lib/utils";
-import { useApp } from "@/contexts/AppContext";
-import { formatMetricValue, metricLabel } from "@/lib/metricCatalog";
+import { usePreferences } from "@/contexts/AppContext";
+import {
+  formatMetricValue,
+  metricLabel,
+  statusLevelForValue,
+  type StatusLevel,
+} from "@/lib/metricCatalog";
 import type { SensorData } from "@/data/types";
 import {
   buildSensorCsv,
@@ -42,12 +47,18 @@ const SortableHeader = memo<SortableHeaderProps>(({ field, activeField, onSort, 
   </TableHead>
 ));
 
+const levelBadgeClass: Record<StatusLevel, string> = {
+  success: "badge-success",
+  warning: "badge-warning",
+  error: "badge-error",
+};
+
 interface RawDataTableProps {
   data: SensorData[];
 }
 
 export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
-  const { timezone } = useApp();
+  const { timezone } = usePreferences();
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortField, setSortField] = useState<SortField>("timestamp");
@@ -111,9 +122,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
         <span
           className={cn(
             "px-2 py-0.5 rounded-full text-xs font-medium",
-            typeof value === "number" && value >= 60 && "badge-success",
-            typeof value === "number" && value < 60 && "badge-warning",
-            typeof value === "number" && value < 30 && "badge-error"
+            typeof value === "number" && levelBadgeClass[statusLevelForValue(value)]
           )}
         >
           {formatMetricValue(column, value)}

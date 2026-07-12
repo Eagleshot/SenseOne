@@ -1,23 +1,19 @@
-import { useApp } from '@/contexts/AppContext';
+import { useStationData } from '@/contexts/AppContext';
 import { cn } from '@/lib/utils';
 import {
   STATUS_METRIC_KEYS,
   formatMetricValue,
   metricIcon,
   metricLabel,
+  statusLevelForValue,
+  type StatusLevel,
 } from '@/lib/metricCatalog';
-
-type StatusLevel = 'success' | 'warning' | 'error';
-
-// Status metrics here (battery, reception) are 0-100% where higher is better.
-const levelForValue = (value: number): StatusLevel =>
-  value >= 60 ? 'success' : value >= 30 ? 'warning' : 'error';
 
 const levelTextClass = (level: StatusLevel) =>
   level === 'success' ? 'text-success' : level === 'warning' ? 'text-warning' : 'text-destructive';
 
 export const QuickInfoCards: React.FC = () => {
-  const { activeWebcam, historicalData } = useApp();
+  const { activeWebcam, historicalData } = useStationData();
 
   const latestReading = historicalData[historicalData.length - 1];
   const readingValue = (key: string): number | null => {
@@ -41,7 +37,7 @@ export const QuickInfoCards: React.FC = () => {
     <div className="flex flex-wrap items-center gap-6">
       {cards.map(({ key, value }) => {
         const Icon = metricIcon(key);
-        const level = levelForValue(value);
+        const level = statusLevelForValue(value);
         return (
           <div key={key} className="flex items-center gap-2 text-sm text-foreground">
             <Icon className={cn('w-4 h-4', levelTextClass(level))} />

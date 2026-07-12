@@ -2,10 +2,11 @@
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
-import store
 from constants import NEXT_ONLINE_STATUS_BUFFER_MINUTES
+from db import sqlite_repo
+from image_store import get_image_store
 from models import (
     AppConfig,
     SensorReadingEnvelope,
@@ -43,11 +44,11 @@ def is_station_online(next_online: str | None) -> bool:
     return datetime.now(timezone.utc) <= next_online_at + timedelta(minutes=NEXT_ONLINE_STATUS_BUFFER_MINUTES)
 
 
-def station_detail_response(
+def _station_base_fields(
     public_id: str, url_slug: str, config: AppConfig, status: StationStatus, can_edit: bool
-) -> StationDetailResponse:
-    """Build a station detail response from config plus latest runtime status."""
-    return StationDetailResponse(
+) -> dict:
+    """Response fields shared by the station summary and detail schemas."""
+    return dict(
         id=public_id,
         url_slug=url_slug,
         name=config.title or humanize_station_id(url_slug),
@@ -57,6 +58,16 @@ def station_detail_response(
         coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
         is_public=config.is_public,
         is_online=is_station_online(status.next_online),
+        can_edit=can_edit,
+    )
+
+
+def station_detail_response(
+    public_id: str, url_slug: str, config: AppConfig, status: StationStatus, can_edit: bool
+) -> StationDetailResponse:
+    """Build a station detail response from config plus latest runtime status."""
+    return StationDetailResponse(
+        **_station_base_fields(public_id, url_slug, config, status, can_edit),
         description=config.description,
         battery=status.battery,
         current_image=status.capture["url"] if status.capture else None,
@@ -64,7 +75,6 @@ def station_detail_response(
         next_update=status.next_online,
         firmware_version=status.firmware_version,
         wake_reason=status.wake_reason,
-        can_edit=can_edit,
     )
 
 
@@ -80,19 +90,8 @@ def station_detail_response(
 )
 def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummaryResponse]:
     return [
-        StationSummaryResponse(
-            id=public_id,
-            url_slug=url_slug,
-            name=config.title or humanize_station_id(url_slug),
-            location=config.location,
-            country=config.country,
-            country_emoji=config.country_emoji,
-            coordinates=StationCoordinates(lat=config.lat, lng=config.lon, altitude=config.alt),
-            is_public=config.is_public,
-            is_online=is_station_online(status.next_online),
-            can_edit=can_edit,
-        )
-        for public_id, url_slug, config, status, can_edit in store.list_station_views(user)
+        StationSummaryResponse(**_station_base_fields(public_id, url_slug, config, status, can_edit))
+        for public_id, url_slug, config, status, can_edit in sqlite_repo.list_station_views(user)
     ]
 
 
@@ -110,8 +109,8 @@ def create_station(
     payload: StationCreateRequest,
     user=Depends(get_current_user),
 ) -> StationDetailResponse:
-    public_id = store.create_station(payload, user)
-    view = store.station_view(public_id)
+    public_id = sqlite_repo.create_station(payload, user.owner_id)
+    view = sqlite_repo.station_view(public_id)
     assert view is not None  # just created
     url_slug, config, status = view
     # The creator owns the station, so they can always edit it.
@@ -139,6 +138,30 @@ def rotate_station_device_secret(
     return StationDeviceSecretResponse(station_id=station_id, device_hmac_secret=secret_b64)
 
 
+@router.delete(
+    "/{station_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete station",
+    description=(
+        "Permanently delete a station: its metadata, sensor history, image "
+        "timeline, device secrets, and stored image files. Owner or admin only. "
+        "Irreversible — a device still flashed with this station's secret will "
+        "get 401s afterwards."
+    ),
+)
+def delete_station(
+    station_id: ValidStationId,
+    user=Depends(get_current_user),
+) -> Response:
+    require_station_edit(station_id, user)
+    # DB row first (cascades take the child rows), then the blobs. If blob
+    # cleanup dies halfway the worst case is orphan files, which a future
+    # retention sweep can reap — never a DB row pointing at deleted blobs.
+    sqlite_repo.delete_station(station_id)
+    get_image_store().delete_prefix(station_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get(
     "/{station_id}",
     response_model=StationDetailResponse,
@@ -153,7 +176,7 @@ def get_station(
     user=Depends(get_optional_current_user),
 ) -> StationDetailResponse:
     require_station_view(station_id, user)
-    view = store.station_view(station_id)
+    view = sqlite_repo.station_view(station_id)
     assert view is not None  # require_station_view already confirmed it exists
     url_slug, config, status = view
     return station_detail_response(
@@ -176,7 +199,7 @@ def get_station_image_captures(
     user=Depends(get_optional_current_user),
 ) -> list[TimelineItemResponse]:
     require_station_view(station_id, user)
-    rows = store.image_captures(station_id, count)
+    rows = sqlite_repo.image_captures(station_id, count)
     return [TimelineItemResponse(**row) for row in rows]
 
 
@@ -197,7 +220,7 @@ def get_station_sensor_readings(
     user=Depends(get_optional_current_user),
 ) -> list[SensorSeries]:
     require_station_view(station_id, user)
-    series = store.sensor_readings(station_id, hours)
+    series = sqlite_repo.sensor_readings(station_id, hours)
     return [SensorSeries(**item) for item in series]
 
 
@@ -219,7 +242,7 @@ def get_station_reading_envelopes(
     user=Depends(get_optional_current_user),
 ) -> list[SensorReadingEnvelope]:
     require_station_view(station_id, user)
-    envelopes = store.sensor_reading_envelopes(station_id, hours)
+    envelopes = sqlite_repo.sensor_reading_envelopes(station_id, hours)
     return [SensorReadingEnvelope(**item) for item in envelopes]
 
 
@@ -237,7 +260,7 @@ def get_station_config(
     user=Depends(get_current_user),
 ) -> AppConfig:
     require_station_edit(station_id, user)
-    return store.station_config(station_id)
+    return sqlite_repo.station_config(station_id) or AppConfig()
 
 
 @router.put(
@@ -256,7 +279,7 @@ def update_station_config(
     user=Depends(get_current_user),
 ) -> AppConfig:
     require_station_edit(station_id, user)
-    store.save_station_config(station_id, payload)
+    sqlite_repo.save_station_config(station_id, payload)
     # Re-read so the response matches GET /config (including the derived
     # lastOnline/nextOnline status), rather than echoing the request body.
-    return store.station_config(station_id)
+    return sqlite_repo.station_config(station_id) or AppConfig()

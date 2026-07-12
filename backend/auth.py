@@ -4,13 +4,13 @@ import hashlib
 import hmac
 import time
 import secrets
-import os
 import threading
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from constants import AUTH_COOKIE_NAME
+from settings import get_settings
 from utils import b64url_decode_nopad, b64url_encode_nopad
 
 PBKDF2_ALGO = "pbkdf2_sha256"
@@ -18,22 +18,15 @@ PBKDF2_ITERATIONS = 600_000
 PBKDF2_SALT_BYTES = 16
 PBKDF2_HASH_BYTES = 32
 
-
-_BOOTSTRAP_EMAIL = (os.getenv("APP_AUTH_EMAIL") or "").strip()
-_BOOTSTRAP_PASSWORD = (os.getenv("APP_AUTH_PASSWORD") or "").strip()
-if bool(_BOOTSTRAP_EMAIL) != bool(_BOOTSTRAP_PASSWORD):
-    raise RuntimeError("APP_AUTH_EMAIL and APP_AUTH_PASSWORD must either both be set or both be unset.")
-if _BOOTSTRAP_PASSWORD and len(_BOOTSTRAP_PASSWORD) < 12:
-    raise RuntimeError("APP_AUTH_PASSWORD must be at least 12 characters.")
+# The APP_AUTH_EMAIL/APP_AUTH_PASSWORD bootstrap pair is validated at boot by
+# Settings.validate_at_boot() (create_app), not at import time.
 
 AUTH_TOKEN_TTL_SECONDS = 43200
 
-# In-memory session storage. For multi-replica deploys, swap for Redis or signed JWTs.
-# Stored as token -> (username, expires_at). Sync route deps run in FastAPI's
-# threadpool, so every access is serialised through _sessions_lock to avoid a
-# "dictionary changed size during iteration" crash when pruning races a login.
-AUTH_SESSIONS: dict[str, tuple[str, float]] = {}
-_sessions_lock = threading.Lock()
+# Sessions live in the control-plane DB (auth_sessions table), so they survive
+# restarts/deploys and work across multiple workers. Only the SHA-256 hash of a
+# token is stored; the sqlite_repo imports are lazy because db.sqlite_repo
+# itself imports hash_secret/verify_secret from this module.
 bearer_scheme = HTTPBearer(auto_error=False)
 
 # Login throttling: track recent failures per IP and per username.
@@ -41,6 +34,17 @@ LOGIN_FAILURE_WINDOW_SECONDS = 900  # 15 min rolling window
 LOGIN_FAILURE_LIMIT = 10
 _login_failures: dict[str, list[float]] = {}
 _login_failures_lock = threading.Lock()
+
+
+def auth_cookie_secure() -> bool:
+    """Session cookie gets the Secure flag exactly when HTTPS is enforced.
+
+    In local plain-HTTP dev (APP_REQUIRE_HTTPS unset/false) a Secure cookie is
+    silently dropped by the browser, so the session would never stick. In
+    production APP_REQUIRE_HTTPS is set, so the cookie is Secure as it must be.
+    Evaluated per call so it tracks the environment the app booted with.
+    """
+    return get_settings().require_https
 
 
 def ensure_auth_configured() -> None:
@@ -55,28 +59,36 @@ def ensure_auth_configured() -> None:
     )
 
 
+def _hash_session_token(token: str) -> str:
+    """SHA-256 hex of a session token — what the DB stores instead of the token."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def create_session(username: str) -> tuple[str, int]:
     """Create a new session for a user."""
+    from datetime import datetime, timedelta, timezone
+
+    from db import sqlite_repo
+
     token = secrets.token_urlsafe(32)
-    expires_at = time.time() + AUTH_TOKEN_TTL_SECONDS
-    with _sessions_lock:
-        AUTH_SESSIONS[token] = (username, expires_at)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=AUTH_TOKEN_TTL_SECONDS)
+    sqlite_repo.session_create(_hash_session_token(token), username, expires_at)
     return token, AUTH_TOKEN_TTL_SECONDS
 
 
 def prune_expired_sessions() -> None:
-    """Remove expired sessions from storage."""
-    now = time.time()
-    with _sessions_lock:
-        expired_tokens = [token for token, (_, expires_at) in AUTH_SESSIONS.items() if expires_at <= now]
-        for token in expired_tokens:
-            AUTH_SESSIONS.pop(token, None)
+    """Remove expired sessions from storage. Called on login, not per request:
+    validation already filters on expiry, so stale rows are only clutter."""
+    from db import sqlite_repo
+
+    sqlite_repo.sessions_prune_expired()
 
 
 def remove_session(token: str) -> None:
     """Invalidate a session token, if present (used on logout)."""
-    with _sessions_lock:
-        AUTH_SESSIONS.pop(token, None)
+    from db import sqlite_repo
+
+    sqlite_repo.session_delete(_hash_session_token(token))
 
 
 def resolve_session_token(
@@ -96,41 +108,33 @@ def _validate_session_token(token: str | None) -> str | None:
     """Return the username for a valid unexpired session token, or None."""
     if token is None:
         return None
-    with _sessions_lock:
-        session = AUTH_SESSIONS.get(token)
-        if session is None:
-            return None
-        username, expires_at = session
-        if expires_at <= time.time():
-            AUTH_SESSIONS.pop(token, None)
-            return None
-        return username
+    from db import sqlite_repo
+
+    return sqlite_repo.session_email(_hash_session_token(token))
 
 
-def get_current_username(
+def _user_for_token(token: str | None):
+    """The User behind a session token, or None — one joined session+user query."""
+    if token is None:
+        return None
+    from users import get_session_user
+
+    return get_session_user(_hash_session_token(token))
+
+
+def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> str:
-    """Get the authenticated username from session."""
+):
+    """Resolve the User record for the authenticated session."""
     ensure_auth_configured()
-    prune_expired_sessions()
     token = resolve_session_token(request, credentials)
-    username = _validate_session_token(token)
-    if username is None:
+    user = _user_for_token(token)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required." if token is None else "Invalid or expired session.",
         )
-    return username
-
-
-def get_current_user(username: str = Depends(get_current_username)):
-    """Resolve the User record for the authenticated session."""
-    from users import get_user
-
-    user = get_user(username)
-    if user is None: # The user was deleted while their session was still valid.
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists.")
     return user
 
 
@@ -139,16 +143,11 @@ def get_optional_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ):
     """Like get_current_user, but returns None instead of raising when unauthenticated."""
-    from users import get_user, has_any_user
+    from users import has_any_user
 
     if not has_any_user():
         return None
-    prune_expired_sessions()
-    token = resolve_session_token(request, credentials)
-    username = _validate_session_token(token)
-    if username is None:
-        return None
-    return get_user(username)
+    return _user_for_token(resolve_session_token(request, credentials))
 
 
 def _prune_login_failures(now: float) -> None:

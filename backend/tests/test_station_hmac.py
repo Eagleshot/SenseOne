@@ -71,6 +71,25 @@ def test_valid_signature_is_accepted(provisioned_station):
     assert returned_body == b"a tiny image"
 
 
+def test_oversized_body_is_rejected_with_413(provisioned_station):
+    """The body is read before the signature verdict, so it must be capped —
+    the request here carries no Content-Length (like chunked encoding)."""
+    station_id, secret_b64 = provisioned_station
+    path = f"/v1/ingest/stations/{station_id}/images"
+    body = b"x" * 64
+    headers = eagleshot_signing.sign_request(
+        station_id=station_id,
+        secret_b64=secret_b64,
+        method="POST",
+        path=path,
+        body=body,
+    )
+    request = _build_request("POST", path, headers, body)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(verify_station_signature(station_id, request, max_body_bytes=16))
+    assert exc.value.status_code == 413
+
+
 def test_replayed_nonce_is_rejected(provisioned_station):
     station_id, secret_b64 = provisioned_station
     path = f"/v1/ingest/stations/{station_id}/images"

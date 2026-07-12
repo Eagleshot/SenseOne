@@ -2,7 +2,22 @@
 
 import pytest
 
-from models import AppConfig, LoginRequest, AuthResponse, MeResponse
+from models import AppConfig, LoginRequest, AuthResponse, MeResponse, SensorReadingRequest
+
+
+class TestSensorReadingMetricKeys:
+    """Metric keys become datastream rows and chart titles — charset is enforced."""
+
+    def test_valid_metric_keys_accepted(self):
+        request = SensorReadingRequest.model_validate(
+            {"readings": [{"temperature": 1.5, "wind_speed.avg-1": 2}]}
+        )
+        assert request.readings[0].metrics == {"temperature": 1.5, "wind_speed.avg-1": 2}
+
+    def test_metric_key_with_forbidden_characters_rejected(self):
+        for bad_key in ("wind speed", "temp‮e", "temp\x00", "uv!"):
+            with pytest.raises(ValueError, match="letters, digits"):
+                SensorReadingRequest.model_validate({"readings": [{bad_key: 1}]})
 
 
 class TestAppConfig:
@@ -56,6 +71,52 @@ class TestAppConfig:
                 station_start_time="12:00",
                 station_stop_time="12:00",
             )
+
+    def test_out_of_range_coordinates_rejected(self):
+        """lat/lon are bounded like StationCreateRequest, so PUT /config can't store junk."""
+        with pytest.raises(ValueError):
+            AppConfig(lat=90.1)
+        with pytest.raises(ValueError):
+            AppConfig(lat=-90.1)
+        with pytest.raises(ValueError):
+            AppConfig(lon=180.1)
+        with pytest.raises(ValueError):
+            AppConfig(lon=-180.1)
+
+    def test_non_finite_and_out_of_range_altitude_rejected(self):
+        """A stored inf/nan would break JSON serialization of every station response."""
+        with pytest.raises(ValueError):
+            AppConfig(alt=float("inf"))
+        with pytest.raises(ValueError):
+            AppConfig(alt=float("nan"))
+        with pytest.raises(ValueError):
+            AppConfig.model_validate_json('{"alt": 1e999}')  # parses to inf
+        with pytest.raises(ValueError):
+            AppConfig(alt=9001)
+        with pytest.raises(ValueError):
+            AppConfig(alt=-501)
+        assert AppConfig(alt=4478.0).alt == 4478.0
+
+    def test_text_fields_have_length_limits(self):
+        """PUT /config must not accept multi-megabyte titles."""
+        with pytest.raises(ValueError):
+            AppConfig(title="x" * 121)
+        with pytest.raises(ValueError):
+            AppConfig(location="x" * 161)
+        with pytest.raises(ValueError):
+            AppConfig(country="x" * 81)
+        assert AppConfig(title="x" * 120).title == "x" * 120
+
+    def test_control_and_bidi_characters_stripped(self):
+        """Control chars and bidi overrides are UI-spoofing vectors; strip them."""
+        config = AppConfig(
+            title="Sta‮tion\x00",
+            description="line one\nline two\x07",
+            location="Davos⁦",
+        )
+        assert config.title == "Station"
+        assert config.description == "line one\nline two"  # newlines survive
+        assert config.location == "Davos"
 
     def test_capture_interval_bounds(self):
         """Test capture interval validation."""

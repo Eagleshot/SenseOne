@@ -23,14 +23,14 @@ def seeded_client(db, tmp_data_dir, monkeypatch):
     monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
 
-    import store
     import users
+    from db import sqlite_repo
     from main import create_app
     from models import StationCreateRequest
 
     alice = users.create_user("alice@example.com", "devpassword123")
-    public_slug = store.create_station(StationCreateRequest(title="Public Cam", is_public=True), alice)
-    private_slug = store.create_station(StationCreateRequest(title="Private Cam", is_public=False), alice)
+    public_slug = sqlite_repo.create_station(StationCreateRequest(title="Public Cam", is_public=True), alice.owner_id)
+    private_slug = sqlite_repo.create_station(StationCreateRequest(title="Private Cam", is_public=False), alice.owner_id)
 
     return TestClient(create_app()), public_slug, private_slug
 
@@ -83,7 +83,11 @@ def test_signed_device_flow(seeded_client):
     assert len(caps) == 1
     # image-captures returns API-origin-relative URLs (no /v1); prepend it to hit
     # the versioned mount directly (the proxy does this transparently in the browser).
-    assert client.get(f"/v1{caps[0]['url']}").status_code == 200
+    image_response = client.get(f"/v1{caps[0]['url']}")
+    assert image_response.status_code == 200
+    # Browsers must be able to reuse frames while scrubbing the timeline,
+    # without a revalidation round trip per scrub step.
+    assert image_response.headers.get("cache-control") == "private, max-age=86400"
 
     bad = sign_request(station_id=public_slug, secret_b64="AAAA", method="POST", path=s_path, body=body)
     bad["Content-Type"] = "application/json"

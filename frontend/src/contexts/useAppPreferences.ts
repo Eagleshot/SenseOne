@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import { ColorThemeKey, applyColorTheme, isColorThemeKey } from "@/lib/appThemes";
+import { STATION_LOCAL_TIMEZONE } from "@/lib/stationTimezone";
 import { getStoredOptionalString, setStoredOptionalString } from "@/lib/storage";
 
 export type MapStyleKey = "abstract" | "satellite";
@@ -59,8 +60,11 @@ export const useAppPreferences = (): AppPreferencesState => {
   const [mapStyle, setMapStyle] = usePersistedState<MapStyleKey>(
     "mapStyle", () => "abstract", (raw) => (isMapStyleKey(raw) ? raw : undefined),
   );
+  // The stored value is a *preference*: an explicit IANA zone, or the
+  // "station" sentinel (default) meaning "the active station's local time".
+  // AppContext resolves it to the effective IANA zone per station.
   const [timezone, setTimezone] = usePersistedState<string>(
-    "timezone", () => "Europe/Zurich", (raw) => raw,
+    "timezone", () => STATION_LOCAL_TIMEZONE, (raw) => raw,
   );
 
   // Side effects beyond persistence (usePersistedState already writes each to storage).

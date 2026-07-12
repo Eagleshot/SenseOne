@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SensorHistoryPanel } from "@/components/SensorHistoryPanel";
 
-const mockUseApp = vi.fn();
+const mockUseStationData = vi.fn();
+const mockUsePreferences = vi.fn();
 
 vi.mock("@/contexts/AppContext", () => ({
-  useApp: () => mockUseApp(),
+  useStationData: () => mockUseStationData(),
+  usePreferences: () => mockUsePreferences(),
 }));
 
 vi.mock("@/components/HistoricalCharts", () => ({
@@ -19,9 +21,14 @@ vi.mock("@/components/RawDataTable", () => ({
 
 describe("SensorHistoryPanel", () => {
   beforeEach(() => {
-    mockUseApp.mockReset();
-    mockUseApp.mockReturnValue({
+    mockUseStationData.mockReset();
+    mockUseStationData.mockReturnValue({
       historicalData: [],
+      historicalDataError: false,
+      setHistoryWindowHours: vi.fn(),
+    });
+    mockUsePreferences.mockReset();
+    mockUsePreferences.mockReturnValue({
       timezone: "UTC",
     });
   });

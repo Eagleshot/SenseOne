@@ -63,6 +63,25 @@ class User(Base):
     stations: Mapped[list[Station]] = relationship(back_populates="owner", cascade="all, delete-orphan")
 
 
+class AuthSession(Base):
+    """A browser/API login session, persisted so deploys/restarts don't log users out.
+
+    The token itself never touches the database: `token_hash` is its SHA-256 hex,
+    so a leaked control DB does not leak live session tokens. Identified by the
+    user's email (the login identity); a session for a since-deleted user fails
+    at user resolution, exactly like the old in-memory store.
+    """
+
+    __tablename__ = "auth_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = _created_at()
+
+    __table_args__ = (Index("idx_auth_sessions_expires", "expires_at"),)
+
+
 class Station(Base):
     """Station metadata + schedule plus its owner (a user).
 
@@ -267,4 +286,8 @@ class Observation(Base):
 
     __table_args__ = (
         Index("idx_observations_datastream_recorded", "datastream_id", recorded_at.desc()),
+        # FK index: station deletion cascades stations -> sensor_readings ->
+        # observations, and SQLite looks up child rows per deleted reading.
+        # Without this it full-scans observations once per reading row.
+        Index("idx_observations_reading", "reading_id"),
     )

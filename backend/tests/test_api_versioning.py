@@ -12,7 +12,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from auth import AUTH_SESSIONS, create_session
+from auth import create_session
 from main import create_app
 from station_hmac import provision_device_hmac_secret
 from users import create_user
@@ -32,7 +32,6 @@ _JPEG_BODY = (
 def client(db, tmp_data_dir, monkeypatch) -> TestClient:
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
     monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
-    AUTH_SESSIONS.clear()
     app = create_app()
     try:
         create_user(TEST_EMAIL, TEST_PASSWORD, is_admin=True)

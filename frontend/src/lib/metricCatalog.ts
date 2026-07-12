@@ -55,6 +55,12 @@ export const STATUS_METRIC_KEYS = CATALOG_ORDER.filter(
   (key) => METRIC_CATALOG[key].kind === "status"
 );
 
+// Status metrics (battery, reception) are 0-100% where higher is better.
+export type StatusLevel = "success" | "warning" | "error";
+
+export const statusLevelForValue = (value: number): StatusLevel =>
+  value >= 60 ? "success" : value >= 30 ? "warning" : "error";
+
 // Line colours for charts, cycled by series index.
 export const CHART_PALETTE = [
   "hsl(var(--chart-1))",

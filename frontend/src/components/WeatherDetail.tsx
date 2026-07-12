@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Thermometer, Droplets, Wind, Gauge, Eye, Sunrise, Sunset, Navigation, CloudOff } from "lucide-react";
 
-import { fetchStationWeather, formatTimeLabelWithOffset, type ForecastDay, type WeatherState } from "@/api/weather";
-import { useApp } from "@/contexts/AppContext";
-import { apiBaseUrl, isAbortError } from "@/lib/apiClient";
-import { formatRelativeShort } from "@/lib/datetime";
+import { fetchStationWeather, type ForecastDay } from "@/api/weather";
+import { usePreferences, useStationData } from "@/contexts/AppContext";
+import { apiBaseUrl } from "@/lib/apiClient";
+import { formatRelativeShort, formatTimeLabel } from "@/lib/datetime";
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 import { cn } from "@/lib/utils";
 import { baseWeatherTheme, resolveWeatherTheme } from "@/lib/weatherThemes";
@@ -14,77 +15,27 @@ import { baseWeatherTheme, resolveWeatherTheme } from "@/lib/weatherThemes";
 const OPEN_WEATHER_URL = "https://openweathermap.org/";
 
 export const WeatherDetail: React.FC = () => {
-  const { activeWebcam, isDarkMode } = useApp();
-  const [weather, setWeather] = useState<WeatherState | null>(null);
-  const [forecast, setForecast] = useState<ForecastDay[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isForecastLoading, setIsForecastLoading] = useState(true);
+  const { activeWebcam } = useStationData();
+  // The shared display timezone (by default the station's own), so weather
+  // times agree with the image timeline and charts.
+  const { isDarkMode, timezone } = usePreferences();
 
-  useEffect(() => {
-    if (!activeWebcam.id) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clear weather state when no station is selected
-      setWeather(null);
-      setForecast([]);
-      setIsLoading(false);
-      setIsForecastLoading(false);
-      return;
-    }
-    let isMounted = true;
-    const controller = new AbortController();
-
-    const fetchWeather = async () => {
-      // Skip polling while the tab is hidden to avoid wasting OpenWeather quota.
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        // ...but don't leave the panel stuck on its initial loading skeleton;
-        // the visibilitychange handler re-fetches when the tab becomes visible.
-        setIsLoading(false);
-        setIsForecastLoading(false);
-        return;
-      }
-      setIsLoading(true);
-      setIsForecastLoading(true);
-      try {
-        const result = await fetchStationWeather(apiBaseUrl, activeWebcam.id, controller.signal);
-        if (!isMounted) return;
-
-        if (!result.weather) {
-          if (isMounted) {
-            setWeather(null);
-            setForecast([]);
-          }
-          return;
-        }
-
-        setWeather(result.weather);
-        setForecast(result.forecast);
-      } catch (err) {
-        if (isAbortError(err)) return;
-        if (isMounted) {
-          setWeather(null);
-          setForecast([]);
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-          setIsForecastLoading(false);
-        }
-      }
-    };
-
-    fetchWeather();
-    const interval = setInterval(fetchWeather, 5 * 60 * 1000);
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") fetchWeather();
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-
-    return () => {
-      isMounted = false;
-      controller.abort();
-      clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [activeWebcam.id]);
+  // Current weather + forecast for the active station. Polls every 5 minutes;
+  // react-query pauses the interval while the tab is hidden (OpenWeather quota)
+  // and refetches on refocus. Upstream failures land in `isError` -> placeholder.
+  const weatherQuery = useQuery({
+    queryKey: ["station-weather", activeWebcam.id],
+    enabled: Boolean(activeWebcam.id),
+    queryFn: ({ signal }) => fetchStationWeather(apiBaseUrl, activeWebcam.id, signal),
+    refetchInterval: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
+  const weather = weatherQuery.data?.weather ?? null;
+  const forecast = weatherQuery.data?.forecast ?? [];
+  // True only during the first fetch for a station; background refetches keep
+  // showing the previous values instead of flashing the loading labels.
+  const isLoading = weatherQuery.isLoading;
+  const isForecastLoading = isLoading;
 
   const updatedLabel = useMemo(() => {
     if (isLoading) return LOADING_LABEL;
@@ -103,7 +54,7 @@ export const WeatherDetail: React.FC = () => {
   const timeLabel =
     isLoading || !weather
       ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : formatTimeLabelWithOffset(weather.updatedAt, weather.timezoneOffsetSeconds ?? 0);
+      : formatTimeLabel(weather.updatedAt, timezone);
   const temperatureLabel =
     isLoading || !weather
       ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
@@ -140,11 +91,11 @@ export const WeatherDetail: React.FC = () => {
   const sunriseLabel =
     isLoading || !weather
       ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : weather.sunrise;
+      : formatTimeLabel(weather.sunriseAt, timezone);
   const sunsetLabel =
     isLoading || !weather
       ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : weather.sunset;
+      : formatTimeLabel(weather.sunsetAt, timezone);
   const showWeatherPlaceholder = !isLoading && !weather;
   const weatherTheme = useMemo(
     () => (weather ? resolveWeatherTheme(weather.main, isDarkMode || (weather.isNight ?? false)) : baseWeatherTheme),
@@ -170,9 +121,7 @@ export const WeatherDetail: React.FC = () => {
             <div className="pointer-events-none absolute right-6 bottom-10 h-44 w-44 rounded-full border border-border/40 bg-background/30 blur-2xl" />
             <div className="flex min-h-[24rem] items-center justify-center">
               <div className="mx-4 max-w-md text-center">
-                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted/50">
-                  <CloudOff className="h-7 w-7 text-muted-foreground" />
-                </div>
+                <CloudOff className="mx-auto mb-4 h-7 w-7 text-muted-foreground" />
                 <p className="text-lg font-semibold text-foreground">No weather data available</p>
                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                   Try again later or check the backend connection.

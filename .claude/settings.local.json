@@ -35,7 +35,12 @@
       "Bash(npm run *)",
       "Bash(npm test *)",
       "Bash(grep -rIl \"_owner\\\\|_device_hmac_secret_b64\" backend/data/)",
-      "Bash(python -c 'import sqlite3,sys; c=sqlite3.connect\\('\\\\''__TRACKED_VAR__'\\\\''\\); cols=[r[1] for r in c.execute\\('\\\\''PRAGMA table_info\\(sensor_history\\)'\\\\''\\)]; print\\('\\\\''__TRACKED_VAR__'\\\\''.split\\('\\\\''/'\\\\''\\)[-2], '\\\\''->'\\\\'', '\\\\''JSON'\\\\'' if '\\\\''metrics'\\\\'' in cols else '\\\\''LEGACY-TYPED'\\\\'', cols\\)')"
+      "Bash(python -c 'import sqlite3,sys; c=sqlite3.connect\\('\\\\''__TRACKED_VAR__'\\\\''\\); cols=[r[1] for r in c.execute\\('\\\\''PRAGMA table_info\\(sensor_history\\)'\\\\''\\)]; print\\('\\\\''__TRACKED_VAR__'\\\\''.split\\('\\\\''/'\\\\''\\)[-2], '\\\\''->'\\\\'', '\\\\''JSON'\\\\'' if '\\\\''metrics'\\\\'' in cols else '\\\\''LEGACY-TYPED'\\\\'', cols\\)')",
+      "WebFetch(domain:openweathermap.org)",
+      "Bash(python -m pip install --quiet \"sqlalchemy>=2.0\" \"alembic>=1.13\")",
+      "Bash(python -c \"import sqlalchemy, alembic; print\\('sqlalchemy', sqlalchemy.__version__, '| alembic', alembic.__version__\\)\")",
+      "Bash(python -m ruff --version)",
+      "Bash(python -m pyflakes --version)"
     ]
   }
 }

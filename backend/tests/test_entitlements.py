@@ -31,7 +31,7 @@ class TestLimitsFor:
         assert limits_for(_user("business")) is PLANS["business"]
 
     def test_free_has_included_station_cap_paid_is_unlimited(self):
-        assert limits_for(_user("free")).included_station_count == 25
+        assert limits_for(_user("free")).included_station_count == 3
         assert limits_for(_user("pro")).included_station_count is None
         assert limits_for(_user("business")).included_station_count is None
 

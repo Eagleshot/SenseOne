@@ -1,19 +1,18 @@
 """HMAC-signed device ingestion routes."""
 
 import logging
-import os
-import shutil
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
-import store
-from config import get_data_dir
 from constants import ALLOWED_IMAGE_EXTENSIONS
-from models import DeviceConfig, ImageUploadResponse, SensorReadingRequest
+from db import sqlite_repo
+from image_store import LocalDiskImageStore, get_image_store, station_image_key
+from models import AppConfig, DeviceConfig, ImageUploadResponse, SensorReadingRequest
 from routes import ValidStationId
+from settings import get_settings
 from station_access import require_station_exists
 from station_hmac import verify_station_signature
 from utils import (
@@ -26,53 +25,30 @@ from utils import (
     sanitize_filename,
 )
 
-
-def _parse_max_upload_bytes() -> int:
-    raw_value = os.getenv("APP_MAX_UPLOAD_BYTES")
-    try:
-        max_bytes = int(raw_value) if raw_value else 25 * 1024 * 1024
-    except ValueError as exc:
-        raise RuntimeError("APP_MAX_UPLOAD_BYTES must be an integer.") from exc
-    if max_bytes <= 0:
-        raise RuntimeError("APP_MAX_UPLOAD_BYTES must be greater than 0.")
-    return max_bytes
+# Body cap for the signed non-image routes (config has no body; a maximal data
+# check-in is tens of KB of JSON). Far below the image cap, so an unauthenticated
+# caller can't buffer megabytes through these endpoints.
+MAX_JSON_BODY_BYTES = 1 * 1024 * 1024
 
 
-def _parse_min_free_disk_bytes() -> int:
-    """Free-space floor below which the server stops accepting image uploads.
+def _enforce_free_disk(image_store: LocalDiskImageStore, incoming_bytes: int) -> None:
+    """Reject uploads with 507 when storing this body would breach the floor.
 
-    A device with a valid secret (or a buggy one) can otherwise loop uploads and
-    fill the disk, which takes the whole service down and can corrupt in-flight
-    SQLite writes. This is a safety valve, not per-plan retention — that lands
-    with the SaaS quota work. Set to 0 to disable. Default 500 MiB.
+    The floor (APP_MIN_FREE_DISK_BYTES, default 500 MiB, 0 disables) is a safety
+    valve, not per-plan retention: a device with a valid secret (or a buggy one)
+    could otherwise loop uploads and fill the disk, which takes the whole service
+    down and can corrupt in-flight SQLite writes.
     """
-    raw_value = os.getenv("APP_MIN_FREE_DISK_BYTES")
-    try:
-        min_bytes = int(raw_value) if raw_value else 500 * 1024 * 1024
-    except ValueError as exc:
-        raise RuntimeError("APP_MIN_FREE_DISK_BYTES must be an integer.") from exc
-    if min_bytes < 0:
-        raise RuntimeError("APP_MIN_FREE_DISK_BYTES must not be negative.")
-    return min_bytes
-
-
-MAX_UPLOAD_BYTES = _parse_max_upload_bytes()
-MIN_FREE_DISK_BYTES = _parse_min_free_disk_bytes()
-
-
-def _enforce_free_disk(data_dir, incoming_bytes: int) -> None:
-    """Reject uploads with 507 when storing this body would breach the floor."""
-    if MIN_FREE_DISK_BYTES <= 0:
+    min_free = get_settings().min_free_disk_bytes
+    if min_free <= 0:
         return
-    try:
-        free = shutil.disk_usage(data_dir).free
-    except OSError as exc:
-        logging.warning("Could not check free disk space at %s: %s", data_dir, exc)
+    free = image_store.free_bytes()
+    if free is None:
         return
-    if free - incoming_bytes < MIN_FREE_DISK_BYTES:
+    if free - incoming_bytes < min_free:
         logging.error(
             "Refusing upload: free disk %d would drop below floor %d after %d bytes.",
-            free, MIN_FREE_DISK_BYTES, incoming_bytes,
+            free, min_free, incoming_bytes,
         )
         raise HTTPException(
             status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
@@ -83,16 +59,18 @@ router = APIRouter(prefix="/stations", tags=["Ingest"])
 
 # Error responses common to every signed device route, surfaced in the OpenAPI
 # schema. Each route spreads this and adds the failures specific to its payload.
+# Note: no 404 — an unknown station id 401s like a station without a secret, so
+# unauthenticated callers can't probe which station ids exist.
 _SIGNED_REQUEST_ERRORS: dict[int | str, dict[str, str]] = {
     400: {"description": "Malformed station id in the request path."},
     401: {
         "description": (
             "Missing or invalid HMAC signature: absent/blank signing headers, "
             "X-Timestamp outside the ±300 s window, a replayed X-Nonce, a "
-            "signature mismatch, or no device secret provisioned for the station."
+            "signature mismatch, an unknown station id, or no device secret "
+            "provisioned for the station."
         )
     },
-    404: {"description": "No station exists with this id."},
 }
 
 
@@ -103,6 +81,7 @@ def store_uploaded_image(
     content_type: str | None,
 ) -> tuple[str, str]:
     """Persist an uploaded image that has already passed HMAC verification."""
+    max_upload_bytes = get_settings().max_upload_bytes
     if not is_supported_image_upload(filename, content_type):
         supported = ", ".join(sorted(ALLOWED_IMAGE_EXTENSIONS))
         raise HTTPException(
@@ -111,18 +90,16 @@ def store_uploaded_image(
         )
     if not body:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty upload.")
-    if len(body) > MAX_UPLOAD_BYTES:
+    if len(body) > max_upload_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Upload too large. Maximum is {MAX_UPLOAD_BYTES} bytes.",
+            detail=f"Upload too large. Maximum is {max_upload_bytes} bytes.",
         )
 
-    data_dir = get_data_dir()
+    image_store = get_image_store()
     require_station_exists(station_id)
-    _enforce_free_disk(data_dir, len(body))
+    _enforce_free_disk(image_store, len(body))
 
-    images_dir = data_dir / station_id / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
     image_timestamp = image_timestamp_from_filename(filename)
     if image_timestamp is None:
         raise HTTPException(
@@ -131,22 +108,21 @@ def store_uploaded_image(
         )
 
     stored_filename = filename
-    file_path = images_dir / stored_filename
+    storage_key = station_image_key(station_id, stored_filename)
 
     try:
-        file_path.write_bytes(body)
-        detected_media_type = media_type_from_path(file_path)
+        image_store.save(storage_key, body)
+        detected_media_type = media_type_from_path(image_store.path(storage_key))
         if detected_media_type is None:
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail="File contents are not a recognised image.",
             )
     except HTTPException:
-        if file_path.exists():
-            file_path.unlink(missing_ok=True)
+        image_store.delete(storage_key)
         raise
 
-    store.append_image(
+    sqlite_repo.append_image(
         station_id,
         filename=stored_filename,
         content_type=detected_media_type,
@@ -178,8 +154,8 @@ async def get_device_station_config(
     station_id: ValidStationId,
     request: Request,
 ) -> DeviceConfig:
-    await verify_station_signature(station_id, request)
-    config = store.station_config(station_id)
+    await verify_station_signature(station_id, request, max_body_bytes=MAX_JSON_BODY_BYTES)
+    config = sqlite_repo.station_config(station_id) or AppConfig()
     return DeviceConfig(
         station_start_minute=_hhmm_to_minutes(config.station_start_time),
         station_stop_minute=_hhmm_to_minutes(config.station_stop_time),
@@ -188,7 +164,7 @@ async def get_device_station_config(
         lat=config.lat,
         lon=config.lon,
         alt=config.alt,
-        name=store.station_name_token(station_id),
+        name=sqlite_repo.station_name_token(station_id),
     )
 
 
@@ -235,19 +211,20 @@ async def upload_station_image(
         ),
     ),
 ) -> ImageUploadResponse:
+    max_upload_bytes = get_settings().max_upload_bytes
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             content_length_value = int(content_length)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Content-Length header.") from exc
-        if content_length_value > MAX_UPLOAD_BYTES:
+        if content_length_value > max_upload_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"Upload too large. Maximum is {MAX_UPLOAD_BYTES} bytes.",
+                detail=f"Upload too large. Maximum is {max_upload_bytes} bytes.",
             )
 
-    body = await verify_station_signature(station_id, request)
+    body = await verify_station_signature(station_id, request, max_body_bytes=max_upload_bytes)
     content_type = request.headers.get("content-type")
     # X-Filename is optional: a device may omit it (or send blank), and the server
     # stamps a capture name from the current UTC minute. The station's frozen name
@@ -255,7 +232,7 @@ async def upload_station_image(
     # self-identifying: an omitted/bare-timestamp name becomes
     # YYYYMMDD_HHMMZ_<name>.jpg; a name the device already supplied is kept as-is.
     # A supplied name must still match the capture format (store_uploaded_image enforces it).
-    name_token = store.station_name_token(station_id)
+    name_token = sqlite_repo.station_name_token(station_id)
     provided_name = (x_filename or "").strip()
     filename = (
         inject_name_if_missing(sanitize_filename(provided_name), name_token)
@@ -291,6 +268,7 @@ async def upload_station_image(
     ),
     responses={
         **_SIGNED_REQUEST_ERRORS,
+        413: {"description": "Request body exceeds the 1 MiB check-in cap."},
         422: {
             "description": (
                 "Body failed validation: bad timestamp/nextStart, a non-numeric or "
@@ -315,7 +293,7 @@ async def create_sensor_reading(
     # Verify the signature before parsing the body so an unauthenticated caller
     # can't trigger full Pydantic validation (matches the image route's verify-first
     # ordering). The body param is documented via openapi_extra above instead.
-    body = await verify_station_signature(station_id, request)
+    body = await verify_station_signature(station_id, request, max_body_bytes=MAX_JSON_BODY_BYTES)
     try:
         payload = SensorReadingRequest.model_validate_json(body)
     except ValidationError as exc:
@@ -325,7 +303,7 @@ async def create_sensor_reading(
         ) from exc
     timestamp = payload.timestamp or iso_utc(datetime.now(timezone.utc))
     channel_metrics = [(reading.resolved_channel, reading.metrics) for reading in payload.readings]
-    store.append_reading(
+    sqlite_repo.append_reading(
         station_id,
         timestamp,
         channel_metrics,

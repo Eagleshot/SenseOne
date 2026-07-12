@@ -116,6 +116,34 @@ def test_rename_changes_url_slug_not_id(setup_station_dir, monkeypatch):
     assert detail["name"] == "Renamed Cam"
 
 
+def test_delete_station_removes_row_and_blobs(setup_station_dir, monkeypatch):
+    data_dir, station_id = setup_station_dir
+    owner_id = _db.station_owner_id(station_id)
+    blob = data_dir / station_id / "images" / "20260601_1200Z_test-station.jpg"
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"fake-jpeg-bytes")
+
+    client = _client(monkeypatch, RouteUser(owner_id))
+    assert client.delete(f"/stations/{station_id}").status_code == 204
+
+    assert client.get(f"/stations/{station_id}").status_code == 404
+    assert not (data_dir / station_id).exists()
+
+
+def test_delete_station_requires_ownership(setup_station_dir, monkeypatch):
+    _, station_id = setup_station_dir
+    stranger = _db.create_owner("stranger@example.com")
+
+    client = _client(monkeypatch, RouteUser(stranger.owner_id))
+    assert client.delete(f"/stations/{station_id}").status_code == 403
+    assert client.get(f"/stations/{station_id}").status_code == 200  # still there
+
+
+def test_delete_unknown_station_is_404(db, monkeypatch):
+    admin = RouteUser("00000000-0000-0000-0000-000000000000", is_admin=True)
+    assert _client(monkeypatch, admin).delete("/stations/no-such-station").status_code == 404
+
+
 def test_station_detail_includes_latest_image(station_with_sample_images, monkeypatch):
     _, station_id = station_with_sample_images
     response = _client(monkeypatch).get(f"/stations/{station_id}")

@@ -3,6 +3,35 @@
 - In the free tier, you should only be able to save a set of standard datatypes (TODO define)
 - Make a metrics and wake reasons catalog
 
+## Background-job runner (prerequisite for Alerts / retention / reports / time-lapse)
+
+A single asyncio scheduler task started from FastAPI's lifespan — no new dependency, no
+separate process. Jobs are plain sync functions run via `asyncio.to_thread`; gate on
+`APP_RUN_JOBS` (default true) so a future multi-worker deploy can pin jobs to one instance.
+Tests are unaffected (TestClient without `with` never runs lifespan).
+
+1. **Scheduler core** (`backend/jobs/scheduler.py`): `Job` dataclass (name, interval, func,
+   last_run/last_error), ~30 s tick loop, every exception caught and logged — a failing job
+   must never kill the loop. Log start/duration/outcome per run.
+2. **Job 1 — retention sweep** (hourly + once at startup): per station, resolve the owner's
+   plan via `limits_for()` (first real consumer of the entitlements seam) and delete
+   images/readings past `image_retention_days`/`sensor_retention_days`. Batched deletes
+   (~500 rows/tx) to keep SQLite write locks short. Ship with `APP_RETENTION_DRY_RUN=true`
+   default and flip after eyeballing one real run (it destroys user data). Phase 2: reap
+   orphan blobs (files on disk with no DB row).
+3. **Job 2 — offline-alert evaluation** (every 1-5 min): migration `0003` adds
+   `alert_rules` (station, type, channel, config) + `alert_state` (current state, last
+   transition, last notified) so alerts are edge-triggered (fire on the online<->offline
+   transition, not every tick). Detection reuses `is_station_online()`. Dispatch: webhook +
+   log first (zero infra), SMTP email second (settings go into `Settings`). Threshold and
+   wake-reason alerts become new rule types later.
+4. **Tests**: jobs are plain functions — unit-test against the test DB; one scheduler test
+   (fake job runs; a raising job doesn't stop the loop).
+
+Order: 1+2 as one PR (scheduler proves itself on retention, dry-run as safety net), then 3
+with its migration. Scheduled reports, time-lapse, and cloud backups then become "just
+another job".
+
 ## Fix the Charts
 
 - Make default Icon depending on the unit

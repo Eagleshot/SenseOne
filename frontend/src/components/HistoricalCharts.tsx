@@ -5,8 +5,8 @@ import { Download, LineChart as LineChartIcon, type LucideIcon } from "lucide-re
 
 import { Button } from "@/components/ui/button";
 
-import { formatDateTimeLabel, formatTimeLabel } from "@/lib/datetime";
-import { useApp } from "@/contexts/AppContext";
+import { formatChartTickLabel, formatDateTimeLabel, spansMultipleDays } from "@/lib/datetime";
+import { usePreferences } from "@/contexts/AppContext";
 import {
   CHART_PALETTE,
   collectNumericMetricKeys,
@@ -103,7 +103,9 @@ const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, chartData, isDarkMo
             No data available for the selected date range.
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height="100%">
+          // debounce: re-render once after a resize settles, not per animation
+          // frame (the sidebar open/close animates the main column's width).
+          <ResponsiveContainer width="100%" height="100%" debounce={200}>
             <ComposedChart data={chartData} margin={{ top: 10, right: 16, left: 8, bottom: 0 }}>
               <CartesianGrid
                 strokeDasharray="3 3"
@@ -133,9 +135,7 @@ const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, chartData, isDarkMo
                 strokeWidth={2.2}
                 dot={false}
                 activeDot={{ r: 4, fill: color }}
-                isAnimationActive
-                animationDuration={400}
-                animationEasing="ease-out"
+                isAnimationActive={false}
               />
             </ComposedChart>
           </ResponsiveContainer>
@@ -147,34 +147,38 @@ const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, chartData, isDarkMo
 
 interface HistoricalChartsProps {
   data: SensorData[];
+  /** True when the sensor-history request failed (as opposed to "no readings"). */
+  loadFailed?: boolean;
 }
 
-export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data }) => {
-  const { timezone, isDarkMode } = useApp();
+export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, loadFailed = false }) => {
+  const { timezone, isDarkMode } = usePreferences();
   // One plot per numeric metric present in the (already date-filtered) data.
   const metrics = useMemo(() => collectNumericMetricKeys(data), [data]);
   // Map the rows (with their formatted time labels) once and share across cards,
   // rather than re-mapping the whole dataset inside every per-metric ChartCard.
-  const chartData = useMemo<ChartRow[]>(
-    () =>
-      data.map(({ timestamp, ...values }) => ({
-        ...values,
-        time: formatTimeLabel(timestamp, timezone),
-        fullTime: formatDateTimeLabel(timestamp, timezone),
-      })),
-    [data, timezone]
-  );
+  // Ranges crossing a day boundary get dated ticks — time-only labels would
+  // repeat ambiguously ("14:00" three days in a row).
+  const chartData = useMemo<ChartRow[]>(() => {
+    if (data.length === 0) return [];
+    const includeDate = spansMultipleDays(data[0].timestamp, data[data.length - 1].timestamp, timezone);
+    return data.map(({ timestamp, ...values }) => ({
+      ...values,
+      time: formatChartTickLabel(timestamp, timezone, includeDate),
+      fullTime: formatDateTimeLabel(timestamp, timezone),
+    }));
+  }, [data, timezone]);
   // The check-in status chart shows whenever any check-in carried a next-online hint.
   const hasStatus = useMemo(() => data.some((row) => row.nextStart instanceof Date), [data]);
 
   if (metrics.length === 0 && !hasStatus) {
     return (
       <div className="flex min-h-[340px] flex-col items-center justify-center gap-4 rounded-2xl bg-background p-6 text-center">
-        <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border/70 bg-card">
-          <LineChartIcon className="h-7 w-7 text-muted-foreground" />
-        </div>
+        <LineChartIcon className="h-7 w-7 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">
-          No data available for the selected station and date range.
+          {loadFailed
+            ? "Could not load sensor data for this station. Try again later."
+            : "No data available for the selected station and date range."}
         </p>
       </div>
     );

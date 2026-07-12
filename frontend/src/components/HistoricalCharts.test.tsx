@@ -4,10 +4,10 @@ import type { ReactNode } from "react";
 
 import { HistoricalCharts } from "@/components/HistoricalCharts";
 
-const mockUseApp = vi.fn();
+const mockUsePreferences = vi.fn();
 
 vi.mock("@/contexts/AppContext", () => ({
-  useApp: () => mockUseApp(),
+  usePreferences: () => mockUsePreferences(),
 }));
 
 vi.mock("recharts", () => {
@@ -36,8 +36,8 @@ const data = [
 
 describe("HistoricalCharts", () => {
   beforeEach(() => {
-    mockUseApp.mockReset();
-    mockUseApp.mockReturnValue({
+    mockUsePreferences.mockReset();
+    mockUsePreferences.mockReturnValue({
       timezone: "UTC",
       isDarkMode: false,
     });

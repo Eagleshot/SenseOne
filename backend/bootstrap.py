@@ -25,10 +25,11 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-import store  # noqa: E402
 import users  # noqa: E402
+from db import sqlite_repo  # noqa: E402
 from db.migrate import run_migrations  # noqa: E402
 from models import StationCreateRequest  # noqa: E402
+from settings import get_settings  # noqa: E402
 from station_hmac import provision_device_hmac_secret  # noqa: E402
 
 
@@ -37,10 +38,10 @@ def _parse_args() -> argparse.Namespace:
         description="Create the first admin user, a station, and its device HMAC secret."
     )
     parser.add_argument("--title", required=True, help="Station title; the station id/slug is derived from it.")
-    parser.add_argument("--email", default=os.getenv("APP_AUTH_EMAIL"), help="Admin email (default: APP_AUTH_EMAIL).")
+    parser.add_argument("--email", default=get_settings().auth_email or None, help="Admin email (default: APP_AUTH_EMAIL).")
     parser.add_argument(
         "--password",
-        default=os.getenv("APP_AUTH_PASSWORD"),
+        default=get_settings().auth_password or None,
         help="Admin password, >=12 chars (default: APP_AUTH_PASSWORD). Only needed when the user does not exist yet.",
     )
     parser.add_argument("--location", default="", help="Place name shown in the UI.")
@@ -84,8 +85,8 @@ def main() -> None:
         alt=args.alt,
         is_public=args.public,
     )
-    public_id = store.create_station(payload, user)
-    view = store.station_view(public_id)
+    public_id = sqlite_repo.create_station(payload, user.owner_id)
+    view = sqlite_repo.station_view(public_id)
     url_slug = view[0] if view else public_id
 
     secret_b64 = provision_device_hmac_secret(public_id)

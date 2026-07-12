@@ -1,10 +1,10 @@
-import { useApp } from "@/contexts/AppContext";
+import { useStationData } from "@/contexts/AppContext";
 import { formatRelativeShort } from "@/lib/datetime";
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 import { cn } from "@/lib/utils";
 
 export const StatusSummary: React.FC = () => {
-  const { activeWebcam } = useApp();
+  const { activeWebcam } = useStationData();
 
   const isOnline = activeWebcam.isOnline;
   const hasStatus = typeof isOnline === "boolean";

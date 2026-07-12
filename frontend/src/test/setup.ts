@@ -14,3 +14,11 @@ Object.defineProperty(window, "matchMedia", {
   }),
 });
 
+// jsdom has no ResizeObserver; Radix primitives (Select, etc.) require one.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+window.ResizeObserver = window.ResizeObserver ?? (ResizeObserverStub as typeof ResizeObserver);
+

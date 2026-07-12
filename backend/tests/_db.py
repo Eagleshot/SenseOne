@@ -51,12 +51,14 @@ def init_engine():
 
 def reset_data() -> None:
     """Drop and recreate every table for a clean per-test database."""
+    import users
     from db.models import Base
     from db.session import get_engine
 
     engine = get_engine()
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    users._reset_user_cache()  # the wiped DB has no users again
 
 
 def create_owner(email: str, password: str = "devpassword123", *, is_admin: bool = False):

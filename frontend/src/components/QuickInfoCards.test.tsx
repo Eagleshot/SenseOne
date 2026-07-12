@@ -3,19 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { QuickInfoCards } from "@/components/QuickInfoCards";
 
-const mockUseApp = vi.fn();
+const mockUseStationData = vi.fn();
 
 vi.mock("@/contexts/AppContext", () => ({
-  useApp: () => mockUseApp(),
+  useStationData: () => mockUseStationData(),
 }));
 
 describe("QuickInfoCards", () => {
   beforeEach(() => {
-    mockUseApp.mockReset();
+    mockUseStationData.mockReset();
   });
 
   it("shows the backend battery value immediately when available", () => {
-    mockUseApp.mockReturnValue({
+    mockUseStationData.mockReturnValue({
       activeWebcam: { id: "cam-1", battery: 82, isOnline: true },
       historicalData: [],
     });
@@ -27,7 +27,7 @@ describe("QuickInfoCards", () => {
   });
 
   it("falls back to the latest history battery when backend battery is unavailable", () => {
-    mockUseApp.mockReturnValue({
+    mockUseStationData.mockReturnValue({
       activeWebcam: { id: "cam-1", battery: null, isOnline: true },
       historicalData: [{ timestamp: new Date(), battery: 61 }],
     });
@@ -38,7 +38,7 @@ describe("QuickInfoCards", () => {
   });
 
   it("shows reception from the latest reading when the device reports it", () => {
-    mockUseApp.mockReturnValue({
+    mockUseStationData.mockReturnValue({
       activeWebcam: { id: "cam-1", battery: null, isOnline: true },
       historicalData: [{ timestamp: new Date(), battery: 55, reception: 88 }],
     });
@@ -50,7 +50,7 @@ describe("QuickInfoCards", () => {
   });
 
   it("renders nothing when no status metrics are available", () => {
-    mockUseApp.mockReturnValue({
+    mockUseStationData.mockReturnValue({
       activeWebcam: { id: "cam-1", battery: null, isOnline: true },
       historicalData: [],
     });

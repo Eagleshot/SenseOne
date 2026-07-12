@@ -23,22 +23,15 @@ import { Dialog, DialogClose, DialogContent, DialogTrigger } from '@/components/
 import { StatusSummary } from '@/components/StatusSummary';
 import { QuickInfoCards } from '@/components/QuickInfoCards';
 
-import { useApp } from '@/contexts/AppContext';
+import { usePlayback, usePreferences, useStationData } from '@/contexts/AppContext';
 import { formatDateTimeLabel } from '@/lib/datetime';
 import { cn } from '@/lib/utils';
 import { formatLocationWithFlag } from '@/lib/location';
 
 export const HeroImage: React.FC = () => {
-  const {
-    activeWebcam,
-    imageTimeline,
-    currentImageIndex,
-    setCurrentImageIndex,
-    isPlaying,
-    setIsPlaying,
-    timezone,
-    refreshImageTimeline,
-  } = useApp();
+  const { activeWebcam, imageTimeline, isStationLoading, refreshImageTimeline } = useStationData();
+  const { currentImageIndex, setCurrentImageIndex, isPlaying, setIsPlaying } = usePlayback();
+  const { timezone } = usePreferences();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isCompareOpen, setIsCompareOpen] = useState(false);
@@ -76,6 +69,47 @@ export const HeroImage: React.FC = () => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: retry the load when the image URL changes
     setHasLoadError(false);
   }, [currentImageUrl]);
+
+  // Warm the whole timeline in the background so scrubbing hits the browser
+  // cache instead of fetching frame-by-frame mid-drag. Newest-first (scrubs
+  // start at the live end), a few requests at a time, and paused while the
+  // user is actively dragging so warming never competes with the frame they
+  // are looking at.
+  const warmedUrlsRef = useRef<Set<string>>(new Set());
+  const isScrubbingRef = useRef(false);
+  useEffect(() => {
+    isScrubbingRef.current = isScrubbing || isDragging;
+  }, [isScrubbing, isDragging]);
+  useEffect(() => {
+    if (imageTimeline.length === 0) return;
+    if (warmedUrlsRef.current.size > 500) warmedUrlsRef.current.clear();
+    const queue = [...imageTimeline]
+      .reverse()
+      .map((item) => item.url)
+      .filter((url) => !warmedUrlsRef.current.has(url));
+    if (queue.length === 0) return;
+
+    let cancelled = false;
+    const loadNext = () => {
+      if (cancelled) return;
+      if (isScrubbingRef.current) {
+        window.setTimeout(loadNext, 250); // wait out the drag
+        return;
+      }
+      const url = queue.shift();
+      if (!url) return;
+      warmedUrlsRef.current.add(url);
+      const image = new Image();
+      image.onload = loadNext;
+      image.onerror = loadNext;
+      image.src = url;
+    };
+    const CONCURRENCY = 4;
+    for (let i = 0; i < CONCURRENCY; i++) loadNext();
+    return () => {
+      cancelled = true;
+    };
+  }, [imageTimeline]);
 
   const updateCompareValue = (clientX: number) => {
     const rect = compareRef.current?.getBoundingClientRect();
@@ -191,20 +225,32 @@ export const HeroImage: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* Header — skeletons while the initial station resolves, instead of a
+          literal "Loading..." headline. */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-3xl md:text-4xl font-semibold text-foreground text-balance">
-              {activeWebcam.name}
-            </h1>
+        {isStationLoading ? (
+          <div className="space-y-2" aria-hidden="true">
+            <div className="h-9 w-64 max-w-full animate-pulse rounded-lg bg-muted md:h-10" />
+            <div className="h-4 w-44 animate-pulse rounded bg-muted" />
           </div>
-          <p className="text-muted-foreground flex items-center gap-1.5">
-            <MapPin className="w-3 h-3" />
-            {formatLocationWithFlag(activeWebcam.location, activeWebcam.country, activeWebcam.countryEmoji)}
-          </p>
-        </div>
-        <StatusSummary />
+        ) : (
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-3xl md:text-4xl font-semibold text-foreground text-balance">
+                {activeWebcam.name}
+              </h1>
+            </div>
+            <p className="text-muted-foreground flex items-center gap-1.5">
+              <MapPin className="w-3 h-3" />
+              {formatLocationWithFlag(activeWebcam.location, activeWebcam.country, activeWebcam.countryEmoji)}
+            </p>
+          </div>
+        )}
+        {isStationLoading ? (
+          <div className="h-10 w-72 max-w-full animate-pulse rounded-lg bg-muted" aria-hidden="true" />
+        ) : (
+          <StatusSummary />
+        )}
       </div>
 
       {/* Hero Image */}
@@ -222,15 +268,17 @@ export const HeroImage: React.FC = () => {
                 className="w-full h-full object-cover"
                 onError={() => setHasLoadError(true)}
             />
+          ) : isStationLoading ? (
+            // Don't claim "No pictures available" while the station is still
+            // loading — pulse instead.
+            <div className="absolute inset-0 animate-pulse bg-muted/60" aria-hidden="true" />
           ) : (
             <div className="absolute inset-0 overflow-hidden bg-[radial-gradient(circle_at_20%_20%,hsl(var(--primary)/0.22),transparent_45%),radial-gradient(circle_at_80%_0%,hsl(var(--accent)/0.18),transparent_45%),hsl(var(--background))]">
               <div className="pointer-events-none absolute -left-16 top-10 h-36 w-36 rounded-full border border-border/40 bg-background/30 blur-2xl" />
               <div className="pointer-events-none absolute -right-20 bottom-12 h-52 w-52 rounded-full border border-border/40 bg-background/30 blur-2xl" />
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className="mx-4 max-w-md text-center">
-                  <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted/50">
-                    <ImageOff className="h-7 w-7 text-muted-foreground" />
-                  </div>
+                  <ImageOff className="mx-auto mb-4 h-7 w-7 text-muted-foreground" />
                   <p className="text-lg font-semibold text-foreground">No pictures available</p>
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                     Try refreshing later or switch to another station.
@@ -283,9 +331,7 @@ export const HeroImage: React.FC = () => {
               <img src={currentImageUrl} alt={`${activeWebcam.name} webcam view`} className="h-full w-full object-contain bg-black" />
             ) : (
               <div className="mx-4 max-w-md text-center">
-                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-white/10">
-                  <ImageOff className="h-7 w-7 text-white/80" />
-                </div>
+                <ImageOff className="mx-auto mb-4 h-7 w-7 text-white/80" />
                 <p className="text-lg font-semibold text-white">No pictures available</p>
                 <p className="mt-2 text-sm leading-relaxed text-white/75">
                   Try another station or check back soon.
@@ -303,16 +349,18 @@ export const HeroImage: React.FC = () => {
 
           {/* Timestamp badge */}
           {currentImage && (
-            <div className="absolute bottom-4 right-4 px-3 py-1.5 rounded-lg bg-background/50 backdrop-blur-sm border border-border/50 transition-all duration-200 group-hover:bottom-[5.5rem] group-focus-within:bottom-[5.5rem]">
+            <div className="absolute bottom-4 right-4 px-3 py-1.5 rounded-lg bg-background/50 backdrop-blur-sm border border-border/50 transition-all duration-200 group-hover:bottom-[5.5rem] group-focus-within:bottom-[5.5rem] [@media(pointer:coarse)]:bottom-[5.5rem]">
               <p className="text-sm font-medium text-foreground">
                 {formatDateTimeLabel(currentImage.timestamp, timezone)}
               </p>
             </div>
           )}
 
-          {/* Controls Bar */}
+          {/* Controls Bar. Touch devices have no hover: keep the controls
+              permanently visible there ([@media(pointer:coarse)]), since
+              scrubbing is the page's core interaction. */}
           {hasDisplayImage && (
-            <div className="absolute inset-x-4 bottom-4 rounded-2xl border border-border/50 bg-background/50 px-3 py-1 backdrop-blur-sm opacity-0 translate-y-2 transition-all duration-200 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-y-0 group-focus-within:pointer-events-auto">
+            <div className="absolute inset-x-4 bottom-4 rounded-2xl border border-border/50 bg-background/50 px-3 py-1 backdrop-blur-sm opacity-0 translate-y-2 transition-all duration-200 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:translate-y-0 group-focus-within:pointer-events-auto [@media(pointer:coarse)]:opacity-100 [@media(pointer:coarse)]:translate-y-0 [@media(pointer:coarse)]:pointer-events-auto">
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="ghost"

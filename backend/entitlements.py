@@ -39,7 +39,8 @@ PLANS: dict[str, Limits] = {
         min_capture_interval_minutes=60,
         image_retention_days=7,
         sensor_retention_days=30,
-        included_station_count=25,
+        # TODO.md pricing table: 3 stations included free, more per-station billed.
+        included_station_count=3,
     ),
     "pro": Limits(
         max_image_width=1280,

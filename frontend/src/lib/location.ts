@@ -218,35 +218,45 @@ const normalizeCountryName = (value: string): string => {
     .trim();
 };
 
+// The distinct ISO 3166-1 alpha-2 codes from the curated alias map above —
+// the single source of which countries exist here. (Intl.supportedValuesOf has
+// no 'region' key, so the code list cannot come from Intl.)
+const COUNTRY_CODES: string[] = Array.from(new Set(Object.values(COUNTRY_ALIASES)));
+
+// English display names per code via Intl.DisplayNames, with a title-cased
+// alias key as fallback for engines without DisplayNames. The first alias for
+// a code is its canonical long name (shorthands like 'usa' come later).
+const getEnglishCountryNames = (): Map<string, string> => {
+  const names = new Map<string, string>();
+  for (const [alias, code] of Object.entries(COUNTRY_ALIASES)) {
+    if (!names.has(code)) {
+      names.set(code, alias.replace(/(?:^|\s)[a-z]/g, char => char.toUpperCase()));
+    }
+  }
+  try {
+    if (typeof Intl !== 'undefined' && (Intl as { DisplayNames?: unknown }).DisplayNames) {
+      const displayNames = new Intl.DisplayNames(['en'], { type: 'region' });
+      for (const code of COUNTRY_CODES) {
+        const name = displayNames.of(code);
+        if (name && name !== code) names.set(code, name);
+      }
+    }
+  } catch {
+    // Keep the alias-derived fallback names.
+  }
+  return names;
+};
+
 let cachedCountryNameToCode: Map<string, string> | null = null;
 
 const getCountryNameToCodeMap = (): Map<string, string> => {
   if (cachedCountryNameToCode) return cachedCountryNameToCode;
   const map = new Map<string, string>();
-  try {
-    if (typeof Intl === 'undefined') return map;
-    const intlAny = Intl as unknown as {
-      DisplayNames?: new (locales: string[], options: { type: string }) => { of: (code: string) => string | undefined };
-      supportedValuesOf?: (type: string) => string[];
-    };
-
-    if (!intlAny.DisplayNames) return map;
-    const displayNames = new intlAny.DisplayNames(['en'], { type: 'region' });
-
-    const codes =
-      typeof intlAny.supportedValuesOf === 'function'
-        ? intlAny.supportedValuesOf('region').filter(code => /^[A-Z]{2}$/.test(code))
-        : [];
-
-    for (const code of codes) {
-      const name = displayNames.of(code);
-      if (!name) continue;
-      map.set(normalizeCountryName(name), code);
-    }
-  } catch {
-    return map;
+  // Map the display names back to codes so a value picked from the dropdown
+  // (e.g. 'Czechia') resolves even when the alias list spells it differently.
+  for (const [code, name] of getEnglishCountryNames()) {
+    map.set(normalizeCountryName(name), code);
   }
-
   cachedCountryNameToCode = map;
   return map;
 };
@@ -271,31 +281,24 @@ export type CountryOption = { code: string; name: string; flag: string };
 let cachedCountryOptions: CountryOption[] | null = null;
 
 // Full list of countries (English display names + flag), sorted by name, for
-// populating a country dropdown. Built from Intl region data.
+// populating a country dropdown. Codes come from the curated alias map; names
+// from Intl.DisplayNames where available.
 export const getCountryOptions = (): CountryOption[] => {
   if (cachedCountryOptions) return cachedCountryOptions;
-  const options: CountryOption[] = [];
-  try {
-    if (typeof Intl === 'undefined') return options;
-    const intlAny = Intl as unknown as {
-      DisplayNames?: new (locales: string[], options: { type: string }) => { of: (code: string) => string | undefined };
-      supportedValuesOf?: (type: string) => string[];
-    };
-    if (!intlAny.DisplayNames || typeof intlAny.supportedValuesOf !== 'function') return options;
-    const displayNames = new intlAny.DisplayNames(['en'], { type: 'region' });
-    const codes = intlAny.supportedValuesOf('region').filter(code => /^[A-Z]{2}$/.test(code));
-    for (const code of codes) {
-      const name = displayNames.of(code);
-      if (!name) continue;
-      options.push({ code, name, flag: getFlagEmojiFromCountryCode(code) });
-    }
-    options.sort((a, b) => a.name.localeCompare(b.name));
-  } catch {
-    return [];
-  }
+  const options = Array.from(getEnglishCountryNames(), ([code, name]) => ({
+    code,
+    name,
+    flag: getFlagEmojiFromCountryCode(code),
+  }));
+  options.sort((a, b) => a.name.localeCompare(b.name));
   cachedCountryOptions = options;
   return options;
 };
+
+/** English display name for an ISO country code (matching the dropdown
+ * options), or null for codes outside the curated list. */
+export const getCountryNameFromCode = (code: string): string | null =>
+  getCountryOptions().find(option => option.code === code.toUpperCase())?.name ?? null;
 
 export const formatLocationWithFlag = (
   location: string,
