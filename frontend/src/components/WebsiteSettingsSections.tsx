@@ -15,7 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import type { ColorThemeKey, ColorThemePresetKey } from "@/lib/appThemes";
+import type { ColorThemeKey } from "@/lib/appThemes";
 import { colorThemePresets } from "@/lib/appThemes";
 import { CAPTURE_INTERVAL_OPTIONS, CUSTOM_CAPTURE_INTERVAL_VALUE } from "@/lib/captureInterval";
 import { cn } from "@/lib/utils";
@@ -487,7 +487,7 @@ export const ThemeBrandingSection = ({
     </AccordionTrigger>
     <AccordionContent className="px-4 pb-4 pt-0">
       <div className="grid gap-3 sm:grid-cols-3">
-        {(Object.entries(colorThemePresets) as Array<[ColorThemePresetKey, (typeof colorThemePresets)[ColorThemePresetKey]]>).map(
+        {(Object.entries(colorThemePresets) as Array<[ColorThemeKey, (typeof colorThemePresets)[ColorThemeKey]]>).map(
           ([themeKey, preset]) => (
             <button
               key={themeKey}

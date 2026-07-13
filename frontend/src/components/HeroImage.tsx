@@ -25,6 +25,7 @@ import { QuickInfoCards } from '@/components/QuickInfoCards';
 
 import { usePlayback, usePreferences, useStationData } from '@/contexts/AppContext';
 import { formatDateTimeLabel } from '@/lib/datetime';
+import { downloadBlob } from '@/lib/download';
 import { cn } from '@/lib/utils';
 import { formatLocationWithFlag } from '@/lib/location';
 
@@ -188,9 +189,6 @@ export const HeroImage: React.FC = () => {
     try {
       const response = await fetch(currentImageUrl);
       const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = objectUrl;
       const rawName = currentImageUrl.split('/').pop()?.split('?')[0] ?? '';
       let urlFilename = '';
       try {
@@ -198,11 +196,7 @@ export const HeroImage: React.FC = () => {
       } catch {
         urlFilename = rawName;
       }
-      link.download = urlFilename || `${activeWebcam.name}.jpg`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(objectUrl);
+      downloadBlob(blob, urlFilename || `${activeWebcam.name}.jpg`);
     } catch {
       // silently ignore download errors
     } finally {

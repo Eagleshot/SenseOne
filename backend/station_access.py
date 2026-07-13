@@ -27,18 +27,25 @@ def require_station_view(station_id: str, user) -> None:
 
 def can_edit_station(station_id: str, user) -> bool:
     """True if the caller may edit the station (admin or its owner)."""
-    if user is None:
-        return False
-    if getattr(user, "is_admin", False):
-        return True
-    return sqlite_repo.station_owner_id(station_id) == getattr(user, "owner_id", None)
+    return sqlite_repo.owner_or_admin(sqlite_repo.station_owner_id(station_id), user)
 
 
 def require_station_edit(station_id: str, user) -> None:
-    """Allow only admins or the owning user to edit a station."""
-    require_station_exists(station_id)
-    if not can_edit_station(station_id, user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this station.",
-        )
+    """Allow only admins or the owning user to edit a station.
+
+    Hides existence like require_station_view: a caller who can't even view the
+    station (private and not theirs) gets 404, not 403, so edit routes can't be
+    used to probe which private station ids exist. A viewable-but-not-editable
+    station (public, owned by someone else) legitimately gets 403.
+    """
+    owner_id = sqlite_repo.station_owner_id(station_id)
+    if owner_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown station id.")
+    if sqlite_repo.owner_or_admin(owner_id, user):
+        return
+    if not can_view_station(station_id, user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown station id.")
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have access to this station.",
+    )

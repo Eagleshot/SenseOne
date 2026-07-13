@@ -1,5 +1,6 @@
 """Pydantic models for the Eagleshot API."""
 
+import math
 import re
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
@@ -41,6 +42,23 @@ class AppConfig(ApiModel):
     station's lat/lon and the stored start/stop values are ignored
     operationally (but kept in the document so the UI can show them).
     """
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_status_fields(cls, data):
+        """Tolerate (ignore) the removed lastOnline/nextOnline keys.
+
+        Older clients fetch the config and PUT the whole document back; before
+        these fields were dropped the response carried them, so a stale client
+        would now trip extra="forbid". Strip them here so those round-trips keep
+        working, without reintroducing the fields or loosening extra="forbid" for
+        genuinely unknown keys.
+        """
+        if isinstance(data, dict):
+            legacy = ("lastOnline", "nextOnline", "last_online", "next_online")
+            if any(key in data for key in legacy):
+                data = {key: value for key, value in data.items() if key not in legacy}
+        return data
+
     station_start_time: str = Field(
         default="06:00",
         description="Earliest time of day the device may capture, in HH:MM 24-hour format.",
@@ -91,14 +109,6 @@ class AppConfig(ApiModel):
         default=False,
         description="When false, the station is hidden from anonymous and non-owner callers.",
     )
-    last_online: str | None = Field(
-        default=None,
-        description="ISO 8601 timestamp of the most recent successful device contact.",
-    )
-    next_online: str | None = Field(
-        default=None,
-        description="ISO 8601 timestamp the device is expected to check in next, if known.",
-    )
 
     @field_validator("station_start_time", "station_stop_time")
     @classmethod
@@ -113,16 +123,6 @@ class AppConfig(ApiModel):
     def validate_text_field(cls, value: str, info: ValidationInfo) -> str:
         # The description keeps its newlines (rendered multi-line).
         return clean_text(value, allow_newlines=info.field_name == "description")
-
-    @field_validator("last_online", "next_online")
-    @classmethod
-    def validate_timestamp_field(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        parsed = parse_iso_timestamp(value)
-        if parsed is None:
-            raise ValueError("Timestamp must be ISO 8601.")
-        return iso_utc(parsed)
 
     @model_validator(mode="after")
     def validate_times_order(self) -> "AppConfig":
@@ -173,7 +173,10 @@ class DeviceConfig(ApiModel):
 
 class LoginRequest(ApiModel):
     """Credentials posted to POST /auth/login."""
-    email: str = Field(description="User email address; the login identity.")
+    email: str = Field(
+        max_length=254,  # RFC 5321 max; also bounds the login-throttle key size.
+        description="User email address; the login identity.",
+    )
     password: str = Field(description="User password in plaintext (over HTTPS).")
 
     @field_validator("email")
@@ -326,6 +329,9 @@ MAX_READINGS_PER_REQUEST = 32
 # single signed request can't write thousands of observations (32 readings x 64
 # metrics each would otherwise reach 2048).
 MAX_OBSERVATIONS_PER_REQUEST = 512
+# Cap for the free-form device labels (firmware_version, wake_reason): enough for
+# any real label, small enough that they can't bloat stored rows/responses.
+MAX_DEVICE_LABEL_LENGTH = 128
 
 
 class ChannelReading(ApiModel):
@@ -394,6 +400,15 @@ class ChannelReading(ApiModel):
             # bool is an int subclass: it stores as 0/1 and is range-checked as such.
             if not isinstance(value, (int, float)):
                 raise ValueError(f"Metric '{key}' must be a number (or null).")
+            # The value is stored via float(value); reject anything that isn't a
+            # finite float now (inf/NaN from 1e999, or an int too large to convert)
+            # rather than 500ing later at float()/JSON serialization.
+            try:
+                numeric = float(value)
+            except OverflowError:
+                raise ValueError(f"Metric '{key}' is too large.")
+            if not math.isfinite(numeric):
+                raise ValueError(f"Metric '{key}' must be a finite number.")
             spec = METRICS.get(key)
             if spec is not None and not (spec.minimum <= value <= spec.maximum):
                 raise ValueError(
@@ -409,11 +424,15 @@ class ChannelReading(ApiModel):
 
     @property
     def metrics(self) -> dict:
-        """Numeric measurements only (reserved keys and nulls excluded)."""
+        """Numeric measurements only (nulls excluded).
+
+        Reserved keys can't appear here: ``validate_metrics`` rejects them at
+        construction, so no need to re-filter.
+        """
         return {
             key: value
             for key, value in (self.model_extra or {}).items()
-            if value is not None and key not in RESERVED_READING_KEYS
+            if value is not None
         }
 
 
@@ -487,6 +506,17 @@ class SensorReadingRequest(ApiModel):
         if parsed is None:
             raise ValueError("Timestamp must be ISO 8601.")
         return iso_utc(parsed)
+
+    @field_validator("firmware_version", "wake_reason")
+    @classmethod
+    def clean_device_label(cls, value: str | None) -> str | None:
+        """Free-form device labels: strip control/bidi chars (UI-spoofing) and cap
+        length. Cleaned and truncated rather than rejected, so a malformed label
+        never drops the whole check-in (and its measurements)."""
+        if value is None:
+            return None
+        cleaned = clean_text(value)[:MAX_DEVICE_LABEL_LENGTH]
+        return cleaned or None
 
     @model_validator(mode="after")
     def validate_readings(self) -> "SensorReadingRequest":

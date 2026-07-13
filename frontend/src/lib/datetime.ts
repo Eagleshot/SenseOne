@@ -81,6 +81,18 @@ export const formatChartTickLabel = (timestamp: Date, timeZone: string | undefin
 export const formatRelativeShort = (date: Date) =>
   formatDistanceToNow(date, { addSuffix: true }).replace("about ", "").replace(/minutes?/g, "min.");
 
+// "Next Online" countdown to a future instant: under a minute -> "in less than
+// a min.", under an hour -> "in N min.", otherwise "in H h" (minutes dropped on
+// the hour) or "in H h M min.". `now` is passed in so the result is deterministic.
+export const formatCountdown = (target: Date, now: Date): string => {
+  const totalMinutes = Math.round((target.getTime() - now.getTime()) / 60000);
+  if (totalMinutes < 1) return "in less than a min.";
+  if (totalMinutes < 60) return `in ${totalMinutes} min.`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `in ${hours} h` : `in ${hours} h ${minutes} min.`;
+};
+
 export const formatCsvTimestamp = (timestamp: Date, timeZone?: string) => {
   const tz = resolveTimeZone(timeZone);
   const parts = new Intl.DateTimeFormat("en-US", {

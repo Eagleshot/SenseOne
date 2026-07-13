@@ -154,21 +154,6 @@ class TestAppConfig:
         assert config.title == "Test"
         assert config.location == "Location"
 
-    def test_timestamp_validation(self):
-        """Test timestamp field validation."""
-        # Valid ISO timestamp
-        config = AppConfig(last_online="2024-01-01T12:30:00Z")
-        assert config.last_online == "2024-01-01T12:30:00Z"
-        
-        # Invalid timestamp
-        with pytest.raises(ValueError, match="ISO 8601"):
-            AppConfig(last_online="invalid")
-
-    def test_optional_timestamp_fields(self):
-        """Test that timestamp fields are optional."""
-        config = AppConfig(last_online=None, next_online=None)
-        assert config.last_online is None
-        assert config.next_online is None
 
 class TestLoginRequest:
     """Test LoginRequest model."""

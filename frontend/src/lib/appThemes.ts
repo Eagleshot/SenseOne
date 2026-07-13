@@ -9,14 +9,13 @@ export type ThemeVars = {
   accentForeground: string;
 };
 
-export type ColorThemePresetKey =
+export type ColorThemeKey =
   | 'embernova'
   | 'ocean'
   | 'forest'
   | 'sunset'
   | 'auroraborealis'
   | 'polarinek';
-export type ColorThemeKey = ColorThemePresetKey;
 
 type ThemePreset = {
   label: string;
@@ -24,18 +23,7 @@ type ThemePreset = {
   vars: ThemeVars;
 };
 
-const themeVarKeys: Array<keyof ThemeVars> = [
-  'primary',
-  'ring',
-  'chart1',
-  'chart2',
-  'chart3',
-  'sidebarRing',
-  'accent',
-  'accentForeground',
-];
-
-export const colorThemePresets: Record<ColorThemePresetKey, ThemePreset> = {
+export const colorThemePresets: Record<ColorThemeKey, ThemePreset> = {
   embernova: {
     label: 'Icelandic Ember',
     description: 'Volcanic warmth beneath arctic skies',
@@ -136,8 +124,8 @@ const cssVarMap: Record<keyof ThemeVars, string> = {
 const applyThemeVars = (vars: ThemeVars) => {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  for (const key of themeVarKeys) {
-    root.style.setProperty(cssVarMap[key], vars[key]);
+  for (const [key, cssVar] of Object.entries(cssVarMap) as Array<[keyof ThemeVars, string]>) {
+    root.style.setProperty(cssVar, vars[key]);
   }
 };
 

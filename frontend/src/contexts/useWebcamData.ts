@@ -244,11 +244,13 @@ export const useWebcamData = (
   const canEdit = Boolean(
     activeStationDetail && activeStationDetail.id === activeStationId && activeStationDetail.canEdit
   );
+  // Owner-only config only applies once we're logged in and viewing a station.
+  const hasOwnedStationContext = isAuthenticated && Boolean(activeStationId);
 
   // ---- Station config (owner-only) -------------------------------------------
   const configQuery = useQuery({
     queryKey: stationConfigKey(activeStationId),
-    enabled: isAuthenticated && Boolean(activeStationId) && canEdit,
+    enabled: hasOwnedStationContext && canEdit,
     queryFn: ({ signal }) => getStationConfig(apiBaseUrl, activeStationId, signal),
   });
   const stationConfig = configQuery.data ?? null;
@@ -277,10 +279,9 @@ export const useWebcamData = (
   const description = stationConfig?.description ?? selectedWebcam.description ?? "";
   const isPublic = stationConfig?.isPublic ?? selectedWebcam.isPublic ?? true;
 
-  const isStationConfigLoading = isAuthenticated && Boolean(activeStationId) && configQuery.isLoading;
+  const isStationConfigLoading = hasOwnedStationContext && configQuery.isLoading;
   const configLoadFailed =
-    isAuthenticated &&
-    Boolean(activeStationId) &&
+    hasOwnedStationContext &&
     (configQuery.isError || (configQuery.isSuccess && configQuery.data === null));
   const stationConfigError =
     saveError ?? (configLoadFailed ? "Unable to load the selected station settings." : null);

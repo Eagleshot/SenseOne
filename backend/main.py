@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from constants import API_PREFIX, INGEST_API_PREFIX
 from db.migrate import run_migrations
-from routes import auth, device_ingestion, stations, stations_images_weather, system
+from routes import auth, device_ingestion, stations, system, weather
 from settings import get_settings
 from users import has_any_user, init_users_db
 
@@ -140,7 +140,7 @@ def create_app() -> FastAPI:
     app.include_router(system.router)
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(stations.router, prefix=API_PREFIX)
-    app.include_router(stations_images_weather.router, prefix=API_PREFIX)
+    app.include_router(weather.router, prefix=API_PREFIX)
     app.include_router(device_ingestion.router, prefix=INGEST_API_PREFIX)
     return app
 

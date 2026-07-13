@@ -39,11 +39,22 @@ def test_private_station_owner_can_edit(db):
     require_station_edit("priv", AccessUser(owner.owner_id))
 
 
-def test_private_station_non_owner_cannot_edit(db):
+def test_private_station_non_owner_gets_404_not_403(db):
+    # A non-owner can't view a private station, so edit hides its existence (404)
+    # rather than confirming it with a 403.
     owner = _db.create_owner("owner@example.com")
     _db.create_station_row("priv", is_public=False, owner_id=owner.owner_id)
     with pytest.raises(HTTPException) as exc:
         require_station_edit("priv", AccessUser(str(uuid.uuid4())))
+    assert exc.value.status_code == 404
+
+
+def test_public_station_non_owner_gets_403(db):
+    # A public station's existence is already known, so a non-owner editor gets 403.
+    owner = _db.create_owner("owner@example.com")
+    _db.create_station_row("pub", is_public=True, owner_id=owner.owner_id)
+    with pytest.raises(HTTPException) as exc:
+        require_station_edit("pub", AccessUser(str(uuid.uuid4())))
     assert exc.value.status_code == 403
 
 

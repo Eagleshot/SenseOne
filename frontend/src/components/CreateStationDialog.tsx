@@ -458,46 +458,43 @@ export const CreateStationDialog: React.FC<CreateStationDialogProps> = ({ trigge
             <fieldset className="space-y-2" disabled={isCreating}>
               <legend className="text-xs font-medium text-muted-foreground">Visibility</legend>
               <div className="grid gap-3 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => setIsPublic(true)}
-                  aria-pressed={isPublic}
-                  className={cn(
-                    "selector-tile p-3 text-left",
-                    isPublic && "border-primary bg-primary/5 shadow-soft-md"
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                      <Globe className="h-3.5 w-3.5" />
-                      Public
-                    </p>
-                    {isPublic && <Check className="h-4 w-4 text-primary" />}
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Anyone can view this station, its images, and its history.
-                  </p>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsPublic(false)}
-                  aria-pressed={!isPublic}
-                  className={cn(
-                    "selector-tile p-3 text-left",
-                    !isPublic && "border-primary bg-primary/5 shadow-soft-md"
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                      <Lock className="h-3.5 w-3.5" />
-                      Private
-                    </p>
-                    {!isPublic && <Check className="h-4 w-4 text-primary" />}
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Only you and admins can see this station. Changeable later.
-                  </p>
-                </button>
+                {[
+                  {
+                    value: true,
+                    icon: Globe,
+                    label: "Public",
+                    description: "Anyone can view this station, its images, and its history.",
+                  },
+                  {
+                    value: false,
+                    icon: Lock,
+                    label: "Private",
+                    description: "Only you and admins can see this station. Changeable later.",
+                  },
+                ].map(({ value, icon: Icon, label, description }) => {
+                  const active = isPublic === value;
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => setIsPublic(value)}
+                      aria-pressed={active}
+                      className={cn(
+                        "selector-tile p-3 text-left",
+                        active && "border-primary bg-primary/5 shadow-soft-md"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                          <Icon className="h-3.5 w-3.5" />
+                          {label}
+                        </p>
+                        {active && <Check className="h-4 w-4 text-primary" />}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+                    </button>
+                  );
+                })}
               </div>
             </fieldset>
 

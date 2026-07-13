@@ -4,10 +4,8 @@ import { LocateFixed } from "lucide-react";
 import { CircleMarker, MapContainer, TileLayer, useMap, useMapEvents } from "react-leaflet";
 
 import { Button } from "@/components/ui/button";
+import { cartoLightTile } from "@/lib/mapTiles";
 
-const TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
-const TILE_ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">CARTO</a>';
 const DEFAULT_CENTER: [number, number] = [20, 0];
 
 const round = (value: number) => Number(value.toFixed(5));
@@ -61,7 +59,7 @@ export const CoordinatePicker: React.FC<CoordinatePickerProps> = ({ lat, lon, on
     <div className="space-y-2">
       <div className="relative h-64 overflow-hidden rounded-md border border-input">
         <MapContainer center={center} zoom={hasPoint ? 6 : 2} scrollWheelZoom className="h-full w-full">
-          <TileLayer url={TILE_URL} attribution={TILE_ATTRIBUTION} />
+          <TileLayer url={cartoLightTile.url} attribution={cartoLightTile.attribution} />
           <ClickHandler onChange={onChange} />
           <MapController lat={lat} lon={lon} />
           {lat !== null && lon !== null && (

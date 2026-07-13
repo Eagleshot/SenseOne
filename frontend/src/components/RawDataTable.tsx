@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 import { cn } from "@/lib/utils";
+import { downloadBlob } from "@/lib/download";
 import { usePreferences } from "@/contexts/AppContext";
 import {
   formatMetricValue,
@@ -101,15 +102,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
 
   const handleDownloadCSV = useCallback(() => {
     const csv = buildSensorCsv(filteredAndSortedData, timezone, columns);
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = sensorCsvFilename();
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadBlob(new Blob([csv], { type: "text/csv" }), sensorCsvFilename());
   }, [filteredAndSortedData, timezone, columns]);
 
   const startIndex = filteredAndSortedData.length === 0 ? 0 : (page - 1) * itemsPerPage + 1;

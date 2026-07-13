@@ -196,10 +196,11 @@ async def verify_station_signature(
     into memory once here; route handlers should use the returned bytes rather
     than re-streaming the request.
 
-    Deliberately no existence check before authentication: an unknown station
-    falls through to the secret lookup and 401s exactly like an existing station
-    with no secret provisioned, so unauthenticated callers can't probe which
-    station ids exist (404 vs 401).
+    Deliberately no existence check before authentication: an unknown station,
+    an existing station with no secret provisioned, and a provisioned station
+    with a bad signature all 401 with the same generic detail, so unauthenticated
+    callers can't probe which station ids exist or are provisioned (404 vs 401,
+    or "signature mismatch" vs "unknown station").
     """
     header_station = request.headers.get("X-Station-Id", "").strip()
     raw_timestamp = request.headers.get("X-Timestamp", "").strip()
@@ -238,15 +239,17 @@ async def verify_station_signature(
     ):
         _reject("Invalid X-Signature.")
 
-    # Unknown station and station-without-secret give the same 401 (see docstring).
+    # Unknown station, station-without-secret, and (below) a provisioned station
+    # with a bad signature all reject with the SAME generic detail, so a caller
+    # can't tell which station ids exist or are provisioned (see docstring).
     secret_b64 = sqlite_repo.read_device_secret_b64(station_id)
     if not secret_b64:
-        _reject("Unknown station or no device HMAC secret provisioned.")
+        _reject("Signature verification failed.")
         return b""
     try:
         secret = b64url_decode_nopad(secret_b64)
     except ValueError:  # binascii.Error subclasses ValueError
-        _reject("Station device HMAC secret is malformed.")
+        _reject("Signature verification failed.")
         return b""
 
     body = await _read_body_capped(request, max_body_bytes)
@@ -272,7 +275,7 @@ async def verify_station_signature(
     expected_sig_hex = hmac.new(secret, canonical, hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(expected_sig_hex, provided_sig_hex):
-        _reject("Signature mismatch.")
+        _reject("Signature verification failed.")
 
     if not _register_nonce(station_id, nonce, now):
         _reject("Nonce already used.")

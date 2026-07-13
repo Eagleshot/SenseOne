@@ -118,10 +118,12 @@ def normalize_content_type(raw_content_type: str | None) -> str | None:
 
 
 def media_type_from_path(path: Path) -> str | None:
-    """Determine the media type of an image file."""
-    media_type = _EXTENSION_TO_MEDIA_TYPE.get(path.suffix.lower())
-    if media_type:
-        return media_type
+    """Media type of an image file, detected from its content (magic bytes).
+
+    Content-based, not extension-based: returns None for anything that is not a
+    real JPEG/PNG/WebP, so a non-image body uploaded under an image extension is
+    rejected rather than accepted (and served) on the strength of its name.
+    """
     try:
         header = path.read_bytes()[:16]
     except OSError:

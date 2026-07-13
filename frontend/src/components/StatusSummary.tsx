@@ -1,5 +1,5 @@
 import { useStationData } from "@/contexts/AppContext";
-import { formatRelativeShort } from "@/lib/datetime";
+import { formatCountdown, formatRelativeShort } from "@/lib/datetime";
 import { LOADING_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeholders";
 import { cn } from "@/lib/utils";
 
@@ -14,7 +14,7 @@ export const StatusSummary: React.FC = () => {
   const now = new Date();
   const nextUpdateIn =
     activeWebcam.nextUpdate && activeWebcam.nextUpdate > now
-      ? `in ${Math.max(1, Math.round((activeWebcam.nextUpdate.getTime() - now.getTime()) / (60 * 1000)))} min.`
+      ? formatCountdown(activeWebcam.nextUpdate, now)
       : UNAVAILABLE_LABEL;
 
   return (

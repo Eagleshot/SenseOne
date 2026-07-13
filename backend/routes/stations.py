@@ -2,7 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import FileResponse
 
 from constants import NEXT_ONLINE_STATUS_BUFFER_MINUTES
 from db import sqlite_repo
@@ -30,7 +31,7 @@ from station_access import (
     require_station_edit,
     require_station_view,
 )
-from utils import humanize_station_id, parse_iso_timestamp
+from utils import humanize_station_id, media_type_from_path, parse_iso_timestamp, sanitize_filename
 
 
 router = APIRouter(prefix="/stations", tags=["Stations"])
@@ -204,6 +205,52 @@ def get_station_image_captures(
 
 
 @router.get(
+    "/{station_id}/images/{filename}",
+    summary="Get station image",
+    description=(
+        "Serve a single image file from the station's image directory. "
+        "`filename` must be the value returned by an image-captures listing — "
+        "anything outside the station directory or with path-traversal characters "
+        "is rejected with 400."
+    ),
+)
+def get_station_image(
+    station_id: ValidStationId,
+    filename: str,
+    user=Depends(get_optional_current_user),
+) -> FileResponse:
+    if filename != sanitize_filename(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    require_station_view(station_id, user)
+    # The DB row's storage_key is the source of truth: a blob is only served if
+    # its metadata row exists, and the stored key decides where the blob lives.
+    storage_key = sqlite_repo.image_storage_key(station_id, filename)
+    if storage_key is None:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    image_path = get_image_store().path(storage_key)
+    if not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found.")
+    # Cache policy by station visibility. Public captures are immutable in
+    # practice, so browsers may reuse them for a day without revalidating every
+    # timeline scrub. Private captures instead force revalidation: the conditional
+    # request re-reaches the server and re-runs the access check, so a cached blob
+    # can't be replayed after the user logs out or switches accounts.
+    # An anonymous caller only gets past require_station_view for a public station,
+    # so the extra visibility query is paid only for authenticated callers.
+    is_public = user is None or sqlite_repo.can_view(station_id, None)
+    if is_public:
+        cache_control = "private, max-age=86400"
+    else:
+        cache_control = "private, no-cache"
+    return FileResponse(
+        image_path,
+        media_type=media_type_from_path(image_path),
+        headers={"Cache-Control": cache_control},
+    )
+
+
+@router.get(
     "/{station_id}/data",
     response_model=list[SensorSeries],
     summary="Get sensor readings",
@@ -280,6 +327,6 @@ def update_station_config(
 ) -> AppConfig:
     require_station_edit(station_id, user)
     sqlite_repo.save_station_config(station_id, payload)
-    # Re-read so the response matches GET /config (including the derived
-    # lastOnline/nextOnline status), rather than echoing the request body.
+    # Re-read so the response reflects the persisted, normalized config (e.g. a
+    # title-driven slug change) rather than echoing the request body.
     return sqlite_repo.station_config(station_id) or AppConfig()

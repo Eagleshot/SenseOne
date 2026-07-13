@@ -226,7 +226,10 @@ const COUNTRY_CODES: string[] = Array.from(new Set(Object.values(COUNTRY_ALIASES
 // English display names per code via Intl.DisplayNames, with a title-cased
 // alias key as fallback for engines without DisplayNames. The first alias for
 // a code is its canonical long name (shorthands like 'usa' come later).
+let cachedEnglishCountryNames: Map<string, string> | null = null;
+
 const getEnglishCountryNames = (): Map<string, string> => {
+  if (cachedEnglishCountryNames) return cachedEnglishCountryNames;
   const names = new Map<string, string>();
   for (const [alias, code] of Object.entries(COUNTRY_ALIASES)) {
     if (!names.has(code)) {
@@ -244,6 +247,7 @@ const getEnglishCountryNames = (): Map<string, string> => {
   } catch {
     // Keep the alias-derived fallback names.
   }
+  cachedEnglishCountryNames = names;
   return names;
 };
 

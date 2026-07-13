@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useMapUi, usePreferences, useStationData } from '@/contexts/AppContext';
 import { apiBaseUrl } from '@/lib/apiClient';
 import { formatLocationWithFlag } from '@/lib/location';
+import { cartoLightTile } from '@/lib/mapTiles';
 import { cn } from '@/lib/utils';
 
 const WEATHER_OFF = 'off';
@@ -162,11 +163,7 @@ const mapTileLayers = {
     attribution:
       'Tiles &copy; <a href="https://www.esri.com/" target="_blank" rel="noreferrer">Esri</a> &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
   },
-  abstractLight: {
-    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">CARTO</a>',
-  },
+  abstractLight: cartoLightTile,
   abstractDark: {
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     attribution:

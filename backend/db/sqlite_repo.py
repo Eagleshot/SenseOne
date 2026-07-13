@@ -23,7 +23,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import aliased
 
-from auth import hash_secret, verify_secret
+from security import hash_secret, verify_secret
 from db.models import (
     AuthSession,
     Datastream,
@@ -39,6 +39,7 @@ from image_store import station_image_key
 from metrics_registry import DEFAULT_CHANNEL, metric_unit
 from models import AppConfig
 from station_db import StationStatus, _coerce_battery
+from user_db import User as UserAccount
 from utils import (
     ascii_station_name,
     iso_utc,
@@ -61,12 +62,30 @@ def _station(session, public_id: str) -> Station | None:
     return session.scalar(select(Station).where(Station.public_id == public_id))
 
 
-def _new_public_id(session) -> str:
-    """A fresh opaque, URL-safe, stable station id (12 hex chars)."""
+def new_public_id(session) -> str:
+    """A fresh opaque, URL-safe, stable station id (12 hex chars).
+
+    Public (like resolve_datastream) so the seed script can mint ids the same way
+    create_station does, instead of reaching for a module-private helper.
+    """
     while True:
         candidate = secrets.token_hex(6)
         if session.scalar(select(Station.id).where(Station.public_id == candidate)) is None:
             return candidate
+
+
+def owner_or_admin(row_owner_id, user) -> bool:
+    """True if `user` is an admin or the owner identified by `row_owner_id`.
+
+    The single authority for owner/admin edit rights; station_access builds its
+    can_edit/require_edit checks on top of this so the rule lives in one place.
+    """
+    if user is None:
+        return False
+    if getattr(user, "is_admin", False):
+        return True
+    owner_id = getattr(user, "owner_id", None) or None
+    return owner_id is not None and str(row_owner_id) == owner_id
 
 
 def _unique_url_slug(session, title: str, exclude_id: uuid.UUID | None = None) -> str:
@@ -93,7 +112,7 @@ def _unique_url_slug(session, title: str, exclude_id: uuid.UUID | None = None) -
     return f"{base}-{secrets.token_hex(3)}"
 
 
-def _config_from_row(row: Station, status: StationStatus) -> AppConfig:
+def _config_from_row(row: Station) -> AppConfig:
     return AppConfig(
         title=row.title,
         description=row.description,
@@ -108,8 +127,6 @@ def _config_from_row(row: Station, status: StationStatus) -> AppConfig:
         station_stop_time=row.station_stop_time,
         use_sunrise_sunset=row.use_sunrise_sunset,
         capture_interval_minutes=row.capture_interval_minutes,
-        last_online=status.last_online,
-        next_online=status.next_online,
     )
 
 
@@ -159,7 +176,9 @@ def _latest_image(session, station_id):
     return session.scalar(
         select(StationImage)
         .where(StationImage.station_id == station_id)
-        .order_by(StationImage.captured_at.desc())
+        # id.desc() tiebreaks equal captured_at, matching list_station_views so
+        # the detail page and the overview agree on which row is "latest".
+        .order_by(StationImage.captured_at.desc(), StationImage.id.desc())
         .limit(1)
     )
 
@@ -168,7 +187,7 @@ def _latest_reading(session, station_id):
     return session.scalar(
         select(SensorReading)
         .where(SensorReading.station_id == station_id)
-        .order_by(SensorReading.recorded_at.desc())
+        .order_by(SensorReading.recorded_at.desc(), SensorReading.id.desc())
         .limit(1)
     )
 
@@ -183,7 +202,7 @@ def _latest_metric_value(session, station_id, metric, channel=DEFAULT_CHANNEL):
             Datastream.metric == metric,
             Datastream.channel == channel,
         )
-        .order_by(Observation.recorded_at.desc())
+        .order_by(Observation.recorded_at.desc(), Observation.id.desc())
         .limit(1)
     )
 
@@ -239,11 +258,7 @@ def can_view(public_id: str, user) -> bool:
             return False
         if row.is_public:
             return True
-        if user is None:
-            return False
-        if getattr(user, "is_admin", False):
-            return True
-        return str(row.owner_id) == getattr(user, "owner_id", None)
+        return owner_or_admin(row.owner_id, user)
 
 
 def station_owner_id(public_id: str) -> str | None:
@@ -268,19 +283,6 @@ def station_name_token(public_id: str) -> str:
 
 # ----- stations: read --------------------------------------------------------
 
-def latest_status(public_id: str) -> StationStatus:
-    with session_scope() as session:
-        row = _station(session, public_id)
-        if row is None:
-            return StationStatus()
-        return _status_from_parts(
-            public_id,
-            _latest_image(session, row.id),
-            _latest_reading(session, row.id),
-            _latest_metric_value(session, row.id, "battery"),
-        )
-
-
 def station_view(public_id: str) -> tuple[str, AppConfig, StationStatus] | None:
     """Return (url_slug, AppConfig, StationStatus) for one station, or None."""
     with session_scope() as session:
@@ -293,12 +295,18 @@ def station_view(public_id: str) -> tuple[str, AppConfig, StationStatus] | None:
             _latest_reading(session, row.id),
             _latest_metric_value(session, row.id, "battery"),
         )
-        return row.url_slug, _config_from_row(row, status), status
+        return row.url_slug, _config_from_row(row), status
 
 
 def station_config(public_id: str) -> AppConfig | None:
-    view = station_view(public_id)
-    return view[1] if view is not None else None
+    """The persisted config document for one station, or None.
+
+    Config-only: unlike station_view() this needs no runtime status, so it runs a
+    single row lookup instead of also querying the latest image/reading/battery.
+    """
+    with session_scope() as session:
+        row = _station(session, public_id)
+        return _config_from_row(row) if row is not None else None
 
 
 def list_station_views(user) -> list[tuple[str, str, AppConfig, StationStatus, bool]]:
@@ -387,8 +395,8 @@ def list_station_views(user) -> list[tuple[str, str, AppConfig, StationStatus, b
             status = _status_from_parts(
                 s.public_id, latest_images.get(s.id), latest_readings.get(s.id), latest_batteries.get(s.id)
             )
-            can_edit = is_admin or (owner_id is not None and str(s.owner_id) == owner_id)
-            result.append((s.public_id, s.url_slug, _config_from_row(s, status), status, can_edit))
+            can_edit = owner_or_admin(s.owner_id, user)
+            result.append((s.public_id, s.url_slug, _config_from_row(s), status, can_edit))
         return result
 
 
@@ -497,7 +505,7 @@ def sensor_reading_envelopes(public_id: str, hours: int) -> list[dict[str, objec
 def create_station(payload, owner_id: str) -> str:
     """Create a station owned by the given user; returns its opaque public_id."""
     with session_scope() as session:
-        public_id = _new_public_id(session)
+        public_id = new_public_id(session)
         session.add(
             Station(
                 public_id=public_id,
@@ -521,9 +529,13 @@ def save_station_config(public_id: str, config: AppConfig) -> None:
         row = _station(session, public_id)
         if row is None:
             raise LookupError(f"Unknown station {public_id!r}")
-        title_changed = config.title != row.title
+        # Only overwrite fields the client actually sent, so a partial update does
+        # not reset omitted fields to their AppConfig defaults (silent data loss).
+        sent = config.model_fields_set
+        title_changed = "title" in sent and config.title != row.title
         for column in _CONFIG_COLUMNS:
-            setattr(row, column, getattr(config, column))
+            if column in sent:
+                setattr(row, column, getattr(config, column))
         # A rename moves the pretty URL (old URL is not preserved); the stable
         # public_id is unchanged, so devices/links/files are unaffected.
         if title_changed:
@@ -601,6 +613,18 @@ def append_reading(
             # IntegrityError on flush. The route pre-validates, so this guards
             # internal/test callers passing a malformed timestamp.
             raise ValueError(f"append_reading needs a valid ISO timestamp, got {timestamp!r}")
+        # Idempotent retry: a device that resends the same check-in (same explicit
+        # timestamp, e.g. after its 204 was lost on a flaky link) must not create a
+        # duplicate envelope. Server-stamped timestamps carry microseconds, so
+        # distinct heartbeats don't collide here.
+        already_stored = session.scalar(
+            select(SensorReading.id).where(
+                SensorReading.station_id == row.id,
+                SensorReading.recorded_at == recorded_at,
+            )
+        )
+        if already_stored is not None:
+            return
         reading = SensorReading(
             station_id=row.id,
             recorded_at=recorded_at,
@@ -670,19 +694,7 @@ def session_create(token_hash: str, email: str, expires_at: datetime) -> None:
         session.add(AuthSession(token_hash=token_hash, email=email, expires_at=expires_at))
 
 
-def session_email(token_hash: str) -> str | None:
-    """The email behind a valid, unexpired session token hash, or None."""
-    now = datetime.now(timezone.utc)
-    with session_scope() as session:
-        return session.scalar(
-            select(AuthSession.email).where(
-                AuthSession.token_hash == token_hash,
-                AuthSession.expires_at > now,
-            )
-        )
-
-
-def session_user(token_hash: str) -> dict | None:
+def session_user(token_hash: str) -> UserAccount | None:
     """The user behind a valid, unexpired session token hash, or None.
 
     One joined query, used by the per-request auth dependencies instead of a
@@ -698,7 +710,7 @@ def session_user(token_hash: str) -> dict | None:
                 AuthSession.expires_at > now,
             )
         )
-        return _user_dict(row) if row is not None else None
+        return _user_projection(row) if row is not None else None
 
 
 def session_delete(token_hash: str) -> None:
@@ -714,14 +726,14 @@ def sessions_prune_expired() -> None:
 
 # ----- users -----------------------------------------------------------------
 
-def _user_dict(row: User) -> dict:
-    return {
-        "email": row.email,
-        "is_admin": row.is_platform_admin,
-        "plan": row.plan,
-        "created_at": iso_utc(row.created_at),
-        "owner_id": str(row.id),
-    }
+def _user_projection(row: User) -> UserAccount:
+    return UserAccount(
+        email=row.email,
+        is_admin=row.is_platform_admin,
+        created_at=iso_utc(row.created_at),
+        owner_id=str(row.id),
+        plan=row.plan,
+    )
 
 
 def user_has_any() -> bool:
@@ -729,13 +741,13 @@ def user_has_any() -> bool:
         return bool(session.scalar(select(func.count()).select_from(User)))
 
 
-def user_get(email: str) -> dict | None:
+def user_get(email: str) -> UserAccount | None:
     with session_scope() as session:
         row = session.scalar(select(User).where(User.email == email.strip().lower()))
-        return _user_dict(row) if row is not None else None
+        return _user_projection(row) if row is not None else None
 
 
-def user_authenticate(email: str, password: str) -> dict | None:
+def user_authenticate(email: str, password: str) -> UserAccount | None:
     from users import _DUMMY_PASSWORD_HASH  # lazy: reuse the shared timing dummy
 
     with session_scope() as session:
@@ -745,10 +757,10 @@ def user_authenticate(email: str, password: str) -> dict | None:
             return None
         if not verify_secret(password, row.password_hash):
             return None
-        return _user_dict(row)
+        return _user_projection(row)
 
 
-def user_create(email: str, password: str, *, is_admin: bool = False) -> dict:
+def user_create(email: str, password: str, *, is_admin: bool = False) -> UserAccount:
     email = email.strip().lower()
     if not email:
         raise ValueError("Email must not be empty.")
@@ -764,4 +776,4 @@ def user_create(email: str, password: str, *, is_admin: bool = False) -> dict:
         )
         session.add(user)
         session.flush()
-        return _user_dict(user)
+        return _user_projection(user)

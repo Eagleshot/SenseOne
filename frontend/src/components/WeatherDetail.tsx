@@ -35,7 +35,11 @@ export const WeatherDetail: React.FC = () => {
   // True only during the first fetch for a station; background refetches keep
   // showing the previous values instead of flashing the loading labels.
   const isLoading = weatherQuery.isLoading;
-  const isForecastLoading = isLoading;
+
+  // Three-state field: loading placeholder while the first fetch runs, then the
+  // formatted value, else the unavailable placeholder.
+  const label = (format: (w: NonNullable<typeof weather>) => string) =>
+    isLoading ? LOADING_LABEL : weather ? format(weather) : UNAVAILABLE_LABEL;
 
   const updatedLabel = useMemo(() => {
     if (isLoading) return LOADING_LABEL;
@@ -51,22 +55,10 @@ export const WeatherDetail: React.FC = () => {
 
   const descriptionLabel = isLoading ? LOADING_LABEL : weather?.description || UNAVAILABLE_LABEL;
   const mainLabel = isLoading ? LOADING_LABEL : weather?.main || UNAVAILABLE_LABEL;
-  const timeLabel =
-    isLoading || !weather
-      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : formatTimeLabel(weather.updatedAt, timezone);
-  const temperatureLabel =
-    isLoading || !weather
-      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : `${weather.temperature} \u00B0C`;
-  const feelsLikeLabel =
-    isLoading || !weather
-      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : `${weather.feelsLike} \u00B0C`;
-  const windLabel =
-    isLoading || !weather
-      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : `${weather.windSpeedKmh} km/h`;
+  const timeLabel = label((w) => formatTimeLabel(w.updatedAt, timezone));
+  const temperatureLabel = label((w) => `${w.temperature} \u00B0C`);
+  const feelsLikeLabel = label((w) => `${w.feelsLike} \u00B0C`);
+  const windLabel = label((w) => `${w.windSpeedKmh} km/h`);
   const windDirection = isLoading || !weather ? 0 : weather.windDirection;
   const windCardinal = useMemo(() => {
     if (isLoading) return LOADING_LABEL;
@@ -74,28 +66,13 @@ export const WeatherDetail: React.FC = () => {
     const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
     return dirs[Math.round(weather.windDirection / 45) % 8];
   }, [isLoading, weather]);
-  const humidityLabel =
-    isLoading || !weather
-      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : `${weather.humidity}%`;
-  const pressureLabel =
-    isLoading || !weather
-      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : `${weather.pressure} hPa`;
-  const visibilityLabel =
-    isLoading || !weather
-      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : weather.visibilityKm === undefined
-        ? UNAVAILABLE_LABEL
-        : `${weather.visibilityKm} km`;
-  const sunriseLabel =
-    isLoading || !weather
-      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : formatTimeLabel(weather.sunriseAt, timezone);
-  const sunsetLabel =
-    isLoading || !weather
-      ? isLoading ? LOADING_LABEL : UNAVAILABLE_LABEL
-      : formatTimeLabel(weather.sunsetAt, timezone);
+  const humidityLabel = label((w) => `${w.humidity}%`);
+  const pressureLabel = label((w) => `${w.pressure} hPa`);
+  const visibilityLabel = label((w) =>
+    w.visibilityKm === undefined ? UNAVAILABLE_LABEL : `${w.visibilityKm} km`,
+  );
+  const sunriseLabel = label((w) => formatTimeLabel(w.sunriseAt, timezone));
+  const sunsetLabel = label((w) => formatTimeLabel(w.sunsetAt, timezone));
   const showWeatherPlaceholder = !isLoading && !weather;
   const weatherTheme = useMemo(
     () => (weather ? resolveWeatherTheme(weather.main, isDarkMode || (weather.isNight ?? false)) : baseWeatherTheme),
@@ -210,7 +187,7 @@ export const WeatherDetail: React.FC = () => {
             </div>
 
             <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-3">
-              {isForecastLoading && forecast.length === 0 ? (
+              {isLoading && forecast.length === 0 ? (
                 <div className={cn("col-span-full text-center text-xs", weatherTheme.mutedText)}>Loading forecast...</div>
               ) : forecast.length === 0 ? (
                 <div className={cn("col-span-full text-center text-xs", weatherTheme.mutedText)}>No forecast available.</div>

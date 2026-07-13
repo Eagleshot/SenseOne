@@ -45,8 +45,6 @@ export type StationConfigResponse = {
   country: string;
   countryEmoji: string;
   isPublic: boolean;
-  lastOnline?: string | null;
-  nextOnline?: string | null;
 };
 
 export type StationCreatePayload = {

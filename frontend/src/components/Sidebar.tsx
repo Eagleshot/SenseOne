@@ -210,22 +210,18 @@ export const Sidebar: React.FC = () => {
                       <div className="flex items-center gap-2 pr-16">
                         <h3 className="truncate text-sm font-medium text-sidebar-foreground">{webcam.name}</h3>
                         {/* Private badge is pinned to the default (embernova) theme orange so it stays orange across theme switches. */}
-                        {webcam.canEdit && webcam.isPublic === false && (
+                        {webcam.canEdit && typeof webcam.isPublic === "boolean" && (
                           <span
-                            title="Private station"
-                            className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-[hsl(13_80%_61%_/_0.3)] bg-[hsl(13_80%_61%_/_0.1)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[hsl(13_80%_61%)]"
+                            title={webcam.isPublic ? "Public station" : "Private station"}
+                            className={cn(
+                              "absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                              webcam.isPublic
+                                ? "border-sky-400/30 bg-sky-400/15 text-sky-500"
+                                : "border-[hsl(13_80%_61%_/_0.3)] bg-[hsl(13_80%_61%_/_0.1)] text-[hsl(13_80%_61%)]"
+                            )}
                           >
-                            Private
-                            <Lock className="h-2.5 w-2.5" />
-                          </span>
-                        )}
-                        {webcam.canEdit && webcam.isPublic === true && (
-                          <span
-                            title="Public station"
-                            className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-500"
-                          >
-                            Public
-                            <Globe className="h-2.5 w-2.5" />
+                            {webcam.isPublic ? "Public" : "Private"}
+                            {webcam.isPublic ? <Globe className="h-2.5 w-2.5" /> : <Lock className="h-2.5 w-2.5" />}
                           </span>
                         )}
                       </div>

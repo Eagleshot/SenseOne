@@ -10,7 +10,7 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
-from routes.stations_images_weather import MAX_WEATHER_TILE_ZOOM, get_weather_map_tile
+from routes.weather import MAX_WEATHER_TILE_ZOOM, get_weather_map_tile
 
 
 @pytest.mark.parametrize(

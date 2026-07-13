@@ -6,25 +6,33 @@ env-var admin bootstrap. ``User.owner_id`` is the user's id that station access 
 """
 
 import logging
-from dataclasses import dataclass
+from functools import cache
 
-from auth import hash_secret
+from security import hash_secret
 from db import sqlite_repo
 from settings import get_settings
-
-# Precomputed hash with the same PBKDF2 cost as a real one. Used by
-# db.sqlite_repo.user_authenticate so the unknown-email path spends the same PBKDF2
-# time as a known-user failure, preventing timing-based account enumeration.
-_DUMMY_PASSWORD_HASH = hash_secret("eagleshot-dummy-password-for-timing")
+from user_db import User
 
 
-@dataclass(frozen=True)
-class User:
-    email: str
-    is_admin: bool
-    created_at: str
-    owner_id: str = ""  # this user's id; the owner of their stations
-    plan: str = "free"  # entitlement plan key (see entitlements.PLANS)
+@cache
+def _dummy_password_hash() -> str:
+    """A hash with the same PBKDF2 cost as a real one, so db.sqlite_repo's
+    unknown-email login path spends the same time as a known-user failure
+    (timing-based account-enumeration defense).
+
+    Computed on first use (and cached), not at import: importing this module —
+    which every route module does transitively — otherwise pays ~600k PBKDF2
+    iterations at boot even for processes that never hit the login path.
+    """
+    return hash_secret("eagleshot-dummy-password-for-timing")
+
+
+def __getattr__(name: str):
+    # Preserve the module-level ``_DUMMY_PASSWORD_HASH`` name (used by
+    # db.sqlite_repo and tests) while deferring its cost to first access.
+    if name == "_DUMMY_PASSWORD_HASH":
+        return _dummy_password_hash()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def init_users_db() -> None:
@@ -50,25 +58,22 @@ def bootstrap_admin_from_env() -> None:
 
 def create_user(email: str, password: str, *, is_admin: bool = False) -> User:
     """Insert a new user. Raises ValueError if the email already exists."""
-    return _user_from_dict(sqlite_repo.user_create(email, password, is_admin=is_admin))
+    return sqlite_repo.user_create(email, password, is_admin=is_admin)
 
 
 def authenticate_user(email: str, password: str) -> User | None:
     """Return the user record if credentials are valid, else None."""
-    result = sqlite_repo.user_authenticate(email, password)
-    return _user_from_dict(result) if result is not None else None
+    return sqlite_repo.user_authenticate(email, password)
 
 
 def get_user(email: str) -> User | None:
     """Look up a user by email."""
-    result = sqlite_repo.user_get(email)
-    return _user_from_dict(result) if result is not None else None
+    return sqlite_repo.user_get(email)
 
 
 def get_session_user(token_hash: str) -> User | None:
     """The user behind a valid, unexpired session token hash (one joined query)."""
-    result = sqlite_repo.session_user(token_hash)
-    return _user_from_dict(result) if result is not None else None
+    return sqlite_repo.session_user(token_hash)
 
 
 # Once a user exists, that fact never reverts (there is no user deletion), so
@@ -92,13 +97,3 @@ def _reset_user_cache() -> None:
     """Forget the cached 'users exist' fact (test harness only; the DB was wiped)."""
     global _known_to_have_users
     _known_to_have_users = False
-
-
-def _user_from_dict(data: dict) -> User:
-    return User(
-        email=data["email"],
-        is_admin=bool(data["is_admin"]),
-        created_at=data["created_at"],
-        owner_id=data["owner_id"],
-        plan=data.get("plan", "free"),
-    )

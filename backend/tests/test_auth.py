@@ -5,53 +5,63 @@ from datetime import datetime, timedelta, timezone
 from auth import (
     AUTH_TOKEN_TTL_SECONDS,
     _hash_session_token,
-    _validate_session_token,
+    _user_for_token,
     create_session,
     prune_expired_sessions,
     remove_session,
 )
+from tests import _db
 
 
 class TestSessionManagement:
-    """Sessions are stored (hashed) in the control DB, so these need the db fixture."""
+    """Sessions are stored (hashed) in the control DB, so these need the db fixture.
+
+    The per-request lookup (session_user) joins the session to its user row, so
+    each test that expects a resolved session first creates that user.
+    """
 
     def test_create_session_roundtrip(self, db):
+        _db.create_owner("testuser@example.com")
         token, ttl = create_session("testuser@example.com")
 
         assert isinstance(token, str)
         assert len(token) > 20  # Should be reasonably long
         assert ttl == AUTH_TOKEN_TTL_SECONDS
-        assert _validate_session_token(token) == "testuser@example.com"
+        assert _user_for_token(token).email == "testuser@example.com"
 
     def test_token_is_stored_hashed_not_plaintext(self, db):
         from db import sqlite_repo
 
+        _db.create_owner("testuser@example.com")
         token, _ = create_session("testuser@example.com")
         # The raw token is not a valid key; only its hash is.
-        assert sqlite_repo.session_email(token) is None
-        assert sqlite_repo.session_email(_hash_session_token(token)) == "testuser@example.com"
+        assert sqlite_repo.session_user(token) is None
+        assert sqlite_repo.session_user(_hash_session_token(token)).email == "testuser@example.com"
 
     def test_remove_session_invalidates_token(self, db):
+        _db.create_owner("testuser@example.com")
         token, _ = create_session("testuser@example.com")
         remove_session(token)
-        assert _validate_session_token(token) is None
+        assert _user_for_token(token) is None
 
     def test_expired_session_is_invalid_and_pruned(self, db):
         from db import sqlite_repo
 
+        _db.create_owner("testuser@example.com")
         sqlite_repo.session_create(
             _hash_session_token("expired_token"),
             "testuser@example.com",
             datetime.now(timezone.utc) - timedelta(seconds=1),
         )
-        assert _validate_session_token("expired_token") is None
+        assert _user_for_token("expired_token") is None
         prune_expired_sessions()
-        assert sqlite_repo.session_email(_hash_session_token("expired_token")) is None
+        assert sqlite_repo.session_user(_hash_session_token("expired_token")) is None
 
     def test_prune_keeps_valid_sessions(self, db):
+        _db.create_owner("testuser@example.com")
         token, _ = create_session("testuser@example.com")
         prune_expired_sessions()
-        assert _validate_session_token(token) == "testuser@example.com"
+        assert _user_for_token(token).email == "testuser@example.com"
 
 
 class TestCredentialVerification:
@@ -59,7 +69,7 @@ class TestCredentialVerification:
 
     def test_hash_secret_roundtrip(self):
         """A hashed secret should verify against its plaintext."""
-        from auth import hash_secret, verify_secret
+        from security import hash_secret, verify_secret
 
         stored = hash_secret("correct-horse-battery-staple")
         assert verify_secret("correct-horse-battery-staple", stored)
@@ -69,7 +79,7 @@ class TestCredentialVerification:
     def test_secret_verification_is_timing_safe(self):
         """verify_secret must use hmac.compare_digest under the hood."""
         import inspect
-        from auth import verify_secret
+        from security import verify_secret
 
         source = inspect.getsource(verify_secret)
         assert "compare_digest" in source
@@ -96,7 +106,7 @@ class TestUserEnumerationTiming:
         assert captured["stored"] == users._DUMMY_PASSWORD_HASH
 
     def test_dummy_hash_is_a_real_pbkdf2_hash(self):
-        from auth import verify_secret
+        from security import verify_secret
         from users import _DUMMY_PASSWORD_HASH
 
         # A valid stored hash that no real password should match by accident.

@@ -186,7 +186,10 @@ def test_station_without_secret_is_rejected(setup_station_dir, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(verify_station_signature(station_id, request))
     assert exc.value.status_code == 401
-    assert "provisioned" in exc.value.detail.lower()
+    # The detail must NOT reveal that the station simply has no secret provisioned:
+    # it is the same generic message a provisioned station gives for a bad
+    # signature, so callers can't probe which ids exist/are provisioned.
+    assert exc.value.detail == "Signature verification failed."
 
 
 def test_station_id_mismatch_is_rejected(provisioned_station):

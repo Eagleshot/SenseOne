@@ -103,6 +103,15 @@ export const CheckInStatusChart: React.FC<CheckInStatusChartProps> = ({ data }) 
     return Array.from({ length: X_TICK_COUNT }, (_, i) => min + ((max - min) * i) / (X_TICK_COUNT - 1));
   }, [points]);
 
+  // Whether the visible range spans more than one calendar day — computed once
+  // here instead of on every axis-tick callback.
+  const includeDate = useMemo(
+    () =>
+      points.length > 0 &&
+      spansMultipleDays(new Date(points[0].t), new Date(points[points.length - 1].t), timezone),
+    [points, timezone],
+  );
+
   return (
     <div className="widget-shell-stroke rounded-2xl border border-border bg-card/70 p-4">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -152,13 +161,7 @@ export const CheckInStatusChart: React.FC<CheckInStatusChartProps> = ({ data }) 
                 tickMargin={10}
                 minTickGap={48}
                 tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                tickFormatter={(value: number) =>
-                  formatChartTickLabel(
-                    new Date(value),
-                    timezone,
-                    spansMultipleDays(new Date(points[0].t), new Date(points[points.length - 1].t), timezone)
-                  )
-                }
+                tickFormatter={(value: number) => formatChartTickLabel(new Date(value), timezone, includeDate)}
               />
               <YAxis
                 domain={[0, 1]}

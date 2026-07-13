@@ -1,18 +1,19 @@
-"""Weather and image serving routes."""
+"""OpenWeather proxy routes: per-station weather data, reverse geocoding, and
+map overlay tiles. Everything that talks to OpenWeather lives here so the API
+key stays server-side."""
 
 import base64
+import logging
 import time
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 
 from auth import get_current_user, get_optional_current_user
 from db import sqlite_repo
-from image_store import get_image_store
 from settings import get_settings
 from station_access import require_station_view
-from utils import media_type_from_path, sanitize_filename
 from routes import ValidStationId
 
 
@@ -37,13 +38,13 @@ MAX_WEATHER_TILE_ZOOM = 12
 # A map view fires off dozens of tile requests at once, and the data endpoints
 # hit the same upstream. Reuse one pooled client with HTTP keep-alive so we
 # don't pay a fresh TLS handshake to OpenWeather per request (the main source
-# of overlay slowness).
+# of overlay slowness). Created lazily and kept for the process lifetime.
 _openweather_client: "httpx.AsyncClient | None" = None
 
 
 def _get_openweather_client() -> httpx.AsyncClient:
     global _openweather_client
-    if _openweather_client is None or _openweather_client.is_closed:
+    if _openweather_client is None:
         _openweather_client = httpx.AsyncClient(
             timeout=15,
             limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
@@ -103,43 +104,21 @@ _TRANSPARENT_TILE = base64.b64decode(
 _weather_data_cache = TTLCache(max_entries=500)
 
 
-@router.get(
-    "/stations/{station_id}/images/{filename}",
-    summary="Get station image",
-    description=(
-        "Serve a single image file from the station's image directory. "
-        "`filename` must be the value returned by an image-captures listing — "
-        "anything outside the station directory or with path-traversal characters "
-        "is rejected with 400."
-    ),
-)
-def get_station_image(
-    station_id: ValidStationId,
-    filename: str,
-    user=Depends(get_optional_current_user),
-) -> FileResponse:
-    if filename != sanitize_filename(filename):
-        raise HTTPException(status_code=400, detail="Invalid filename.")
+async def _openweather_get(url: str, params: dict, *, error_detail: str) -> httpx.Response:
+    """GET from OpenWeather with the API key applied, mapping transport failures
+    to 502. Returns the raw response so each caller handles upstream status and
+    parsing itself (the tile route treats a 404 as "no data", the data routes
+    treat any >=400 as 502).
+    """
+    api_key = get_settings().openweather_api_key
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Missing OPENWEATHER_API_KEY.")
 
-    require_station_view(station_id, user)
-    # The DB row's storage_key is the source of truth: a blob is only served if
-    # its metadata row exists, and the stored key decides where the blob lives.
-    storage_key = sqlite_repo.image_storage_key(station_id, filename)
-    if storage_key is None:
-        raise HTTPException(status_code=404, detail="Image not found.")
-    image_path = get_image_store().path(storage_key)
-    if not image_path.is_file():
-        raise HTTPException(status_code=404, detail="Image not found.")
-    return FileResponse(
-        image_path,
-        media_type=media_type_from_path(image_path),
-        # Captures are immutable in practice (a new capture gets a new
-        # filename; only a same-minute re-upload replaces in place), so let
-        # browsers reuse them for a day instead of revalidating every scrub
-        # step. `private`: stations can be non-public, shared caches must not
-        # keep these.
-        headers={"Cache-Control": "private, max-age=86400"},
-    )
+    try:
+        return await _get_openweather_client().get(url, params={**params, "appid": api_key})
+    except httpx.RequestError as exc:
+        logging.warning("OpenWeather request error for %s: %s", url, exc)
+        raise HTTPException(status_code=502, detail=error_detail) from exc
 
 
 async def fetch_openweather(
@@ -152,25 +131,15 @@ async def fetch_openweather(
     surfaced as 502 (bad gateway) so the client cannot mistake them for problems
     with this service. The underlying status is logged for diagnostics.
     """
-    import logging
-
     cache_key = (endpoint, round(lat, 3), round(lon, 3), units)
     cached = _weather_data_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    api_key = get_settings().openweather_api_key
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Missing OPENWEATHER_API_KEY.")
-
     url = f"https://api.openweathermap.org/data/2.5/{endpoint}"
-    params = {"lat": lat, "lon": lon, "units": units, "appid": api_key}
-
-    try:
-        response = await _get_openweather_client().get(url, params=params)
-    except httpx.RequestError as exc:
-        logging.warning("OpenWeather request error: %s", exc)
-        raise HTTPException(status_code=502, detail="OpenWeather request failed.") from exc
+    response = await _openweather_get(
+        url, {"lat": lat, "lon": lon, "units": units}, error_detail="OpenWeather request failed."
+    )
 
     if response.status_code >= 400:
         logging.warning(
@@ -252,26 +221,16 @@ async def reverse_geocode(
     lon: float = Query(..., ge=-180, le=180, description="Longitude in decimal degrees."),
     user=Depends(get_current_user),
 ) -> dict:
-    import logging
-
     # Geocoding results are static; cache by ~110 m grid so map nudges hit cache.
     cache_key = ("geo", round(lat, 3), round(lon, 3))
     cached = _weather_data_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    api_key = get_settings().openweather_api_key
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Missing OPENWEATHER_API_KEY.")
-
     url = "https://api.openweathermap.org/geo/1.0/reverse"
-    try:
-        response = await _get_openweather_client().get(
-            url, params={"lat": lat, "lon": lon, "limit": 1, "appid": api_key}
-        )
-    except httpx.RequestError as exc:
-        logging.warning("OpenWeather reverse-geocode request error: %s", exc)
-        raise HTTPException(status_code=502, detail="Reverse geocoding failed.") from exc
+    response = await _openweather_get(
+        url, {"lat": lat, "lon": lon, "limit": 1}, error_detail="Reverse geocoding failed."
+    )
     if response.status_code >= 400:
         logging.warning("OpenWeather reverse-geocode upstream returned %s", response.status_code)
         raise HTTPException(status_code=502, detail="Reverse geocoding failed.")
@@ -299,8 +258,6 @@ async def reverse_geocode(
     ),
 )
 async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
-    import logging
-
     if layer not in WEATHER_TILE_LAYERS:
         raise HTTPException(status_code=404, detail="Unknown weather layer.")
     # Bound the tile keyspace: z capped, x/y must be valid tile indices for z.
@@ -315,16 +272,8 @@ async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
         content, media_type = cached
         return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=900"})
 
-    api_key = get_settings().openweather_api_key
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Missing OPENWEATHER_API_KEY.")
-
     url = f"https://tile.openweathermap.org/map/{layer}/{z}/{x}/{y}.png"
-    try:
-        response = await _get_openweather_client().get(url, params={"appid": api_key})
-    except httpx.RequestError as exc:
-        logging.warning("OpenWeather tile request error: %s", exc)
-        raise HTTPException(status_code=502, detail="OpenWeather tile request failed.") from exc
+    response = await _openweather_get(url, {}, error_detail="OpenWeather tile request failed.")
 
     # OpenWeather returns 404 for tiles it has no data for in this layer (e.g.
     # empty ocean/land areas). That's expected, not a failure: serve a transparent

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import secrets
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,12 +26,13 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from auth import hash_secret  # noqa: E402
+from security import hash_secret  # noqa: E402
 from db.migrate import run_migrations  # noqa: E402
 from db.models import Datastream, Observation, SensorReading, Station, StationImage, User  # noqa: E402
-from db.sqlite_repo import resolve_datastream  # noqa: E402
+from db.sqlite_repo import new_public_id, resolve_datastream  # noqa: E402
 from db.session import get_engine  # noqa: E402
 from metrics_registry import DEFAULT_CHANNEL  # noqa: E402
+from settings import get_data_dir  # noqa: E402
 from utils import parse_iso_timestamp, sanitize_station_id, station_name_token  # noqa: E402
 
 try:
@@ -56,7 +56,6 @@ except ImportError:  # run as a script rather than a package module
         generate_historical_data,
     )
 
-DEFAULT_DATA_DIR = BACKEND_DIR / "data"
 DEMO_OWNER_EMAIL = "demo@example.com"  # owns any station without an explicit owner
 
 # Demo camera streams: timeline captures alternate between these so seeded stations
@@ -79,13 +78,6 @@ def _ensure_owner(session: Session, owner_email: str, password: str) -> User:
     return user
 
 
-def _seed_public_id(session: Session) -> str:
-    while True:
-        candidate = secrets.token_hex(6)
-        if session.scalar(select(Station.id).where(Station.public_id == candidate)) is None:
-            return candidate
-
-
 def _upsert_station(session: Session, seed: dict, owner: User, overwrite: bool) -> Station:
     url_slug = _slug(str(seed["id"]))
     coords = seed.get("coordinates") or {}
@@ -103,7 +95,7 @@ def _upsert_station(session: Session, seed: dict, owner: User, overwrite: bool) 
     )
     station = session.scalar(select(Station).where(Station.url_slug == url_slug))
     if station is None:
-        station = Station(public_id=_seed_public_id(session), url_slug=url_slug, **fields)
+        station = Station(public_id=new_public_id(session), url_slug=url_slug, **fields)
         session.add(station)
         session.flush()
     elif overwrite:
@@ -222,7 +214,12 @@ def _seed_images(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seed demo data into the SQLite control plane.")
     parser.add_argument("--database-url", help="Override DATABASE_URL for this run.")
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Where image blobs are written.")
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Where image blobs are written (default: the app's APP_DATA_DIR).",
+    )
     parser.add_argument("--count", type=int, default=16, help="Timeline images per station (default: 16).")
     parser.add_argument("--overwrite", action="store_true", help="Clear and regenerate readings + images.")
     parser.add_argument("--station-id", action="append", default=[], help="Seed only these station ids (repeatable).")
@@ -236,9 +233,12 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    data_dir = args.data_dir.resolve()
     if args.database_url:
         os.environ["DATABASE_URL"] = args.database_url
+    # Default the blob dir to the app's data dir so seeded image rows resolve to
+    # blobs the app actually serves (both follow APP_DATA_DIR). Resolved after the
+    # DATABASE_URL override so settings are read once, consistently.
+    data_dir = (args.data_dir or get_data_dir()).resolve()
     run_migrations()  # build/upgrade the schema to head, stamped like the app
     engine = get_engine()
 

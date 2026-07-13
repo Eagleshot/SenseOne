@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 import httpx
 
-from routes import stations_images_weather as weather_routes
+from routes import weather as weather_routes
 
 
 class _StubResponse:
