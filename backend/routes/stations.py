@@ -3,13 +3,17 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 
+from api_docs import IMAGE_RESPONSE_CONTENT, error_response
 from constants import NEXT_ONLINE_STATUS_BUFFER_MINUTES
-from db import sqlite_repo
+from db import station_repo
 from image_store import get_image_store
 from models import (
     AppConfig,
+    AppConfigUpdate,
     SensorReadingEnvelope,
     SensorSeries,
     StationCoordinates,
@@ -92,7 +96,7 @@ def station_detail_response(
 def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummaryResponse]:
     return [
         StationSummaryResponse(**_station_base_fields(public_id, url_slug, config, status, can_edit))
-        for public_id, url_slug, config, status, can_edit in sqlite_repo.list_station_views(user)
+        for public_id, url_slug, config, status, can_edit in station_repo.list_station_views(user)
     ]
 
 
@@ -105,13 +109,17 @@ def list_stations(user=Depends(get_optional_current_user)) -> list[StationSummar
         "Create a new station owned by the authenticated user. The station id "
         "is derived from the title and made unique automatically."
     ),
+    responses={
+        401: error_response("A valid session is required."),
+        503: error_response("Authentication is unavailable."),
+    },
 )
 def create_station(
     payload: StationCreateRequest,
     user=Depends(get_current_user),
 ) -> StationDetailResponse:
-    public_id = sqlite_repo.create_station(payload, user.owner_id)
-    view = sqlite_repo.station_view(public_id)
+    public_id = station_repo.create_station(payload, user.owner_id)
+    view = station_repo.station_view(public_id)
     assert view is not None  # just created
     url_slug, config, status = view
     # The creator owns the station, so they can always edit it.
@@ -123,12 +131,15 @@ def create_station(
     response_model=StationDeviceSecretResponse,
     summary="Rotate station device HMAC secret",
     description=(
-        "Mint a fresh 256-bit HMAC secret for the device(s) of this station and "
-        "invalidate any previous one. Owner only.\n\n"
-        "The returned `deviceHmacSecret` is shown **exactly once** — flash it to "
-        "the device and discard the response. Subsequent device requests must "
-        "sign each call with this secret (see the `hmacSignature` auth scheme)."
+        "Create a new device HMAC secret and invalidate the previous one. The "
+        "returned secret is shown once and must be provisioned on the device."
     ),
+    responses={
+        401: error_response("A valid session is required."),
+        403: error_response("Station edit access is required."),
+        404: error_response("The station was not found."),
+        503: error_response("Authentication is unavailable."),
+    },
 )
 def rotate_station_device_secret(
     station_id: ValidStationId,
@@ -143,12 +154,13 @@ def rotate_station_device_secret(
     "/{station_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete station",
-    description=(
-        "Permanently delete a station: its metadata, sensor history, image "
-        "timeline, device secrets, and stored image files. Owner or admin only. "
-        "Irreversible — a device still flashed with this station's secret will "
-        "get 401s afterwards."
-    ),
+    description="Permanently delete a station and its associated data.",
+    responses={
+        401: error_response("A valid session is required."),
+        403: error_response("Station edit access is required."),
+        404: error_response("The station was not found."),
+        503: error_response("Authentication is unavailable."),
+    },
 )
 def delete_station(
     station_id: ValidStationId,
@@ -158,7 +170,7 @@ def delete_station(
     # DB row first (cascades take the child rows), then the blobs. If blob
     # cleanup dies halfway the worst case is orphan files, which a future
     # retention sweep can reap — never a DB row pointing at deleted blobs.
-    sqlite_repo.delete_station(station_id)
+    station_repo.delete_station(station_id)
     get_image_store().delete_prefix(station_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -167,17 +179,15 @@ def delete_station(
     "/{station_id}",
     response_model=StationDetailResponse,
     summary="Get station detail",
-    description=(
-        "Detailed metadata and current status for one station. Returns 404 to "
-        "anonymous callers if the station is private."
-    ),
+    description="Return metadata and current status for an accessible station.",
+    responses={404: error_response("The station was not found.")},
 )
 def get_station(
     station_id: ValidStationId,
     user=Depends(get_optional_current_user),
 ) -> StationDetailResponse:
     require_station_view(station_id, user)
-    view = sqlite_repo.station_view(station_id)
+    view = station_repo.station_view(station_id)
     assert view is not None  # require_station_view already confirmed it exists
     url_slug, config, status = view
     return station_detail_response(
@@ -193,6 +203,7 @@ def get_station(
         "Most-recent image captures for this station, oldest-to-newest. The `count` "
         "query parameter caps the page size (default 48, max 240)."
     ),
+    responses={404: error_response("The station was not found.")},
 )
 def get_station_image_captures(
     station_id: ValidStationId,
@@ -200,19 +211,20 @@ def get_station_image_captures(
     user=Depends(get_optional_current_user),
 ) -> list[TimelineItemResponse]:
     require_station_view(station_id, user)
-    rows = sqlite_repo.image_captures(station_id, count)
+    rows = station_repo.image_captures(station_id, count)
     return [TimelineItemResponse(**row) for row in rows]
 
 
 @router.get(
     "/{station_id}/images/{filename}",
+    response_class=FileResponse,
     summary="Get station image",
-    description=(
-        "Serve a single image file from the station's image directory. "
-        "`filename` must be the value returned by an image-captures listing — "
-        "anything outside the station directory or with path-traversal characters "
-        "is rejected with 400."
-    ),
+    description="Return an image named by the station's image-captures response.",
+    responses={
+        200: {"description": "JPEG, PNG, or WebP image.", "content": IMAGE_RESPONSE_CONTENT},
+        400: error_response("The filename is invalid."),
+        404: error_response("The station or image was not found."),
+    },
 )
 def get_station_image(
     station_id: ValidStationId,
@@ -225,7 +237,7 @@ def get_station_image(
     require_station_view(station_id, user)
     # The DB row's storage_key is the source of truth: a blob is only served if
     # its metadata row exists, and the stored key decides where the blob lives.
-    storage_key = sqlite_repo.image_storage_key(station_id, filename)
+    storage_key = station_repo.image_storage_key(station_id, filename)
     if storage_key is None:
         raise HTTPException(status_code=404, detail="Image not found.")
     image_path = get_image_store().path(storage_key)
@@ -238,7 +250,7 @@ def get_station_image(
     # can't be replayed after the user logs out or switches accounts.
     # An anonymous caller only gets past require_station_view for a public station,
     # so the extra visibility query is paid only for authenticated callers.
-    is_public = user is None or sqlite_repo.can_view(station_id, None)
+    is_public = user is None or station_repo.can_view(station_id, None)
     if is_public:
         cache_control = "private, max-age=86400"
     else:
@@ -257,17 +269,17 @@ def get_station_image(
     description=(
         "Sensor history for this station from the configured lookback window, as "
         "one point series per (metric, channel). `hours` controls the window "
-        "(default 24, max 168 = 7 days). Returns an empty list if the station has "
-        "no readings yet."
+        "(default 24). Returns an empty list if the station has no readings yet."
     ),
+    responses={404: error_response("The station was not found.")},
 )
 def get_station_sensor_readings(
     station_id: ValidStationId,
-    hours: int = Query(24, ge=1, le=168, description="Lookback window in hours."),
+    hours: int = Query(24, ge=1, description="Lookback window in hours."),
     user=Depends(get_optional_current_user),
 ) -> list[SensorSeries]:
     require_station_view(station_id, user)
-    series = sqlite_repo.sensor_readings(station_id, hours)
+    series = station_repo.sensor_readings(station_id, hours)
     return [SensorSeries(**item) for item in series]
 
 
@@ -280,16 +292,17 @@ def get_station_sensor_readings(
         "per device check-in with its timestamp, next-online hint, firmware version, "
         "and wake reason. Unlike `/data` (which is keyed off measurements), this "
         "includes check-ins that reported no metrics. `hours` controls the window "
-        "(default 24, max 168 = 7 days). Empty list if the station has no readings yet."
+        "(default 24). Empty list if the station has no readings yet."
     ),
+    responses={404: error_response("The station was not found.")},
 )
 def get_station_reading_envelopes(
     station_id: ValidStationId,
-    hours: int = Query(24, ge=1, le=168, description="Lookback window in hours."),
+    hours: int = Query(24, ge=1, description="Lookback window in hours."),
     user=Depends(get_optional_current_user),
 ) -> list[SensorReadingEnvelope]:
     require_station_view(station_id, user)
-    envelopes = sqlite_repo.sensor_reading_envelopes(station_id, hours)
+    envelopes = station_repo.sensor_reading_envelopes(station_id, hours)
     return [SensorReadingEnvelope(**item) for item in envelopes]
 
 
@@ -297,17 +310,20 @@ def get_station_reading_envelopes(
     "/{station_id}/config",
     response_model=AppConfig,
     summary="Get station config",
-    description=(
-        "Return the persisted configuration document for one station. "
-        "Owner or admin only."
-    ),
+    description="Return the editable configuration for a station.",
+    responses={
+        401: error_response("A valid session is required."),
+        403: error_response("Station edit access is required."),
+        404: error_response("The station was not found."),
+        503: error_response("Authentication is unavailable."),
+    },
 )
 def get_station_config(
     station_id: ValidStationId,
     user=Depends(get_current_user),
 ) -> AppConfig:
     require_station_edit(station_id, user)
-    return sqlite_repo.station_config(station_id) or AppConfig()
+    return station_repo.station_config(station_id) or AppConfig()
 
 
 @router.put(
@@ -315,18 +331,31 @@ def get_station_config(
     response_model=AppConfig,
     summary="Update station config",
     description=(
-        "Replace the persisted configuration document for one station. "
-        "Owner or admin only. Returns 422 if validation fails (e.g. "
-        "`stationStartTime` not earlier than `stationStopTime`)."
+        "Update a station configuration. Omitted fields keep their current values; "
+        "`alt` may be null to represent an unknown altitude."
     ),
+    responses={
+        401: error_response("A valid session is required."),
+        403: error_response("Station edit access is required."),
+        404: error_response("The station was not found."),
+        503: error_response("Authentication is unavailable."),
+    },
 )
 def update_station_config(
     station_id: ValidStationId,
-    payload: AppConfig,
+    payload: AppConfigUpdate,
     user=Depends(get_current_user),
 ) -> AppConfig:
     require_station_edit(station_id, user)
-    sqlite_repo.save_station_config(station_id, payload)
+    try:
+        station_repo.save_station_config(station_id, payload)
+    except ValidationError as exc:
+        # Per-field validation passed, but merging into the stored document
+        # broke a cross-field rule (checked only on the merged result).
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=jsonable_encoder(exc.errors()),
+        ) from exc
     # Re-read so the response reflects the persisted, normalized config (e.g. a
     # title-driven slug change) rather than echoing the request body.
-    return sqlite_repo.station_config(station_id) or AppConfig()
+    return station_repo.station_config(station_id) or AppConfig()

@@ -1,14 +1,12 @@
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 
 import { Area, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Download, Wifi } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
+import { Wifi } from "lucide-react";
 
 import { formatChartTickLabel, formatDateTimeLabel, spansMultipleDays } from "@/lib/datetime";
 import { usePreferences } from "@/contexts/AppContext";
 import type { SensorData } from "@/data/types";
-import { exportChartAsImage } from "./historicalChartExport";
+import type { HistoryTimeRange } from "@/lib/historyFilters";
 
 // Matches the backend's NEXT_ONLINE_STATUS_BUFFER_MINUTES grace (constants.py),
 // so this chart agrees with the station's online badge.
@@ -22,7 +20,7 @@ type StatusPoint = { t: number; status: 0 | 1 };
 // those windows, then flatten to step points: a stepAfter line holds each point's
 // value until the next point, so {start,1}{end,0} draws online over [start,end]
 // and offline over the gap until the next window.
-const buildStatusPoints = (data: SensorData[]): StatusPoint[] => {
+const buildStatusPoints = (data: SensorData[], [rangeStart, rangeEnd]: HistoryTimeRange): StatusPoint[] => {
   const windows: Array<[number, number]> = [];
   for (const row of data) {
     const start = row.timestamp.getTime();
@@ -43,11 +41,15 @@ const buildStatusPoints = (data: SensorData[]): StatusPoint[] => {
     }
   }
 
-  const points: StatusPoint[] = [];
+  const statusAtStart: 0 | 1 = merged.some(([start, end]) => start <= rangeStart && end >= rangeStart) ? 1 : 0;
+  const points: StatusPoint[] = [{ t: rangeStart, status: statusAtStart }];
   for (const [start, end] of merged) {
-    points.push({ t: start, status: 1 });
-    points.push({ t: end, status: 0 });
+    if (end < rangeStart || start > rangeEnd) continue;
+    if (start > rangeStart) points.push({ t: start, status: 1 });
+    if (end >= rangeStart && end < rangeEnd) points.push({ t: end, status: 0 });
   }
+  const statusAtEnd: 0 | 1 = merged.some(([start, end]) => start <= rangeEnd && end >= rangeEnd) ? 1 : 0;
+  points.push({ t: rangeEnd, status: statusAtEnd });
   return points;
 };
 
@@ -75,67 +77,47 @@ const StatusTooltip = ({
 
 interface CheckInStatusChartProps {
   data: SensorData[];
+  timeRange: HistoryTimeRange;
 }
 
 // Online/offline status over real time, derived from each check-in's next-online
 // hint. Filled/green = online, baseline = offline.
-export const CheckInStatusChart: React.FC<CheckInStatusChartProps> = ({ data }) => {
+export const CheckInStatusChart: React.FC<CheckInStatusChartProps> = ({ data, timeRange }) => {
   const { timezone, isDarkMode } = usePreferences();
-  const chartRef = useRef<HTMLDivElement | null>(null);
-  const iconRef = useRef<SVGSVGElement>(null);
 
   const points = useMemo(
     () =>
-      buildStatusPoints(data).map((point) => ({
+      buildStatusPoints(data, timeRange).map((point) => ({
         ...point,
         fullTime: formatDateTimeLabel(new Date(point.t), timezone),
       })),
-    [data, timezone]
+    [data, timeRange, timezone]
   );
 
   // recharts treats a scale="time" x-axis as categorical and renders a tick at
   // every data point, so provide evenly spaced ticks across the domain instead.
   const xTicks = useMemo(() => {
-    if (points.length === 0) return [];
-    const min = points[0].t;
-    const max = points[points.length - 1].t;
+    const [min, max] = timeRange;
     if (min === max) return [min];
     return Array.from({ length: X_TICK_COUNT }, (_, i) => min + ((max - min) * i) / (X_TICK_COUNT - 1));
-  }, [points]);
+  }, [timeRange]);
 
   // Whether the visible range spans more than one calendar day — computed once
   // here instead of on every axis-tick callback.
   const includeDate = useMemo(
     () =>
-      points.length > 0 &&
-      spansMultipleDays(new Date(points[0].t), new Date(points[points.length - 1].t), timezone),
-    [points, timezone],
+      spansMultipleDays(new Date(timeRange[0]), new Date(timeRange[1]), timezone),
+    [timeRange, timezone],
   );
 
   return (
     <div className="widget-shell-stroke rounded-2xl border border-border bg-card/70 p-4">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Wifi ref={iconRef} className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-2xl font-bold text-foreground">Check-in status</h2>
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Export chart image"
-          onClick={() => {
-            if (chartRef.current) {
-              void exportChartAsImage(chartRef.current, { title: "Check-in status", icon: iconRef.current });
-            }
-          }}
-          className="btn-icon-panel h-8 w-8"
-        >
-          <Download className="h-4 w-4" />
-        </Button>
+      <div className="mb-4 flex items-center gap-2">
+        <Wifi className="h-5 w-5 text-muted-foreground" />
+        <h3 className="text-lg font-semibold text-foreground">Status</h3>
       </div>
 
-      <div ref={chartRef} className="h-[160px] w-full rounded-lg bg-background p-2">
+      <div className="h-[160px] w-full rounded-lg bg-background p-2">
         {points.length === 0 ? (
           <div className="flex h-full items-center justify-center rounded-lg text-sm text-muted-foreground">
             No check-in data for the selected date range.
@@ -154,7 +136,7 @@ export const CheckInStatusChart: React.FC<CheckInStatusChartProps> = ({ data }) 
                 dataKey="t"
                 type="number"
                 scale="time"
-                domain={["dataMin", "dataMax"]}
+                domain={[timeRange[0], timeRange[1]]}
                 ticks={xTicks}
                 axisLine={false}
                 tickLine={false}

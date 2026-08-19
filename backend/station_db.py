@@ -2,7 +2,7 @@
 
 ``StationStatus`` is the value object the API builds from a station's latest image
 and sensor reading; ``_coerce_battery`` normalizes the battery metric. Both are
-used by db.sqlite_repo and the route layer.
+used by db.station_repo and the route layer.
 """
 
 from dataclasses import dataclass

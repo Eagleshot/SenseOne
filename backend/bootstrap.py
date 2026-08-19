@@ -25,8 +25,7 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-import users  # noqa: E402
-from db import sqlite_repo  # noqa: E402
+from db import station_repo, user_repo  # noqa: E402
 from db.migrate import run_migrations  # noqa: E402
 from models import StationCreateRequest  # noqa: E402
 from settings import get_settings  # noqa: E402
@@ -48,7 +47,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--country", default="", help="Country name shown in the UI.")
     parser.add_argument("--lat", type=float, default=0.0, help="Latitude in decimal degrees.")
     parser.add_argument("--lon", type=float, default=0.0, help="Longitude in decimal degrees.")
-    parser.add_argument("--alt", type=float, default=0.0, help="Altitude in metres above sea level.")
+    parser.add_argument("--alt", type=float, default=None, help="Altitude in metres above sea level (omit when unknown).")
     parser.add_argument("--public", action="store_true", help="Make the station visible to anonymous visitors.")
     parser.add_argument("--database-url", help="Override DATABASE_URL for this run.")
     return parser.parse_args()
@@ -64,12 +63,12 @@ def main() -> None:
 
     run_migrations()  # build/upgrade the schema to head, stamped like the app
 
-    user = users.get_user(email)
+    user = user_repo.user_get(email)
     if user is None:
         if not args.password:
             raise SystemExit("No such user yet — pass --password (or set APP_AUTH_PASSWORD) to create the admin.")
         try:
-            user = users.create_user(email, args.password, is_admin=True)
+            user = user_repo.user_create(email, args.password, is_admin=True)
         except ValueError as exc:
             raise SystemExit(f"Could not create admin: {exc}")
         print(f"Created admin user {user.email!r}.")
@@ -85,8 +84,8 @@ def main() -> None:
         alt=args.alt,
         is_public=args.public,
     )
-    public_id = sqlite_repo.create_station(payload, user.owner_id)
-    view = sqlite_repo.station_view(public_id)
+    public_id = station_repo.create_station(payload, user.owner_id)
+    view = station_repo.station_view(public_id)
     url_slug = view[0] if view else public_id
 
     secret_b64 = provision_device_hmac_secret(public_id)

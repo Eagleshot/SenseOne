@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { formatChartTickLabel, formatCountdown, spansMultipleDays } from "@/lib/datetime";
+import {
+  formatChartTickLabel,
+  formatCountdown,
+  spansMultipleDays,
+  utcTimeOfDayToZoned,
+  zonedTimeOfDayToUtc,
+} from "@/lib/datetime";
 
 describe("spansMultipleDays", () => {
   it("is false within one calendar day of the zone", () => {
@@ -62,5 +68,40 @@ describe("formatCountdown", () => {
   it("shows hours and minutes past the hour", () => {
     expect(formatCountdown(inMinutes(65), now)).toBe("in 1 h 5 min.");
     expect(formatCountdown(inMinutes(150), now)).toBe("in 2 h 30 min.");
+  });
+});
+
+describe("schedule time-of-day conversion", () => {
+  const summer = new Date("2026-07-22T10:00:00Z"); // Zurich at UTC+2 (CEST)
+  const winter = new Date("2026-01-22T10:00:00Z"); // Zurich at UTC+1 (CET)
+
+  it("converts UTC to the zone's wall clock", () => {
+    expect(utcTimeOfDayToZoned("06:00", "Europe/Zurich", summer)).toBe("08:00");
+    expect(utcTimeOfDayToZoned("06:00", "Europe/Zurich", winter)).toBe("07:00");
+    expect(utcTimeOfDayToZoned("06:30", "UTC", summer)).toBe("06:30");
+  });
+
+  it("converts the zone's wall clock to UTC", () => {
+    expect(zonedTimeOfDayToUtc("08:00", "Europe/Zurich", summer)).toBe("06:00");
+    expect(zonedTimeOfDayToUtc("07:00", "Europe/Zurich", winter)).toBe("06:00");
+    expect(zonedTimeOfDayToUtc("06:30", "UTC", summer)).toBe("06:30");
+  });
+
+  it("round-trips through the zone", () => {
+    for (const time of ["00:00", "06:15", "13:37", "23:45"]) {
+      const zoned = utcTimeOfDayToZoned(time, "Europe/Zurich", summer);
+      expect(zonedTimeOfDayToUtc(zoned, "Europe/Zurich", summer)).toBe(time);
+    }
+  });
+
+  it("wraps across midnight UTC for early zone wall times", () => {
+    // 01:00 CEST is 23:00 UTC the previous day — the caller must detect the
+    // wrapped (start >= stop) window and reject it.
+    expect(zonedTimeOfDayToUtc("01:00", "Europe/Zurich", summer)).toBe("23:00");
+  });
+
+  it("handles zones east of UTC crossing the date line", () => {
+    expect(utcTimeOfDayToZoned("20:00", "Pacific/Auckland", winter)).toBe("09:00");
+    expect(zonedTimeOfDayToUtc("09:00", "Pacific/Auckland", winter)).toBe("20:00");
   });
 });

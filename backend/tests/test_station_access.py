@@ -6,9 +6,9 @@ from dataclasses import dataclass
 import pytest
 from fastapi import HTTPException
 
+from db.station_repo import can_view
 from station_access import (
     can_edit_station,
-    can_view_station,
     require_station_edit,
     require_station_view,
 )
@@ -23,7 +23,7 @@ class AccessUser:
 
 def test_public_station_is_visible_to_anonymous(db):
     _db.create_station_row("pub", is_public=True)
-    assert can_view_station("pub", None) is True
+    assert can_view("pub", None) is True
 
 
 def test_private_station_is_hidden_from_anonymous(db):

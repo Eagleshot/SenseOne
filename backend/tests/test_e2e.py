@@ -23,14 +23,13 @@ def seeded_client(db, tmp_data_dir, monkeypatch):
     monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_data_dir))
 
-    import users
-    from db import sqlite_repo
+    from db import station_repo, user_repo
     from main import create_app
     from models import StationCreateRequest
 
-    alice = users.create_user("alice@example.com", "devpassword123")
-    public_slug = sqlite_repo.create_station(StationCreateRequest(title="Public Cam", is_public=True), alice.owner_id)
-    private_slug = sqlite_repo.create_station(StationCreateRequest(title="Private Cam", is_public=False), alice.owner_id)
+    alice = user_repo.user_create("alice@example.com", "devpassword123")
+    public_slug = station_repo.create_station(StationCreateRequest(title="Public Cam", is_public=True), alice.owner_id)
+    private_slug = station_repo.create_station(StationCreateRequest(title="Private Cam", is_public=False), alice.owner_id)
 
     return TestClient(create_app()), public_slug, private_slug
 

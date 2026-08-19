@@ -26,7 +26,7 @@ import {
   UNAVAILABLE_WEBCAM,
   updateStationConfig,
 } from "@/api/stations";
-import { DEFAULT_HISTORY_HOURS, MAX_HISTORY_HOURS } from "@/lib/historyFilters";
+import { DEFAULT_HISTORY_HOURS } from "@/lib/historyFilters";
 import { LOADING_LABEL } from "@/lib/placeholders";
 import { getStationIdFromLocation, pushStationUrl } from "@/lib/stationLinks";
 
@@ -203,12 +203,11 @@ export const useWebcamData = (
   });
 
   // ---- Sensor history (separate query: its lookback window is user-driven) ----
-  // The Data panel's date picker widens the window up to the backend's 7-day
-  // cap; keying the query on the window refetches just the history, not the
-  // detail/timeline.
+  // The Data panel's absolute picker can widen this window to any past date;
+  // keying the query on it refetches just the history, not detail/timeline.
   const [historyWindowHours, setHistoryWindowHoursState] = useState(DEFAULT_HISTORY_HOURS);
   const setHistoryWindowHours = useCallback((hours: number) => {
-    setHistoryWindowHoursState(Math.min(MAX_HISTORY_HOURS, Math.max(1, Math.round(hours))));
+    setHistoryWindowHoursState(Math.max(1, Math.round(hours)));
   }, []);
   const historyQuery = useQuery<StationHistory>({
     queryKey: ["station-history", activeStationId, isAuthenticated, historyWindowHours] as const,

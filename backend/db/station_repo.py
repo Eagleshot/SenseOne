@@ -1,8 +1,8 @@
-"""SQLite implementation of the data/access/user operations.
+"""SQLite repository for the station domain: stations, images, readings, device secrets.
 
-The repository the routes and the `station_access.py` / `users.py` /
-`station_hmac.py` helpers call. Synchronous so it slots into the sync route
-handlers via FastAPI's threadpool.
+The repository the routes and the `station_access.py` / `station_hmac.py`
+helpers call (users and auth sessions live in db.user_repo). Synchronous so it
+slots into the sync route handlers via FastAPI's threadpool.
 
 Stations have two external handles (see db.models.Station):
 - ``public_id`` — opaque, stable: the canonical API id, device ``STATION_ID``
@@ -23,23 +23,20 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import aliased
 
-from security import hash_secret, verify_secret
+from security import generate_device_hmac_secret_b64
 from db.models import (
-    AuthSession,
     Datastream,
     Observation,
     SensorReading,
     Station,
     StationDeviceSecret,
     StationImage,
-    User,
 )
 from db.session import session_scope
 from image_store import station_image_key
 from metrics_registry import DEFAULT_CHANNEL, metric_unit
-from models import AppConfig
+from models import AppConfig, AppConfigUpdate
 from station_db import StationStatus, _coerce_battery
-from user_db import User as UserAccount
 from utils import (
     ascii_station_name,
     iso_utc,
@@ -252,6 +249,7 @@ def station_exists(public_id: str) -> bool:
 
 
 def can_view(public_id: str, user) -> bool:
+    """A caller may view a station if it is public, owned by them, or they are admin."""
     with session_scope() as session:
         row = _station(session, public_id)
         if row is None:
@@ -436,13 +434,22 @@ def image_captures(public_id: str, count: int) -> list[dict[str, str]]:
     ]
 
 
+def _history_cutoff(hours: int) -> datetime:
+    """Return a safe UTC cutoff even for an effectively all-time lookback."""
+    now = datetime.now(timezone.utc)
+    try:
+        return now - timedelta(hours=hours)
+    except OverflowError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
 def sensor_readings(public_id: str, hours: int) -> list[dict[str, object]]:
     """Per-(metric, channel) history series for a station within the lookback window.
 
     Returns one dict per datastream: ``{metric, channel, unit, points}`` where
     ``points`` is an oldest-to-newest list of ``{timestamp, value}``.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = _history_cutoff(hours)
     with session_scope() as session:
         row = _station(session, public_id)
         if row is None:
@@ -479,7 +486,7 @@ def sensor_reading_envelopes(public_id: str, hours: int) -> list[dict[str, objec
     appears: ``{timestamp, next_start, firmware_version, wake_reason}``,
     oldest-to-newest. ``next_start`` and the labels are None when not reported.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = _history_cutoff(hours)
     with session_scope() as session:
         row = _station(session, public_id)
         if row is None:
@@ -524,13 +531,19 @@ def create_station(payload, owner_id: str) -> str:
         return public_id
 
 
-def save_station_config(public_id: str, config: AppConfig) -> None:
+def save_station_config(public_id: str, config: AppConfigUpdate) -> None:
+    """Merge the sent config fields into the station row.
+
+    Raises pydantic.ValidationError (rolling back) when the MERGED document is
+    invalid, e.g. a partial update that leaves start >= stop with sunrise mode
+    off — each payload alone can be valid while the combination is not.
+    """
     with session_scope() as session:
         row = _station(session, public_id)
         if row is None:
             raise LookupError(f"Unknown station {public_id!r}")
-        # Only overwrite fields the client actually sent, so a partial update does
-        # not reset omitted fields to their AppConfig defaults (silent data loss).
+        # Only overwrite fields the client actually sent (AppConfigUpdate rejects
+        # explicit nulls except `alt`, where null means "altitude unknown").
         sent = config.model_fields_set
         title_changed = "title" in sent and config.title != row.title
         for column in _CONFIG_COLUMNS:
@@ -540,6 +553,11 @@ def save_station_config(public_id: str, config: AppConfig) -> None:
         # public_id is unchanged, so devices/links/files are unaffected.
         if title_changed:
             row.url_slug = _unique_url_slug(session, config.title, exclude_id=row.id)
+        # Cross-field rules (start < stop unless sunrise mode) are checked ONLY
+        # here, on the merged document (AppConfigUpdate has no cross-field
+        # validator). An invalid combination stored on the row would make every
+        # later read that rebuilds AppConfig from it fail — station list included.
+        _config_from_row(row)
 
 
 def delete_station(public_id: str) -> bool:
@@ -672,8 +690,6 @@ def read_device_secret_b64(public_id: str) -> str | None:
 
 
 def provision_device_secret(public_id: str) -> str:
-    from station_hmac import generate_device_hmac_secret_b64  # lazy: avoid import cycle
-
     secret_b64 = generate_device_hmac_secret_b64()
     with session_scope() as session:
         row = _station(session, public_id)
@@ -683,97 +699,3 @@ def provision_device_secret(public_id: str) -> str:
         session.execute(delete(StationDeviceSecret).where(StationDeviceSecret.station_id == row.id))
         session.add(StationDeviceSecret(station_id=row.id, secret_enc=secret_b64.encode("ascii")))
     return secret_b64
-
-
-# ----- auth sessions ---------------------------------------------------------
-# Sessions are stored by token *hash* (the caller hashes; see auth.py), so the
-# control DB never holds a live bearer token.
-
-def session_create(token_hash: str, email: str, expires_at: datetime) -> None:
-    with session_scope() as session:
-        session.add(AuthSession(token_hash=token_hash, email=email, expires_at=expires_at))
-
-
-def session_user(token_hash: str) -> UserAccount | None:
-    """The user behind a valid, unexpired session token hash, or None.
-
-    One joined query, used by the per-request auth dependencies instead of a
-    session lookup followed by a separate user lookup.
-    """
-    now = datetime.now(timezone.utc)
-    with session_scope() as session:
-        row = session.scalar(
-            select(User)
-            .join(AuthSession, AuthSession.email == User.email)
-            .where(
-                AuthSession.token_hash == token_hash,
-                AuthSession.expires_at > now,
-            )
-        )
-        return _user_projection(row) if row is not None else None
-
-
-def session_delete(token_hash: str) -> None:
-    with session_scope() as session:
-        session.execute(delete(AuthSession).where(AuthSession.token_hash == token_hash))
-
-
-def sessions_prune_expired() -> None:
-    now = datetime.now(timezone.utc)
-    with session_scope() as session:
-        session.execute(delete(AuthSession).where(AuthSession.expires_at <= now))
-
-
-# ----- users -----------------------------------------------------------------
-
-def _user_projection(row: User) -> UserAccount:
-    return UserAccount(
-        email=row.email,
-        is_admin=row.is_platform_admin,
-        created_at=iso_utc(row.created_at),
-        owner_id=str(row.id),
-        plan=row.plan,
-    )
-
-
-def user_has_any() -> bool:
-    with session_scope() as session:
-        return bool(session.scalar(select(func.count()).select_from(User)))
-
-
-def user_get(email: str) -> UserAccount | None:
-    with session_scope() as session:
-        row = session.scalar(select(User).where(User.email == email.strip().lower()))
-        return _user_projection(row) if row is not None else None
-
-
-def user_authenticate(email: str, password: str) -> UserAccount | None:
-    from users import _DUMMY_PASSWORD_HASH  # lazy: reuse the shared timing dummy
-
-    with session_scope() as session:
-        row = session.scalar(select(User).where(User.email == email.strip().lower()))
-        if row is None:
-            verify_secret(password, _DUMMY_PASSWORD_HASH)  # constant-time vs known user
-            return None
-        if not verify_secret(password, row.password_hash):
-            return None
-        return _user_projection(row)
-
-
-def user_create(email: str, password: str, *, is_admin: bool = False) -> UserAccount:
-    email = email.strip().lower()
-    if not email:
-        raise ValueError("Email must not be empty.")
-    if len(password) < 12:
-        raise ValueError("Password must be at least 12 characters.")
-    with session_scope() as session:
-        if session.scalar(select(User).where(User.email == email)) is not None:
-            raise ValueError("A user with that email already exists.")
-        user = User(
-            email=email,
-            password_hash=hash_secret(password),
-            is_platform_admin=is_admin,
-        )
-        session.add(user)
-        session.flush()
-        return _user_projection(user)

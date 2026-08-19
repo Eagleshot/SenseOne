@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Test-only tooling; production containers install requirements.txt directly.
+pytest>=9.0.3

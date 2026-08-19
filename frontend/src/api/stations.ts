@@ -5,7 +5,7 @@ import { LOADING_LABEL, NOT_FOUND_LABEL, UNAVAILABLE_LABEL } from "@/lib/placeho
 export type WebcamCoordinatesResponse = {
   lat: number;
   lng: number;
-  altitude: number;
+  altitude: number | null; // null = altitude unknown
 };
 
 export type StationSummaryResponse = {
@@ -40,7 +40,7 @@ export type StationConfigResponse = {
   description: string;
   lat: number;
   lon: number;
-  alt: number;
+  alt: number | null;
   location: string;
   country: string;
   countryEmoji: string;
@@ -54,7 +54,7 @@ export type StationCreatePayload = {
   countryEmoji: string;
   lat: number;
   lon: number;
-  alt: number;
+  alt: number | null;
   isPublic: boolean;
 };
 
@@ -111,7 +111,7 @@ export const FALLBACK_WEBCAM: Webcam = {
   location: "",
   country: "",
   countryEmoji: "",
-  coordinates: { lat: 0, lng: 0, altitude: 0 },
+  coordinates: { lat: 0, lng: 0, altitude: null },
   currentImage: null,
   isOnline: undefined,
   lastUpdate: null,

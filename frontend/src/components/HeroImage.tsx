@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import {
   ArrowLeftRight,
   Download,
+  Image as ImageIcon,
   ImageOff,
   Images,
   Loader2,
@@ -19,7 +20,7 @@ import {
 import { FullscreenDialog } from '@/components/FullscreenDialog';
 import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogClose, DialogContent, DialogTrigger } from '@/components/ui/dialog';
+import { DialogClose } from '@/components/ui/dialog';
 import { StatusSummary } from '@/components/StatusSummary';
 import { QuickInfoCards } from '@/components/QuickInfoCards';
 
@@ -37,18 +38,20 @@ export const HeroImage: React.FC = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isCompareOpen, setIsCompareOpen] = useState(false);
   const [compareValue, setCompareValue] = useState(50);
+  const [compareLeftIndex, setCompareLeftIndex] = useState(0);
   const [compareIndex, setCompareIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [hasLoadError, setHasLoadError] = useState(false);
   const compareRef = useRef<HTMLDivElement | null>(null);
-  const scrubRef = useRef<HTMLDivElement | null>(null);
 
   const hasTimeline = imageTimeline.length > 0;
   const currentImage = imageTimeline[currentImageIndex];
   const isLatest = hasTimeline && currentImageIndex === imageTimeline.length - 1;
   const latestIndex = Math.max(imageTimeline.length - 1, 0);
   const currentImageUrl = currentImage?.url || activeWebcam.currentImage || '';
+  const compareLeftImage = imageTimeline[compareLeftIndex];
+  const compareLeftImageUrl = compareLeftImage?.url || activeWebcam.currentImage || '';
   const compareImage = imageTimeline[compareIndex];
   const compareImageUrl = compareImage?.url || activeWebcam.currentImage || '';
   const hasDisplayImage = Boolean(currentImageUrl) && !hasLoadError;
@@ -56,13 +59,17 @@ export const HeroImage: React.FC = () => {
   useEffect(() => {
     if (!hasTimeline) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clamp the compare index when the timeline shrinks
+      setCompareLeftIndex(0);
       setCompareIndex(0);
       return;
+    }
+    if (compareLeftIndex > imageTimeline.length - 1) {
+      setCompareLeftIndex(imageTimeline.length - 1);
     }
     if (compareIndex > imageTimeline.length - 1) {
       setCompareIndex(imageTimeline.length - 1);
     }
-  }, [compareIndex, hasTimeline, imageTimeline.length]);
+  }, [compareIndex, compareLeftIndex, hasTimeline, imageTimeline.length]);
 
   // Reset the error flag whenever the current image URL changes; the new
   // src will retry, and onError will set the flag again if it really fails.
@@ -140,9 +147,9 @@ export const HeroImage: React.FC = () => {
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
-  const scrubToClientX = (clientX: number) => {
-    if (!hasTimeline || !scrubRef.current) return;
-    const rect = scrubRef.current.getBoundingClientRect();
+  const scrubToClientX = (clientX: number, track: HTMLDivElement) => {
+    if (!hasTimeline) return;
+    const rect = track.getBoundingClientRect();
     if (!rect.width) return;
     const ratio = (clientX - rect.left) / rect.width;
     const clamped = Math.max(0, Math.min(1, ratio));
@@ -154,13 +161,13 @@ export const HeroImage: React.FC = () => {
   const handleScrubPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!hasTimeline) return;
     setIsScrubbing(true);
-    scrubToClientX(event.clientX);
+    scrubToClientX(event.clientX, event.currentTarget);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const handleScrubPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!isScrubbing) return;
-    scrubToClientX(event.clientX);
+    scrubToClientX(event.clientX, event.currentTarget);
   };
 
   const handleScrubPointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -308,30 +315,113 @@ export const HeroImage: React.FC = () => {
                 </Button>
               ) : undefined
             }
-            contentClassName="flex items-center justify-center bg-black/90"
           >
-            <DialogClose asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="btn-panel absolute top-4 right-4 z-10 h-10 px-3 text-xs sm:text-sm"
-              >
-                <Minimize2 className="h-4 w-4" />
-                Exit Fullscreen
-              </Button>
-            </DialogClose>
-            {hasDisplayImage ? (
-              <img src={currentImageUrl} alt={`${activeWebcam.name} webcam view`} className="h-full w-full object-contain bg-black" />
-            ) : (
-              <div className="mx-4 max-w-md text-center">
-                <ImageOff className="mx-auto mb-4 h-7 w-7 text-white/80" />
-                <p className="text-lg font-semibold text-white">No pictures available</p>
-                <p className="mt-2 text-sm leading-relaxed text-white/75">
-                  Try another station or check back soon.
-                </p>
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="border-b border-border px-4 py-4 sm:px-6">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                    <h2 className="text-xl font-semibold text-foreground">Image</h2>
+                  </div>
+                  <DialogClose asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="btn-panel h-10 px-3 text-xs sm:text-sm"
+                    >
+                      <Minimize2 className="h-4 w-4" />
+                      Exit Fullscreen
+                    </Button>
+                  </DialogClose>
+                </div>
               </div>
-            )}
+
+              <div className="group relative min-h-0 flex-1 overflow-hidden bg-black">
+                {hasDisplayImage ? (
+                  <>
+                    <img
+                      src={currentImageUrl}
+                      alt=""
+                      aria-hidden="true"
+                      className="absolute inset-0 block h-full w-full scale-110 object-cover opacity-70 blur-2xl"
+                    />
+                    <div className="absolute inset-0 bg-black/25" aria-hidden="true" />
+                    <img
+                      src={currentImageUrl}
+                      alt={`${activeWebcam.name} webcam view`}
+                      className="absolute inset-0 block h-full w-full object-contain"
+                    />
+                  </>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="mx-4 max-w-md text-center">
+                      <ImageOff className="mx-auto mb-4 h-7 w-7 text-white/80" />
+                      <p className="text-lg font-semibold text-white">No pictures available</p>
+                      <p className="mt-2 text-sm leading-relaxed text-white/75">
+                        Try another station or check back soon.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {currentImage && (
+                  <div className="absolute bottom-4 right-4 rounded-lg border border-border/50 bg-background/50 px-3 py-1.5 backdrop-blur-sm transition-all duration-200 group-hover:bottom-[5.5rem] group-focus-within:bottom-[5.5rem] [@media(pointer:coarse)]:bottom-[5.5rem]">
+                    <p className="text-sm font-medium text-foreground">
+                      {formatDateTimeLabel(currentImage.timestamp, timezone)}
+                    </p>
+                  </div>
+                )}
+
+                {hasDisplayImage && (
+                  <div className="pointer-events-none absolute inset-x-4 bottom-4 translate-y-2 rounded-2xl border border-border/50 bg-background/50 px-3 py-1 opacity-0 backdrop-blur-sm transition-all duration-200 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:translate-y-0 [@media(pointer:coarse)]:opacity-100">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setIsPlaying(!isPlaying)}
+                        disabled={!hasTimeline}
+                        aria-label={isPlaying ? "Pause" : "Play"}
+                        className={cn(
+                          controlIconButtonClass,
+                          isPlaying && 'text-primary-foreground'
+                        )}
+                      >
+                        {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                      </Button>
+
+                      <div
+                        onPointerDown={handleScrubPointerDown}
+                        onPointerMove={handleScrubPointerMove}
+                        onPointerUp={handleScrubPointerEnd}
+                        onPointerCancel={handleScrubPointerEnd}
+                        className="min-w-[200px] flex-1 cursor-ew-resize"
+                      >
+                        <Slider
+                          value={[currentImageIndex]}
+                          onValueChange={handleSliderChange}
+                          max={latestIndex}
+                          min={0}
+                          step={1}
+                          disabled={!hasTimeline}
+                        />
+                      </div>
+
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={handleJumpToLatest}
+                        disabled={!hasTimeline || isLatest}
+                        aria-label="Jump to latest"
+                        className={controlIconButtonClass}
+                      >
+                        <SkipForward className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </FullscreenDialog>
 
           {/* Refreshing overlay */}
@@ -371,7 +461,6 @@ export const HeroImage: React.FC = () => {
                 </Button>
 
                 <div
-                  ref={scrubRef}
                   onPointerDown={handleScrubPointerDown}
                   onPointerMove={handleScrubPointerMove}
                   onPointerUp={handleScrubPointerEnd}
@@ -420,15 +509,17 @@ export const HeroImage: React.FC = () => {
             </Button>
           )}
 
-          <Dialog
+          <FullscreenDialog
+            title={`${activeWebcam.name} image comparison`}
             open={isCompareOpen}
             onOpenChange={(open) => {
               setIsCompareOpen(open);
               if (open) setCompareValue(50);
+              if (open && hasTimeline) setCompareLeftIndex(currentImageIndex);
               if (open && hasTimeline) setCompareIndex(latestIndex);
             }}
-          >
-            <DialogTrigger asChild>
+            edgeToEdge
+            trigger={
               <Button
                 variant="ghost"
                 size="sm"
@@ -438,58 +529,112 @@ export const HeroImage: React.FC = () => {
                 <Images className="w-4 h-4" />
                 Compare
               </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-6xl w-[95vw] p-0 overflow-hidden bg-black/95 border border-border/40">
+            }
+          >
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="border-b border-border px-4 py-4 sm:px-6">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Images className="h-5 w-5 text-muted-foreground" />
+                    <h2 className="text-xl font-semibold text-foreground">Compare Images</h2>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsCompareOpen(false)}
+                    className="btn-panel h-10 px-3 text-xs sm:text-sm"
+                  >
+                    <Minimize2 className="h-4 w-4" />
+                    Exit Fullscreen
+                  </Button>
+                </div>
+              </div>
+
               <div
                 ref={compareRef}
-                className="relative aspect-video w-full bg-black select-none touch-none"
+                className="relative min-h-0 flex-1 overflow-hidden bg-black select-none touch-none"
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerCancel={handlePointerCancel}
               >
                 <img
-                  src={currentImageUrl}
+                  src={compareLeftImageUrl}
+                  alt=""
+                  aria-hidden="true"
+                  className="absolute inset-0 h-full w-full scale-110 object-cover opacity-70 blur-2xl"
+                  style={{ clipPath: `inset(0 ${100 - compareValue}% 0 0)` }}
+                />
+                <img
+                  src={compareImageUrl}
+                  alt=""
+                  aria-hidden="true"
+                  className="absolute inset-0 h-full w-full scale-110 object-cover opacity-70 blur-2xl"
+                  style={{ clipPath: `inset(0 0 0 ${compareValue}%)` }}
+                />
+                <div className="absolute inset-0 bg-black/25" aria-hidden="true" />
+                <img
+                  src={compareLeftImageUrl}
                   alt={`${activeWebcam.name} selected timestamp`}
-                  className="absolute inset-0 w-full h-full object-contain"
+                  className="absolute inset-0 h-full w-full object-contain"
                   style={{ clipPath: `inset(0 ${100 - compareValue}% 0 0)` }}
                 />
                 <img
                   src={compareImageUrl}
                   alt={`${activeWebcam.name} comparison timestamp`}
-                  className="absolute inset-0 w-full h-full object-contain"
+                  className="absolute inset-0 h-full w-full object-contain"
                   style={{ clipPath: `inset(0 0 0 ${compareValue}%)` }}
                 />
                 <div
-                  className="absolute inset-y-0"
+                  className="absolute inset-y-0 z-10"
                   style={{ left: `${compareValue}%` }}
                 >
                   <div className="h-full w-[2px] bg-white/80 shadow-[0_0_0_1px_rgba(255,255,255,0.2)]" />
-                  <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-10 w-10 rounded-full border border-white/70 bg-white text-foreground shadow-lg flex items-center justify-center">
-                    <ArrowLeftRight className="h-5 w-5 text-foreground" />
+                  <div className="absolute left-1/2 top-1/2 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize items-center justify-center rounded-full border border-white/70 bg-white text-black shadow-lg">
+                    <ArrowLeftRight className="h-5 w-5 text-black" aria-hidden="true" />
                   </div>
                 </div>
 
-                {currentImage && (
-                  <div className="absolute bottom-4 left-4 px-2.5 py-1 rounded-md bg-black/60 text-white text-xs">
-                    {formatDateTimeLabel(currentImage.timestamp, timezone)}
+                {compareLeftImage && (
+                  <div className="absolute bottom-4 left-4 z-10 rounded-lg border border-border/50 bg-background/50 px-3 py-1.5 backdrop-blur-sm">
+                    <p className="text-sm font-medium text-foreground">
+                      {formatDateTimeLabel(compareLeftImage.timestamp, timezone)}
+                    </p>
                   </div>
                 )}
                 {compareImage && (
-                  <div className="absolute bottom-4 right-4 px-2.5 py-1 rounded-md bg-black/60 text-white text-xs">
-                    {formatDateTimeLabel(compareImage.timestamp, timezone)}
+                  <div className="absolute bottom-4 right-4 z-10 rounded-lg border border-border/50 bg-background/50 px-3 py-1.5 backdrop-blur-sm">
+                    <p className="text-sm font-medium text-foreground">
+                      {formatDateTimeLabel(compareImage.timestamp, timezone)}
+                    </p>
                   </div>
                 )}
               </div>
-              <div className="p-4 border-t border-border/40 bg-black/80">
+
+              <div className="border-t border-border px-4 py-4 sm:px-6">
                 <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between text-xs text-white/80">
-                    <span>Select right image</span>
-                    <span>{compareImage ? formatDateTimeLabel(compareImage.timestamp, timezone) : "No data"}</span>
+                  <div className="flex items-start justify-between gap-4 text-xs text-muted-foreground">
+                    <div className="flex flex-col gap-1">
+                      <span>Left image</span>
+                      <span className="font-medium text-foreground">
+                        {compareLeftImage ? formatDateTimeLabel(compareLeftImage.timestamp, timezone) : "No data"}
+                      </span>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 text-right">
+                      <span>Right image</span>
+                      <span className="font-medium text-foreground">
+                        {compareImage ? formatDateTimeLabel(compareImage.timestamp, timezone) : "No data"}
+                      </span>
+                    </div>
                   </div>
                   <Slider
-                    value={[compareIndex]}
-                    onValueChange={(value) => setCompareIndex(value[0])}
+                    value={[compareLeftIndex, compareIndex]}
+                    onValueChange={(value) => {
+                      setCompareLeftIndex(value[0]);
+                      setCompareIndex(value[1]);
+                    }}
+                    thumbLabels={["Select left image", "Select right image"]}
                     max={latestIndex}
                     min={0}
                     step={1}
@@ -497,8 +642,8 @@ export const HeroImage: React.FC = () => {
                   />
                 </div>
               </div>
-            </DialogContent>
-          </Dialog>
+            </div>
+          </FullscreenDialog>
 
           {hasDisplayImage && (
             <Button

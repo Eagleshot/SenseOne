@@ -421,9 +421,13 @@ export const InteractiveMap: React.FC = () => {
                   <span className="hidden sm:inline"> | </span>
                   <br className="sm:hidden" />
                   Lon: {activeWebcam.coordinates.lng.toFixed(4)} deg
-                  <span className="hidden sm:inline"> | </span>
-                  <br className="sm:hidden" />
-                  Alt: {activeWebcam.coordinates.altitude}m
+                  {activeWebcam.coordinates.altitude !== null && (
+                    <>
+                      <span className="hidden sm:inline"> | </span>
+                      <br className="sm:hidden" />
+                      Alt: {activeWebcam.coordinates.altitude}m
+                    </>
+                  )}
                 </p>
               </div>
             </div>

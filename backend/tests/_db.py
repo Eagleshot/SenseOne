@@ -62,10 +62,10 @@ def reset_data() -> None:
 
 
 def create_owner(email: str, password: str = "devpassword123", *, is_admin: bool = False):
-    """Create a user via the app layer; returns the users.User (has owner_id)."""
-    from users import create_user
+    """Create a user via the real repo path; returns the user_db.User (has owner_id)."""
+    from db.user_repo import user_create
 
-    return create_user(email, password, is_admin=is_admin)
+    return user_create(email, password, is_admin=is_admin)
 
 
 def _default_owner_id(session) -> uuid.UUID:
@@ -117,7 +117,7 @@ def add_reading(public_id: str, recorded_at, metrics: dict, next_online=None) ->
     wakeReason); they are split out the same way the device route does, leaving
     the numeric measurements to become observations.
     """
-    from db import sqlite_repo
+    from db import station_repo
     from metrics_registry import DEFAULT_CHANNEL
     from utils import iso_utc
 
@@ -126,7 +126,7 @@ def add_reading(public_id: str, recorded_at, metrics: dict, next_online=None) ->
     wake_reason = data.pop("wakeReason", None)
     timestamp = recorded_at if isinstance(recorded_at, str) else iso_utc(recorded_at)
     next_online_iso = next_online if (next_online is None or isinstance(next_online, str)) else iso_utc(next_online)
-    sqlite_repo.append_reading(
+    station_repo.append_reading(
         public_id,
         timestamp,
         [(DEFAULT_CHANNEL, data)],
@@ -154,9 +154,9 @@ def add_image(public_id: str, filename: str, captured_at, *, content_type="image
 
 
 def station_owner_id(public_id: str) -> str | None:
-    from db import sqlite_repo
+    from db import station_repo
 
-    return sqlite_repo.station_owner_id(public_id)
+    return station_repo.station_owner_id(public_id)
 
 
 def _iso(value):

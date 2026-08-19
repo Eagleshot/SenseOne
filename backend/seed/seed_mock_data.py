@@ -29,7 +29,7 @@ if str(BACKEND_DIR) not in sys.path:
 from security import hash_secret  # noqa: E402
 from db.migrate import run_migrations  # noqa: E402
 from db.models import Datastream, Observation, SensorReading, Station, StationImage, User  # noqa: E402
-from db.sqlite_repo import new_public_id, resolve_datastream  # noqa: E402
+from db.station_repo import new_public_id, resolve_datastream  # noqa: E402
 from db.session import get_engine  # noqa: E402
 from metrics_registry import DEFAULT_CHANNEL  # noqa: E402
 from settings import get_data_dir  # noqa: E402
@@ -90,7 +90,7 @@ def _upsert_station(session: Session, seed: dict, owner: User, overwrite: bool) 
         country_emoji=str(seed.get("countryEmoji") or ""),
         lat=float(coords.get("lat", 0.0)),
         lon=float(coords.get("lng", 0.0)),
-        alt=float(coords.get("altitude", 0.0)),
+        alt=float(coords["altitude"]) if coords.get("altitude") is not None else None,
         is_public=bool(seed.get("is_public", True)),
     )
     station = session.scalar(select(Station).where(Station.url_slug == url_slug))

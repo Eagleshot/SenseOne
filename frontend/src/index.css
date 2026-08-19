@@ -161,7 +161,7 @@
   }
 
   .card-interactive {
-    @apply bg-card rounded-xl border border-border transition-all duration-200;
+    @apply bg-card rounded-xl border border-border transition-[border-color,box-shadow] duration-200 ease-out;
     box-shadow: var(--shadow-sm);
   }
 
@@ -239,7 +239,7 @@
      color), which would otherwise win the cascade. Matches the sidebar action
      buttons (see sidebarActionButtonClass in Sidebar.tsx). */
   .btn-panel.btn-panel {
-    @apply gap-2 border-sidebar-border/90 text-sidebar-foreground;
+    @apply gap-2 border-sidebar-border/90 text-sidebar-foreground transition-colors duration-200 ease-out;
     background-color: hsl(var(--sidebar-accent));
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   }
@@ -250,7 +250,7 @@
   }
 
   .btn-icon-panel {
-    @apply border border-border/60 bg-background/60 text-foreground backdrop-blur-sm transition-all duration-200;
+    @apply border border-border/60 bg-background/60 text-foreground backdrop-blur-sm transition-colors duration-200 ease-out;
   }
 
   .btn-icon-panel:hover {
@@ -258,15 +258,15 @@
   }
 
   .btn-inline-muted {
-    @apply h-auto px-0 py-0 text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground;
+    @apply h-auto px-0 py-0 text-muted-foreground transition-colors duration-200 ease-out hover:bg-transparent hover:text-foreground;
   }
 
   .btn-inline-control {
-    @apply inline-flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground;
+    @apply inline-flex items-center gap-1 text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground focus-visible:outline-none focus-visible:text-foreground;
   }
 
   .selector-tile {
-    @apply rounded-xl border border-border bg-[hsl(var(--sidebar-background))]/40 transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/35;
+    @apply rounded-xl border border-border bg-[hsl(var(--sidebar-background))]/40 transition-colors duration-200 ease-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/35;
   }
 
   .selector-tile:hover {

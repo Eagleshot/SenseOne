@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from models import AppConfig
 from tests import _db
 
 
@@ -45,23 +44,6 @@ def tmp_data_dir():
 @pytest.fixture
 def sample_station_id():
     return "test-station"
-
-
-@pytest.fixture
-def sample_config():
-    return AppConfig(
-        title="Test Station",
-        description="A test station",
-        lat=47.5,
-        lon=8.5,
-        alt=1000,
-        location="Test Location",
-        country="Test Country",
-        country_emoji="🏳️",
-        station_start_time="06:00",
-        station_stop_time="20:00",
-        capture_interval_minutes=30,
-    )
 
 
 @pytest.fixture

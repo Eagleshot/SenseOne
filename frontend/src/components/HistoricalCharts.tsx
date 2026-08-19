@@ -1,9 +1,7 @@
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 
 import { CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Download, LineChart as LineChartIcon, type LucideIcon } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
+import { LineChart as LineChartIcon, type LucideIcon } from "lucide-react";
 
 import { formatChartTickLabel, formatDateTimeLabel, spansMultipleDays } from "@/lib/datetime";
 import { usePreferences } from "@/contexts/AppContext";
@@ -16,10 +14,14 @@ import {
   metricUnit,
 } from "@/lib/metricCatalog";
 import type { SensorData } from "@/data/types";
+import type { HistoryTimeRange } from "@/lib/historyFilters";
 import { CheckInStatusChart } from "./CheckInStatusChart";
-import { exportChartAsImage } from "./historicalChartExport";
 
 const metricColor = (index: number) => CHART_PALETTE[index % CHART_PALETTE.length];
+const X_TICK_COUNT = 6;
+
+const timeRangeTicks = ([start, end]: HistoryTimeRange) =>
+  Array.from({ length: X_TICK_COUNT }, (_, index) => start + ((end - start) * index) / (X_TICK_COUNT - 1));
 
 const ChartTooltip = ({
   active,
@@ -50,12 +52,14 @@ const ChartTooltip = ({
   );
 };
 
-type ChartRow = Omit<SensorData, "timestamp"> & { time: string; fullTime: string };
+type ChartRow = Omit<SensorData, "timestamp"> & { time: number; fullTime: string };
 
 type ChartCardProps = {
   metric: string;
   Icon: LucideIcon;
   chartData: ChartRow[];
+  timeRange: HistoryTimeRange;
+  timezone: string;
   isDarkMode: boolean;
   colorIndex: number;
 };
@@ -63,41 +67,30 @@ type ChartCardProps = {
 // One read-only plot for a single metric. The chart configurability (titles,
 // metric selection, icons, colours, reordering) was removed and will be
 // re-implemented later; for now each numeric metric simply gets its own plot.
-const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, chartData, isDarkMode, colorIndex }) => {
-  const chartRef = useRef<HTMLDivElement | null>(null);
-  const iconRef = useRef<SVGSVGElement>(null);
+const ChartCard: React.FC<ChartCardProps> = ({
+  metric,
+  Icon,
+  chartData,
+  timeRange,
+  timezone,
+  isDarkMode,
+  colorIndex,
+}) => {
   const color = metricColor(colorIndex);
   const unit = metricUnit(metric);
+  const xTicks = timeRangeTicks(timeRange);
+  const includeDate = spansMultipleDays(new Date(timeRange[0]), new Date(timeRange[1]), timezone);
 
   const formatYAxisTick = (value: number | string) => (unit ? `${value} ${unit}` : `${value}`);
 
   return (
     <div className="widget-shell-stroke rounded-2xl border border-border bg-card/70 p-4">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Icon ref={iconRef} className="h-5 w-5 text-muted-foreground" />
-          <h2 className="text-2xl font-bold text-foreground">{metricLabel(metric)}</h2>
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Export chart image"
-          onClick={() => {
-            if (chartRef.current) {
-              void exportChartAsImage(chartRef.current, {
-                title: metricLabel(metric),
-                icon: iconRef.current,
-              });
-            }
-          }}
-          className="btn-icon-panel h-8 w-8"
-        >
-          <Download className="h-4 w-4" />
-        </Button>
+      <div className="mb-4 flex items-center gap-2">
+        <Icon className="h-5 w-5 text-muted-foreground" />
+        <h3 className="text-lg font-semibold text-foreground">{metricLabel(metric)}</h3>
       </div>
 
-      <div ref={chartRef} className="h-[280px] w-full rounded-lg bg-background p-2">
+      <div className="h-[280px] w-full rounded-lg bg-background p-2">
         {chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center rounded-lg text-sm text-muted-foreground">
             No data available for the selected date range.
@@ -114,10 +107,16 @@ const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, chartData, isDarkMo
               />
               <XAxis
                 dataKey="time"
+                type="number"
+                scale="time"
+                domain={[timeRange[0], timeRange[1]]}
+                ticks={xTicks}
                 axisLine={false}
                 tickLine={false}
                 tickMargin={10}
+                minTickGap={48}
                 tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                tickFormatter={(value: number) => formatChartTickLabel(new Date(value), timezone, includeDate)}
               />
               <YAxis
                 axisLine={false}
@@ -147,11 +146,12 @@ const ChartCard: React.FC<ChartCardProps> = ({ metric, Icon, chartData, isDarkMo
 
 interface HistoricalChartsProps {
   data: SensorData[];
+  timeRange: HistoryTimeRange;
   /** True when the sensor-history request failed (as opposed to "no readings"). */
   loadFailed?: boolean;
 }
 
-export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, loadFailed = false }) => {
+export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, timeRange, loadFailed = false }) => {
   const { timezone, isDarkMode } = usePreferences();
   // One plot per numeric metric present in the (already date-filtered) data.
   const metrics = useMemo(() => collectNumericMetricKeys(data), [data]);
@@ -161,10 +161,9 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, loadFa
   // repeat ambiguously ("14:00" three days in a row).
   const chartData = useMemo<ChartRow[]>(() => {
     if (data.length === 0) return [];
-    const includeDate = spansMultipleDays(data[0].timestamp, data[data.length - 1].timestamp, timezone);
     return data.map(({ timestamp, ...values }) => ({
       ...values,
-      time: formatChartTickLabel(timestamp, timezone, includeDate),
+      time: timestamp.getTime(),
       fullTime: formatDateTimeLabel(timestamp, timezone),
     }));
   }, [data, timezone]);
@@ -178,7 +177,7 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, loadFa
         <p className="text-sm text-muted-foreground">
           {loadFailed
             ? "Could not load sensor data for this station. Try again later."
-            : "No data available for the selected station and date range."}
+            : "No data available for the selected date range."}
         </p>
       </div>
     );
@@ -194,12 +193,14 @@ export const HistoricalCharts: React.FC<HistoricalChartsProps> = ({ data, loadFa
             metric={metric}
             Icon={Icon}
             chartData={chartData}
+            timeRange={timeRange}
+            timezone={timezone}
             isDarkMode={isDarkMode}
             colorIndex={index}
           />
         );
       })}
-      {hasStatus && <CheckInStatusChart data={data} />}
+      {hasStatus && <CheckInStatusChart data={data} timeRange={timeRange} />}
     </div>
   );
 };

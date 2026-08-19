@@ -149,10 +149,10 @@ describe("useWebcamData", () => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/data?hours=72"))).toBe(true)
     );
 
-    // The window is clamped to the backend's cap.
+    // Absolute ranges are not capped by the one-year relative preset.
     act(() => result.current.station.setHistoryWindowHours(10_000));
     await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/data?hours=168"))).toBe(true)
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/data?hours=10000"))).toBe(true)
     );
   });
 

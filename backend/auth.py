@@ -9,9 +9,9 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from constants import AUTH_COOKIE_NAME
-from db import sqlite_repo
+from db import user_repo
 from settings import get_settings
-from users import get_session_user, has_any_user
+from users import has_any_user
 
 # The APP_AUTH_EMAIL/APP_AUTH_PASSWORD bootstrap pair is validated at boot by
 # Settings.validate_at_boot() (create_app), not at import time.
@@ -26,6 +26,7 @@ AUTH_TOKEN_TTL_SECONDS = 43200
 bearer_scheme = HTTPBearer(auto_error=False)
 
 # Login throttling: track recent failures per IP and per username.
+# Process-local — assumes the single-worker deployment (see main.py docstring).
 LOGIN_FAILURE_WINDOW_SECONDS = 900  # 15 min rolling window
 LOGIN_FAILURE_LIMIT = 10
 # Hard bound on distinct tracked keys so a flood of unique usernames/IPs can't
@@ -68,19 +69,13 @@ def create_session(username: str) -> tuple[str, int]:
 
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=AUTH_TOKEN_TTL_SECONDS)
-    sqlite_repo.session_create(_hash_session_token(token), username, expires_at)
+    user_repo.session_create(_hash_session_token(token), username, expires_at)
     return token, AUTH_TOKEN_TTL_SECONDS
-
-
-def prune_expired_sessions() -> None:
-    """Remove expired sessions from storage. Called on login, not per request:
-    validation already filters on expiry, so stale rows are only clutter."""
-    sqlite_repo.sessions_prune_expired()
 
 
 def remove_session(token: str) -> None:
     """Invalidate a session token, if present (used on logout)."""
-    sqlite_repo.session_delete(_hash_session_token(token))
+    user_repo.session_delete(_hash_session_token(token))
 
 
 def resolve_session_token(
@@ -100,7 +95,7 @@ def _user_for_token(token: str | None):
     """The User behind a session token, or None — one joined session+user query."""
     if token is None:
         return None
-    return get_session_user(_hash_session_token(token))
+    return user_repo.session_user(_hash_session_token(token))
 
 
 def get_current_user(
@@ -138,6 +133,23 @@ def _prune_login_failures(now: float) -> None:
             _login_failures[key] = kept
         else:
             _login_failures.pop(key, None)
+
+
+def throttle_client_ip(request: Request) -> str:
+    """Client address to key the login throttle on.
+
+    The app is served through a Cloudflare Tunnel, so the TCP peer
+    (request.client.host) is always the local cloudflared process — keying on it
+    would put every user in one bucket, and 10 stray failures would lock logins
+    for everyone. Cloudflare sets CF-Connecting-IP to the real client on every
+    request it forwards, and the origin is reachable only through the tunnel, so
+    the header can't be forged by a direct caller. Falls back to the socket peer
+    for local dev without the tunnel.
+    """
+    forwarded = request.headers.get("CF-Connecting-IP", "").strip()
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
 
 
 def check_login_throttle(client_ip: str, username: str) -> None:

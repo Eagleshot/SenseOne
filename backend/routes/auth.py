@@ -3,7 +3,8 @@
 from fastapi import APIRouter, Depends, Request, Response, status, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from models import LoginRequest, AuthResponse, MeResponse
+from api_docs import error_response
+from models import LoginRequest, AuthResponse, MeResponse, SuccessResponse
 from auth import (
     auth_cookie_secure,
     bearer_scheme,
@@ -12,13 +13,13 @@ from auth import (
     create_session,
     ensure_auth_configured,
     get_current_user,
-    prune_expired_sessions,
     record_login_failure,
     remove_session,
     resolve_session_token,
+    throttle_client_ip,
 )
 from constants import AUTH_COOKIE_NAME, AUTH_COOKIE_SAMESITE
-from users import authenticate_user
+from db import user_repo
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -28,26 +29,22 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
     response_model=AuthResponse,
     summary="Log in",
     description=(
-        "Verify email + password and start a session. On success, sets the "
-        "`eagleshot_session` cookie (HttpOnly, SameSite=Strict; Secure whenever "
-        "`APP_REQUIRE_HTTPS` is enabled). The session token is delivered only via "
-        "that `Set-Cookie` header — it is not echoed in the response body. "
-        "Non-browser clients may capture the cookie value and resend it as an "
-        "`Authorization: Bearer <token>` header. Programmatic API access will "
-        "later get dedicated, revocable API keys rather than reusing this "
-        "short-lived browser session.\n\n"
-        "Per-IP and per-username throttling kicks in after repeated failures; "
-        "successful logins reset both counters."
+        "Verify an email and password and start a session. Browsers receive a "
+        "session cookie; other clients may use its value as a bearer token."
     ),
+    responses={
+        401: error_response("Invalid email or password."),
+        503: error_response("Authentication is unavailable."),
+    },
 )
 def login(payload: LoginRequest, request: Request, response: Response) -> AuthResponse:
     ensure_auth_configured()
 
     email = payload.email
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = throttle_client_ip(request)
     check_login_throttle(client_ip, email)
 
-    user = authenticate_user(email, payload.password)
+    user = user_repo.user_authenticate(email, payload.password)
     if user is None:
         record_login_failure(client_ip, email)
         raise HTTPException(
@@ -56,7 +53,10 @@ def login(payload: LoginRequest, request: Request, response: Response) -> AuthRe
         )
 
     clear_login_failures(client_ip, user.email)
-    prune_expired_sessions()  # logins are rare enough to carry the cleanup
+    # Prune on login, not per request: session validation already filters on
+    # expiry, so stale rows are only clutter — and logins are rare enough to
+    # carry the cleanup.
+    user_repo.sessions_prune_expired()
     token, expires_in = create_session(user.email)
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
@@ -75,11 +75,11 @@ def login(payload: LoginRequest, request: Request, response: Response) -> AuthRe
     "/me",
     response_model=MeResponse,
     summary="Current authenticated user",
-    description=(
-        "Return the username and admin flag for the session attached to this "
-        "request (cookie or bearer token). Returns 401 if no session is present "
-        "or the session has expired."
-    ),
+    description="Return the user associated with the current session.",
+    responses={
+        401: error_response("A valid session is required."),
+        503: error_response("Authentication is unavailable."),
+    },
 )
 def me(user=Depends(get_current_user)) -> MeResponse:
     return MeResponse(email=user.email, is_admin=user.is_admin)
@@ -87,19 +87,17 @@ def me(user=Depends(get_current_user)) -> MeResponse:
 
 @router.post(
     "/logout",
+    response_model=SuccessResponse,
     summary="Log out",
-    description=(
-        "Invalidate the current session (cookie or bearer) and clear the "
-        "session cookie. Idempotent — calling without a session still returns 200."
-    ),
+    description="End the current session and clear its cookie. This action is idempotent.",
 )
 def logout(
     request: Request,
     response: Response,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> dict:
+) -> SuccessResponse:
     token = resolve_session_token(request, credentials)
     if token:
         remove_session(token)
     response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
-    return {"success": True}
+    return SuccessResponse(success=True)

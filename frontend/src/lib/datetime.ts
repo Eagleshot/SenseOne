@@ -93,6 +93,80 @@ export const formatCountdown = (target: Date, now: Date): string => {
   return minutes === 0 ? `in ${hours} h` : `in ${hours} h ${minutes} min.`;
 };
 
+// ---- Schedule time-of-day conversion ----------------------------------------
+// The station schedule (start/stop) is stored and sent to the device in UTC;
+// the settings UI edits it in the viewer's effective display timezone. Both
+// helpers anchor on TODAY's date (a bare "HH:MM" has no date, and the zone
+// offset depends on one), so across a DST change the stored UTC window keeps
+// its instant and the displayed wall-clock time shifts by the offset change.
+
+const formatHHMM = (instant: Date, timeZone: string) =>
+  new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23", // never "24:00", which a time input rejects
+  }).format(instant);
+
+const parseHHMM = (time: string): [number, number] => {
+  const [hours, minutes] = time.split(":").map(Number);
+  return [hours, minutes];
+};
+
+/** The instant's wall clock in `timeZone`, re-encoded as if it were UTC —
+ * the standard Intl trick to recover a zone's UTC offset without a tz library:
+ * offset(instant) = wallClockAsUtcMs(instant) - instant. */
+const wallClockAsUtcMs = (instant: Date, timeZone: string): number => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(instant);
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+};
+
+/** Convert a calendar date plus wall-clock time in `timeZone` to its real
+ * instant. Calendar picker dates intentionally use their machine-local
+ * year/month/day fields; those fields represent the day the user clicked. */
+export const zonedDateTimeToInstant = (date: Date, time: string, timeZone: string): Date => {
+  const [hours, minutes] = parseHHMM(time);
+  const desiredWallMs = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes);
+  const offsetAt = (ms: number) => wallClockAsUtcMs(new Date(ms), timeZone) - ms;
+  let instant = desiredWallMs - offsetAt(desiredWallMs);
+  instant = desiredWallMs - offsetAt(instant);
+  return new Date(instant);
+};
+
+/** "HH:MM" UTC -> "HH:MM" wall clock in `timeZone`, on today's date. */
+export const utcTimeOfDayToZoned = (time: string, timeZone: string, now: Date = new Date()): string => {
+  const [hours, minutes] = parseHHMM(time);
+  const instant = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hours, minutes));
+  return formatHHMM(instant, timeZone);
+};
+
+/** "HH:MM" wall clock in `timeZone` -> "HH:MM" UTC, on today's date in that
+ * zone. During a DST transition a nonexistent/ambiguous wall time resolves to
+ * a nearby instant — good enough for a capture schedule. */
+export const zonedTimeOfDayToUtc = (time: string, timeZone: string, now: Date = new Date()): string => {
+  const [hours, minutes] = parseHHMM(time);
+  const todayWallMs = wallClockAsUtcMs(now, timeZone);
+  const dayStartMs = todayWallMs - (todayWallMs % 86400000);
+  const desiredWallMs = dayStartMs + (hours * 60 + minutes) * 60000;
+  const offsetAt = (ms: number) => wallClockAsUtcMs(new Date(ms), timeZone) - ms;
+  // Two passes: the first guesses using the offset at the desired wall time
+  // read as UTC; the second re-reads the offset at that candidate instant so
+  // times near a DST switch settle on the correct side.
+  let instant = desiredWallMs - offsetAt(desiredWallMs);
+  instant = desiredWallMs - offsetAt(instant);
+  return formatHHMM(new Date(instant), "UTC");
+};
+
 export const formatCsvTimestamp = (timestamp: Date, timeZone?: string) => {
   const tz = resolveTimeZone(timeZone);
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -108,4 +182,3 @@ export const formatCsvTimestamp = (timestamp: Date, timeZone?: string) => {
   const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`;
 };
-

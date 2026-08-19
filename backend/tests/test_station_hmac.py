@@ -11,7 +11,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-import station_hmac
+from security import generate_device_hmac_secret_b64
 from station_hmac import (
     SIGNATURE_VERSION,
     TIMESTAMP_SKEW_SECONDS,
@@ -90,6 +90,27 @@ def test_oversized_body_is_rejected_with_413(provisioned_station):
     assert exc.value.status_code == 413
 
 
+def test_unprovisioned_station_oversized_body_also_413s(setup_station_dir, monkeypatch):
+    """The body cap applies before the secret lookup: if only provisioned
+    stations 413'd an oversized body, the 401/413 difference would reveal which
+    station ids are provisioned — the probe the shared generic 401 prevents."""
+    data_dir, station_id = setup_station_dir  # station exists, but no secret
+    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
+    path = f"/v1/ingest/stations/{station_id}/images"
+    body = b"x" * 64
+    headers = eagleshot_signing.sign_request(
+        station_id=station_id,
+        secret_b64=generate_device_hmac_secret_b64(),
+        method="POST",
+        path=path,
+        body=body,
+    )
+    request = _build_request("POST", path, headers, body)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(verify_station_signature(station_id, request, max_body_bytes=16))
+    assert exc.value.status_code == 413
+
+
 def test_replayed_nonce_is_rejected(provisioned_station):
     station_id, secret_b64 = provisioned_station
     path = f"/v1/ingest/stations/{station_id}/images"
@@ -153,7 +174,7 @@ def test_tampered_body_is_rejected(provisioned_station):
 def test_wrong_secret_is_rejected(provisioned_station):
     station_id, _ = provisioned_station
     # An attacker who doesn't know the real secret picks a random one.
-    bogus_b64 = station_hmac.generate_device_hmac_secret_b64()
+    bogus_b64 = generate_device_hmac_secret_b64()
     path = f"/v1/ingest/stations/{station_id}/images"
     body = b"x"
     headers = eagleshot_signing.sign_request(
@@ -177,7 +198,7 @@ def test_station_without_secret_is_rejected(setup_station_dir, monkeypatch):
     body = b"x"
     headers = eagleshot_signing.sign_request(
         station_id=station_id,
-        secret_b64=station_hmac.generate_device_hmac_secret_b64(),
+        secret_b64=generate_device_hmac_secret_b64(),
         method="POST",
         path=path,
         body=body,

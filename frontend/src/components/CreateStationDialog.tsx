@@ -187,8 +187,9 @@ export const CreateStationDialog: React.FC<CreateStationDialogProps> = ({ trigge
     if (!cleanTitle) errors.title = "Station name is required.";
     if (lat === null || lon === null) errors.coordinates = "Pick the station location on the map.";
     const altValue = alt.trim();
-    const altNumber = altValue ? Number(altValue) : 0;
-    if (!Number.isFinite(altNumber)) {
+    // Empty altitude means "unknown" and is stored as null, never as 0.
+    const altNumber = altValue ? Number(altValue) : null;
+    if (altNumber !== null && !Number.isFinite(altNumber)) {
       errors.coordinates = "Altitude must be a valid number.";
     }
     if (errors.title || errors.coordinates) {

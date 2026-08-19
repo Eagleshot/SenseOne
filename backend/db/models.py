@@ -110,7 +110,7 @@ class Station(Base):
     country_emoji: Mapped[str] = mapped_column(Text, nullable=False, default="")
     lat: Mapped[float] = mapped_column(Double, nullable=False, default=0.0)
     lon: Mapped[float] = mapped_column(Double, nullable=False, default=0.0)
-    alt: Mapped[float] = mapped_column(Double, nullable=False, default=0.0)
+    alt: Mapped[float | None] = mapped_column(Double, nullable=True, default=None)
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # schedule
     station_start_time: Mapped[str] = mapped_column(String(5), nullable=False, default="06:00")
@@ -140,11 +140,16 @@ class Station(Base):
 
 
 class StationDeviceSecret(Base):
-    """Per-station HMAC secret(s). Symmetric, so stored RECOVERABLY (encrypted at rest).
+    """Per-station HMAC secret. Symmetric, so stored recoverably (envelope
+    encryption at rest is a planned hardening step — see
+    station_repo.read_device_secret_b64).
 
-    Multiple rows per station support rotation WITH OVERLAP: rotating sets
-    `expires_at` on the old row instead of dropping it, so a device that hasn't
-    been re-flashed keeps verifying during the grace window.
+    Rotation is immediate and exclusive: provisioning a new secret deletes the
+    previous row (station_repo.provision_device_secret), so a device still
+    flashed with the old secret gets 401s until it is re-flashed. There is
+    deliberately no overlap/grace window. `expires_at` (NULL = active) lets a
+    row be time-limited — the read path honours it — but rotation never leaves
+    two secrets live.
     """
 
     __tablename__ = "station_device_secrets"
@@ -153,7 +158,7 @@ class StationDeviceSecret(Base):
     station_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("stations.id", ondelete="CASCADE"), nullable=False
     )
-    secret_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)  # encrypted base64url secret
+    secret_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)  # base64url secret (at-rest encryption planned)
     created_at: Mapped[datetime] = _created_at()
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # NULL = active
 

@@ -10,14 +10,21 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
+from api_docs import (
+    CURRENT_WEATHER_RESPONSE,
+    FORECAST_WEATHER_RESPONSE,
+    PNG_RESPONSE_CONTENT,
+    error_response,
+)
 from auth import get_current_user, get_optional_current_user
-from db import sqlite_repo
+from db import station_repo
 from settings import get_settings
 from station_access import require_station_view
 from routes import ValidStationId
+from models import ReverseGeocodeResponse
 
 
-router = APIRouter(tags=["Stations"])
+router = APIRouter(tags=["Weather"])
 
 # OpenWeather Maps 1.0 overlay layers we allow proxying (the "_new" styled tiles).
 WEATHER_TILE_LAYERS = {
@@ -53,7 +60,10 @@ def _get_openweather_client() -> httpx.AsyncClient:
 
 
 class TTLCache:
-    """Process-wide, size-bounded cache of values with per-entry expiry.
+    """Process-local, size-bounded cache of values with per-entry expiry.
+
+    Assumes the single-worker deployment (see main.py docstring): per-worker
+    copies would multiply upstream OpenWeather calls against the quota.
 
     Stored as key -> (expiry_monotonic, value). Caching one upstream OpenWeather
     response and replaying it for the refresh window collapses many viewers'
@@ -156,7 +166,7 @@ async def fetch_openweather(
 
 def station_coordinates_for_weather(station_id: str) -> tuple[float, float]:
     """Get coordinates for weather API calls."""
-    config = sqlite_repo.station_config(station_id)
+    config = station_repo.station_config(station_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Unknown station id.")
     lat = config.lat
@@ -171,12 +181,13 @@ def station_coordinates_for_weather(station_id: str) -> tuple[float, float]:
 @router.get(
     "/stations/{station_id}/weather/current",
     summary="Get current weather",
-    description=(
-        "Proxy the current weather for this station from OpenWeather, using the "
-        "station's stored coordinates and metric units. Upstream failures are "
-        "surfaced as 502 so clients don't mistake them for issues with this "
-        "service. Requires `OPENWEATHER_API_KEY` in the server environment."
-    ),
+    description="Return current metric weather for the station's coordinates.",
+    responses={
+        200: CURRENT_WEATHER_RESPONSE,
+        400: error_response("The station coordinates are not configured."),
+        404: error_response("The station was not found."),
+        502: error_response("Weather data is unavailable."),
+    },
 )
 async def get_station_current_weather(
     station_id: ValidStationId,
@@ -190,11 +201,13 @@ async def get_station_current_weather(
 @router.get(
     "/stations/{station_id}/weather/forecast",
     summary="Get weather forecast",
-    description=(
-        "Proxy the multi-day forecast for this station from OpenWeather, using "
-        "the station's stored coordinates and metric units. Upstream failures "
-        "surface as 502. Requires `OPENWEATHER_API_KEY` in the server environment."
-    ),
+    description="Return a metric weather forecast for the station's coordinates.",
+    responses={
+        200: FORECAST_WEATHER_RESPONSE,
+        400: error_response("The station coordinates are not configured."),
+        404: error_response("The station was not found."),
+        502: error_response("Weather data is unavailable."),
+    },
 )
 async def get_station_weather_forecast(
     station_id: ValidStationId,
@@ -207,14 +220,13 @@ async def get_station_weather_forecast(
 
 @router.get(
     "/geo/reverse",
+    response_model=ReverseGeocodeResponse,
     summary="Reverse geocode coordinates",
-    description=(
-        "Resolve coordinates to the nearest place name and ISO country code via "
-        "OpenWeather's geocoding API (the API key stays server-side). Used to "
-        "prefill the location/country fields when placing a new station on the "
-        "map. Signed-in users only; results are cached server-side for a day. "
-        "Returns nulls when OpenWeather knows no place there (e.g. open ocean)."
-    ),
+    description="Resolve coordinates to a place name, country code, and region.",
+    responses={
+        401: error_response("A valid session is required."),
+        502: error_response("Reverse geocoding is unavailable."),
+    },
 )
 async def reverse_geocode(
     lat: float = Query(..., ge=-90, le=90, description="Latitude in decimal degrees."),
@@ -248,14 +260,14 @@ async def reverse_geocode(
 
 @router.get(
     "/weather/map/{layer}/{z}/{x}/{y}",
+    response_class=Response,
     summary="Get a weather map overlay tile",
-    description=(
-        "Proxy an OpenWeather Maps 1.0 overlay tile (clouds / precipitation / "
-        "temperature / wind / pressure) so the API key stays server-side. Returns "
-        "a PNG tile; upstream failures surface as 502. The overlay is shown on the "
-        "public station map, so this endpoint is unauthenticated like the base map "
-        "tiles. Requires `OPENWEATHER_API_KEY` in the server environment."
-    ),
+    description="Return a PNG weather overlay tile for a supported layer.",
+    responses={
+        200: {"description": "PNG weather tile.", "content": PNG_RESPONSE_CONTENT},
+        404: error_response("The layer or tile coordinates are unsupported."),
+        502: error_response("The weather tile is unavailable."),
+    },
 )
 async def get_weather_map_tile(layer: str, z: int, x: int, y: int) -> Response:
     if layer not in WEATHER_TILE_LAYERS:

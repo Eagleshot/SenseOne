@@ -32,7 +32,6 @@ Notes:
 
 import hashlib
 import hmac
-import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -40,15 +39,14 @@ from pathlib import Path
 from fastapi import HTTPException, Request, status
 
 from settings import get_data_dir
-from db import sqlite_repo
+from db import station_repo
 from station_access import require_station_exists
-from utils import b64url_decode_nopad, b64url_encode_nopad
+from utils import b64url_decode_nopad
 
 
 SIGNATURE_VERSION = "v1"
 TIMESTAMP_SKEW_SECONDS = 300
 NONCE_RETENTION_SECONDS = 2 * TIMESTAMP_SKEW_SECONDS
-DEVICE_HMAC_SECRET_BYTES = 32
 NONCE_DB_FILENAME = "device_nonces.db"
 MIN_NONCE_HEX_LENGTH = 16
 SIGNATURE_HEX_LENGTH = 64
@@ -59,11 +57,6 @@ SIGNATURE_HEX_LENGTH = 64
 DEFAULT_MAX_SIGNED_BODY_BYTES = 25 * 1024 * 1024
 
 
-def generate_device_hmac_secret_b64() -> str:
-    """Return a fresh base64url-encoded device HMAC secret (no padding)."""
-    return b64url_encode_nopad(secrets.token_bytes(DEVICE_HMAC_SECRET_BYTES))
-
-
 def provision_device_hmac_secret(station_id: str) -> str:
     """Generate, persist, and return a fresh device HMAC secret for a station.
 
@@ -72,7 +65,7 @@ def provision_device_hmac_secret(station_id: str) -> str:
     not expose it again.
     """
     require_station_exists(station_id)
-    return sqlite_repo.provision_device_secret(station_id)
+    return station_repo.provision_device_secret(station_id)
 
 
 def canonical_signing_string(
@@ -200,7 +193,10 @@ async def verify_station_signature(
     an existing station with no secret provisioned, and a provisioned station
     with a bad signature all 401 with the same generic detail, so unauthenticated
     callers can't probe which station ids exist or are provisioned (404 vs 401,
-    or "signature mismatch" vs "unknown station").
+    or "signature mismatch" vs "unknown station"). For the same reason the body
+    is read and hashed BEFORE the secret lookup: a 413 (or the time spent
+    consuming a large body) must not differ between unknown and provisioned
+    station ids.
     """
     header_station = request.headers.get("X-Station-Id", "").strip()
     raw_timestamp = request.headers.get("X-Timestamp", "").strip()
@@ -239,10 +235,29 @@ async def verify_station_signature(
     ):
         _reject("Invalid X-Signature.")
 
+    # Read, cap, and hash the body BEFORE the secret lookup, for every caller:
+    # if only provisioned stations consumed the body, an oversized body's 413
+    # (or the time spent hashing a large one) would reveal whether a station id
+    # is provisioned — the very probe the shared generic 401 below is hiding.
+    # The cost is that unauthenticated callers get to buffer up to
+    # max_body_bytes, which the per-route caps bound.
+    body = await _read_body_capped(request, max_body_bytes)
+    body_sha256_hex = hashlib.sha256(body).hexdigest()
+
+    # X-Filename is signed (see module docstring): it sets an uploaded image's
+    # capture timestamp/stream, so an on-path attacker must not be able to alter
+    # it. An absent header signs as "". Non-ASCII can never match a valid
+    # signature (and would crash the ASCII canonical), so reject it as a 401 —
+    # also before the secret lookup, so the rejection detail doesn't vary with
+    # whether the station is provisioned.
+    x_filename = request.headers.get("x-filename", "")
+    if not x_filename.isascii():
+        _reject("Invalid X-Filename.")
+
     # Unknown station, station-without-secret, and (below) a provisioned station
     # with a bad signature all reject with the SAME generic detail, so a caller
     # can't tell which station ids exist or are provisioned (see docstring).
-    secret_b64 = sqlite_repo.read_device_secret_b64(station_id)
+    secret_b64 = station_repo.read_device_secret_b64(station_id)
     if not secret_b64:
         _reject("Signature verification failed.")
         return b""
@@ -251,17 +266,6 @@ async def verify_station_signature(
     except ValueError:  # binascii.Error subclasses ValueError
         _reject("Signature verification failed.")
         return b""
-
-    body = await _read_body_capped(request, max_body_bytes)
-    body_sha256_hex = hashlib.sha256(body).hexdigest()
-
-    # X-Filename is signed (see module docstring): it sets an uploaded image's
-    # capture timestamp/stream, so an on-path attacker must not be able to alter
-    # it. An absent header signs as "". Non-ASCII can never match a valid
-    # signature (and would crash the ASCII canonical), so reject it as a 401.
-    x_filename = request.headers.get("x-filename", "")
-    if not x_filename.isascii():
-        _reject("Invalid X-Filename.")
 
     canonical = canonical_signing_string(
         station_id=station_id,
@@ -281,4 +285,3 @@ async def verify_station_signature(
         _reject("Nonce already used.")
 
     return body
-    

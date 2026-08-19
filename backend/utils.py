@@ -1,6 +1,7 @@
 """Utility functions for the Eagleshot API."""
 
 import base64
+import math
 import re
 import unicodedata
 from datetime import datetime, timezone
@@ -57,6 +58,23 @@ def strip_control_characters(value: str, *, allow_newlines: bool = False) -> str
     """Remove control characters and bidi-override marks from user text."""
     pattern = _TEXT_DISALLOWED_KEEP_NEWLINE if allow_newlines else _TEXT_DISALLOWED
     return pattern.sub("", value)
+
+
+def without_non_finite_floats(value):
+    """Copy of a JSON-ready structure with inf/nan floats stringified.
+
+    Validation-error payloads echo the offending input, and JSON bodies can
+    carry non-finite floats (``1e999`` parses to inf, ``NaN`` is accepted by
+    the parser). Starlette renders JSON with allow_nan=False, so an unsanitized
+    echo crashes the 422 response itself into a 500.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: without_non_finite_floats(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [without_non_finite_floats(item) for item in value]
+    return value
 
 
 def sanitize_filename(raw_name: str) -> str:

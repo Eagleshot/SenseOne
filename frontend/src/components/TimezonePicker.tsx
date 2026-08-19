@@ -83,8 +83,8 @@ export const TimezonePicker: React.FC<TimezonePickerProps> = ({
                     handleOpenChange(false);
                   }}
                   className={cn(
-                    "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent",
-                    option.value === value && "bg-accent",
+                    "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm text-popover-foreground transition-colors hover:bg-primary/10 hover:text-popover-foreground",
+                    option.value === value && "bg-primary/15 hover:bg-primary/20",
                   )}
                 >
                   <span className="truncate">{option.label}</span>

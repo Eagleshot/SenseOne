@@ -118,5 +118,39 @@ Offer as a hosted service. The **station is the unit of value and of cost** — 
     - `**` Sensor retention: CHF/additional year
     - `***` SMS alerts — per-message pass-through (email/webhook are included).
 
+## Coupled changes (landmines)
+
+Deferred couplings that are documented as comments at the code sites; this section is
+the index so they're findable when the triggering change happens. Pointers are
+file + symbol, not line numbers.
+
+- **User deletion** (none exists today) → invalidate the `users._known_to_have_users`
+  cache; delete the user's `auth_sessions` rows (keyed by email, no FK, so they are not
+  cascaded); and note `Station.owner_id` is `ON DELETE CASCADE` — deleting a user
+  destroys their stations' DB data, while the image blobs need an explicit
+  `image_store.delete_prefix` per station (like the delete-station route does).
+- **User email change** → `auth_sessions.email` keys break (sessions orphan silently).
+  Re-key sessions by user id when this lands.
+- **Account/tenant layer** → `users.plan` moves with the owning entity (see the comment
+  on `db.models.User.plan`); `entitlements.limits_for` is written to survive this.
+- **Enforcing entitlements** → wire `entitlements.limits_for()` into image upload
+  (resolution/size), station creation (`included_station_count`), and capture-interval
+  validation. Retention is Job 1 of the background-job runner above.
+- **Device-secret encryption at rest** → `station_device_secrets.secret_enc` stores the
+  raw base64url secret today; envelope encryption with a server key is the planned
+  hardening (see `db.models.StationDeviceSecret` and `station_repo.read_device_secret_b64`).
+- **Orphan image blobs** → upload writes the blob before the DB row; station delete
+  removes the DB row before the blobs — a mid-operation failure leaves orphan files
+  either way. Reaped by the retention sweep, phase 2 (background-job runner above).
+- **Multi-worker deploy** → per-process state degrades: the login throttle and the
+  OpenWeather caches (inventory in the `backend/main.py` docstring; worker count is
+  pinned in `backend/Dockerfile`). Jobs must be pinned to one instance via
+  `APP_RUN_JOBS` (background-job runner above). Sessions and replay nonces are already
+  DB/file-backed and safe.
+- **Leaving SQLite** → `db.session.get_engine` refuses non-sqlite URLs deliberately;
+  the sqlite-dialect upserts (`station_repo.resolve_datastream`,
+  `station_repo.append_image`) must be ported first. Also: with WAL, a plain file copy
+  of a live `control.db` is not a safe backup — use `sqlite3 .backup` or Litestream.
+
 
 

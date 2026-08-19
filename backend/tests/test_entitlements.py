@@ -1,7 +1,7 @@
 """Tests for the entitlements seam (entitlements.py)."""
 
 from entitlements import DEFAULT_PLAN, PLANS, Limits, limits_for, plan_for
-from users import User
+from user_db import User
 
 
 def _user(plan: str) -> User:

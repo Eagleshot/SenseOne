@@ -1,32 +1,79 @@
 import type { DateRange } from "react-day-picker";
 
 import { SensorData } from "@/data/types";
+import { zonedDateTimeToInstant } from "@/lib/datetime";
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
-// How much history is fetched from the backend. The default matches the
-// fetch on page load; the maximum mirrors the backend's cap (hours<=168).
+// Relative presets are limited to one rolling year. Absolute ranges may
+// request any past date stored for the station.
 export const DEFAULT_HISTORY_HOURS = 24;
-export const MAX_HISTORY_HOURS = 168;
+export const MAX_HISTORY_HOURS = 365 * 24;
 
 /** Backend fetch window (in hours back from now) needed to cover a picked
- * range: from the start of the range's first day, clamped to the backend cap
- * and never below the default (so the latest-reading consumers always have
- * the most recent day). */
+ * range: from the start of the range's first day, never below the default (so
+ * the latest-reading consumers always have the most recent day). */
 export const historyWindowHoursForRange = (from: Date | undefined, now: Date = new Date()): number => {
   if (!from) return DEFAULT_HISTORY_HOURS;
   const startOfFromDay = new Date(from);
   startOfFromDay.setHours(0, 0, 0, 0);
   const hours = Math.ceil((now.getTime() - startOfFromDay.getTime()) / (60 * 60 * 1000));
-  return Math.min(MAX_HISTORY_HOURS, Math.max(DEFAULT_HISTORY_HOURS, hours));
+  return Math.max(DEFAULT_HISTORY_HOURS, hours);
 };
 
-/** Earliest calendar day the date picker should allow: the start of the day
- * that the backend's maximum lookback window can still reach. */
-export const minSelectableHistoryDate = (now: Date = new Date()): Date => {
-  const earliest = new Date(now.getTime() - MAX_HISTORY_HOURS * 60 * 60 * 1000);
-  earliest.setHours(0, 0, 0, 0);
-  return earliest;
+/** Quick rolling-window presets in the range picker; the calendar plus the
+ * time inputs remain the unrestricted absolute alternative. */
+export const HISTORY_RANGE_PRESETS: ReadonlyArray<{ label: string; hours: number }> = [
+  { label: "Last 1 h", hours: 1 },
+  { label: "Last 6 h", hours: 6 },
+  { label: "Last 24 h", hours: 24 },
+  { label: "Last 3 days", hours: 3 * 24 },
+  { label: "Last 7 days", hours: 7 * 24 },
+  { label: "Last 30 days", hours: 30 * 24 },
+  { label: "Last 90 days", hours: 90 * 24 },
+  { label: "Last 6 months", hours: 182 * 24 },
+  { label: "Last year", hours: MAX_HISTORY_HOURS },
+];
+
+/** Backend fetch window covering a "last N hours" preset. Short presets keep
+ * the default fetch, while quick ranges remain bounded to the largest preset. */
+export const historyWindowHoursForLastHours = (hours: number): number =>
+  Math.min(MAX_HISTORY_HOURS, Math.max(DEFAULT_HISTORY_HOURS, Math.ceil(hours)));
+
+export type HistoryTimeRange = readonly [start: number, end: number];
+
+type HistoryTimeRangeOptions = {
+  dateRange?: DateRange;
+  timeFrom: string;
+  timeTo: string;
+  timezone: string;
+  lastHours?: number;
+  now?: Date;
+};
+
+/** Exact x-axis domain represented by the active relative or absolute picker
+ * selection. The end minute is inclusive, matching filterHistoricalData. */
+export const historyTimeRangeForSelection = ({
+  dateRange,
+  timeFrom,
+  timeTo,
+  timezone,
+  lastHours,
+  now = new Date(),
+}: HistoryTimeRangeOptions): HistoryTimeRange => {
+  if (lastHours !== undefined) {
+    return [now.getTime() - lastHours * 60 * 60 * 1000, now.getTime()];
+  }
+
+  if (!dateRange?.from) {
+    return [now.getTime() - DEFAULT_HISTORY_HOURS * 60 * 60 * 1000, now.getTime()];
+  }
+
+  const start = zonedDateTimeToInstant(dateRange.from, timeFrom, timezone).getTime();
+  let end = zonedDateTimeToInstant(dateRange.to ?? dateRange.from, timeTo, timezone).getTime() + 60_000 - 1;
+  // A same-day time window such as 22:00–06:00 crosses midnight.
+  if (end < start) end += DAY_IN_MS;
+  return [start, end];
 };
 
 type HistoryFilterOptions = {
@@ -35,6 +82,11 @@ type HistoryFilterOptions = {
   timeFrom: string;
   timeTo: string;
   timezone: string;
+  /** Active "last N hours" preset. When set it replaces the date/time
+   * filtering entirely: a rolling window is instant-based and cannot be
+   * expressed as calendar days plus a per-day time window. */
+  lastHours?: number;
+  now?: Date;
 };
 
 export const createDefaultHistoryDateRange = (): DateRange => ({
@@ -99,7 +151,12 @@ const getDateKeyAndMinuteOfDay = (value: Date, formatter: Intl.DateTimeFormat) =
   };
 };
 
-export const filterHistoricalData = ({ data, dateRange, timeFrom, timeTo, timezone }: HistoryFilterOptions) => {
+export const filterHistoricalData = ({ data, dateRange, timeFrom, timeTo, timezone, lastHours, now }: HistoryFilterOptions) => {
+  if (lastHours !== undefined) {
+    const cutoff = (now ?? new Date()).getTime() - lastHours * 60 * 60 * 1000;
+    return data.filter((row) => row.timestamp.getTime() >= cutoff);
+  }
+
   const fromDateKey = dateRange?.from ? getLocalDateKey(dateRange.from) : undefined;
   const toDateKey = dateRange?.to ? getLocalDateKey(dateRange.to) : undefined;
   const fromMinutes = parseTimeToMinutes(timeFrom);
@@ -114,4 +171,3 @@ export const filterHistoricalData = ({ data, dateRange, timeFrom, timeTo, timezo
     return isMinuteWithinRange(minuteOfDay, fromMinutes, toMinutes);
   });
 };
-

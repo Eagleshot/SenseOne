@@ -38,7 +38,6 @@ export const Sidebar: React.FC = () => {
   const {
     isDarkMode,
     toggleDarkMode,
-    brandLogoUrl,
     setTimezone,
     timezones,
     timezonePreference,
@@ -64,7 +63,7 @@ export const Sidebar: React.FC = () => {
   const sidebarActionButtonClass = `${sidebarSurfaceClass} text-sidebar-foreground hover:border-primary/25 hover:bg-sidebar-accent/80 ${sidebarInsetFocusClass}`;
   // Full-width "solid" variant (translucent page background) used by the New station / Logout buttons.
   const sidebarSolidActionButtonClass = `w-full justify-center gap-2 border-sidebar-border/90 bg-background/60 text-sidebar-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] hover:border-primary/25 hover:bg-background/80 ${sidebarInsetFocusClass}`;
-  const sidebarIconButtonClass = `chrome-shell-stroke rounded-lg border border-sidebar-border/80 bg-sidebar-accent/80 p-2 text-sidebar-foreground transition-colors hover:bg-sidebar-accent ${sidebarInsetFocusClass}`;
+  const sidebarIconButtonClass = `chrome-shell-stroke rounded-lg border border-sidebar-border/80 bg-sidebar-accent/80 p-2 text-sidebar-foreground transition-colors duration-200 ease-out hover:bg-sidebar-accent ${sidebarInsetFocusClass}`;
   const sidebarFieldClass = `${sidebarSurfaceClass} ${sidebarInsetFocusClass}`;
 
   // "Station local" leads the list (it is also the default preference); its
@@ -160,11 +159,7 @@ export const Sidebar: React.FC = () => {
         <div className="flex h-full w-screen max-w-[22rem] flex-col lg:w-[320px]">
           <div className="flex items-center justify-between p-4">
             <div className="flex items-center">
-              <img
-                src={brandLogoUrl || "/logo.png"}
-                alt="Eagleshot"
-                className={cn("h-8 w-auto", !brandLogoUrl && "dark:invert dark:brightness-0")}
-              />
+              <img src="/logo.png" alt="Eagleshot" className="h-8 w-auto dark:invert dark:brightness-0" />
             </div>
             <button
               onClick={toggleSidebar}
@@ -196,10 +191,9 @@ export const Sidebar: React.FC = () => {
                     setActiveWebcam(webcam);
                     if (isMobile) setSidebarOpen(false);
                   }}
-                  whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   className={cn(
-                    `chrome-shell-stroke relative w-full rounded-xl border p-3 text-left transition-all duration-200 ${sidebarInsetFocusClass}`,
+                    `chrome-shell-stroke relative w-full rounded-xl border p-3 text-left transition-colors duration-200 ease-out ${sidebarInsetFocusClass}`,
                     activeWebcam.id === webcam.id
                       ? "border-primary/60 bg-sidebar-accent shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(15,23,42,0.08)]"
                       : `${sidebarSurfaceClass} hover:border-primary/25 hover:bg-sidebar-accent`
@@ -307,7 +301,7 @@ export const Sidebar: React.FC = () => {
                           type="button"
                           onClick={() => setShowPassword((prev) => !prev)}
                           aria-label={showPassword ? "Hide password" : "Show password"}
-                          className="absolute right-2 top-1/2 z-10 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                          className="absolute right-2 top-1/2 z-10 -translate-y-1/2 text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground"
                         >
                           {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </button>
@@ -368,7 +362,7 @@ export const Sidebar: React.FC = () => {
                 <Settings className="h-4 w-4" />
                 Settings
               </span>
-              <ChevronDown className={cn("h-4 w-4 transition-transform", isSettingsOpen && "rotate-180")} />
+              <ChevronDown className={cn("h-4 w-4 transition-transform duration-200 ease-out", isSettingsOpen && "rotate-180")} />
             </button>
 
             <AnimatePresence initial={false}>
@@ -389,16 +383,19 @@ export const Sidebar: React.FC = () => {
                       value={timezonePreference}
                       options={timezoneOptions}
                       onChange={setTimezone}
-                      triggerClassName={cn("text-sm", sidebarFieldClass)}
+                      triggerClassName={cn(
+                        "text-sm hover:bg-primary/10 hover:text-sidebar-foreground",
+                        sidebarFieldClass,
+                      )}
                     />
                   </div>
 
                   <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <label htmlFor="dark-mode-toggle" className="flex items-center gap-2 text-xs text-muted-foreground">
                       {isDarkMode ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
                       Dark Mode
                     </label>
-                    <Switch checked={isDarkMode} onCheckedChange={toggleDarkMode} />
+                    <Switch id="dark-mode-toggle" checked={isDarkMode} onCheckedChange={toggleDarkMode} />
                   </div>
                 </motion.div>
               )}
@@ -416,7 +413,7 @@ export const Sidebar: React.FC = () => {
             onClick={toggleSidebar}
             aria-label="Open sidebar"
             className={cn(
-              "chrome-shell-stroke fixed left-3 top-3 z-50 rounded-xl border border-border bg-card p-3 shadow-soft-lg transition-all hover:shadow-soft-xl md:left-4 md:top-4",
+              "chrome-shell-stroke fixed left-3 top-3 z-50 rounded-xl border border-border bg-card p-3 shadow-soft-lg transition-shadow duration-200 ease-out hover:shadow-soft-xl md:left-4 md:top-4",
               sidebarInsetFocusClass
             )}
           >

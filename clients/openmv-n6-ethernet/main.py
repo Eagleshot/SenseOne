@@ -12,7 +12,7 @@ import requests
 
 # ----- Configuration ---------------------------------------------------------
 
-BASE_URL = "http://api.eagleshot.org"
+BASE_URL = "https://api.eagleshot.org"
 STATION_ID = "fa2d76110cd8"
 STATION_SECRET_B64 = "Yj7DagG5az05ymWc89CEYqz6eNnyminLP5jNonqp-Jw"
 STREAM = ""  # optional camera/stream token for multi-camera stations; "" = the single default camera
@@ -22,9 +22,11 @@ DATA_PATH = "/v1/ingest/stations/%s/data" % STATION_ID
 CONFIG_PATH = "/v1/ingest/stations/%s/config" % STATION_ID
 CLOCK_PATH = "/clock"
 
-# Capture cadence comes from the server config (captureIntervalMinutes). This is
-# the fallback used when the config can't be fetched or has no usable value.
-DEFAULT_INTERVAL_S = 60 * 60   # 60 minutes
+# Capture cadence and the daily capture window come from the server config
+# (captureIntervalMinutes, stationStartMinute/stationStopMinute in UTC). This is
+# the fallback interval used when the config can't be fetched or has no usable
+# value; without a usable window the device captures around the clock.
+DEFAULT_INTERVAL_S = 60 # * 60   # 60 minutes
 
 
 # ----- HMAC-SHA256 request signing -------------------------------------------
@@ -165,10 +167,21 @@ def setup_ethernet():
     Done a single time so we never re-init/toggle the MAC: on the N6 a re-init or
     a warm reset wedges the PHY until a power cycle, so we bring it up once on a
     clean (cold) boot and then leave it alone.
+
+    On firmware v5.0.0 active(True) blocks until PHY link + autonegotiation
+    complete (up to ~10s) and raises ETIMEDOUT when the link doesn't come up in
+    time, which happens intermittently -- so keep retrying instead of dying.
     """
     lan = network.LAN()
-    lan.active(True)
-    return lan
+    attempt = 1
+    while True:
+        try:
+            lan.active(True)
+            return lan
+        except OSError as exc:
+            print("Ethernet activate failed (attempt %d): %s" % (attempt, exc))
+            attempt += 1
+            time.sleep(5)
 
 
 def wait_for_link(lan):
@@ -284,6 +297,52 @@ def capture_interval_from_config(config):
     return DEFAULT_INTERVAL_S
 
 
+def capture_window_from_config(config):
+    """(startMinute, stopMinute) UTC capture window from a config dict, or None.
+
+    None means capture around the clock: the config was missing/unfetchable, or
+    the window is unusable. useSunriseSunset is not implemented on this device;
+    in that mode the server may store a stale start >= stop (its validator is
+    skipped), which lands in the always-on fallback rather than a window that
+    never opens.
+    """
+    try:
+        start = int(config.get("stationStartMinute"))
+        stop = int(config.get("stationStopMinute"))
+    except (TypeError, ValueError):
+        return None
+    if 0 <= start < stop <= 1439:
+        return (start, stop)
+    return None
+
+
+def in_capture_window(unix_seconds, window):
+    """True when the UTC minute-of-day is inside the inclusive window."""
+    if window is None:
+        return True
+    minute = (int(unix_seconds) % 86400) // 60
+    return window[0] <= minute <= window[1]
+
+
+def next_wake_time(unix_seconds, interval_s, window):
+    """Unix time of the next capture: now + interval, or the next window start.
+
+    When now + interval lands before today's window it snaps forward to today's
+    start; when it lands after the stop it snaps to tomorrow's start.
+    """
+    candidate = int(unix_seconds) + int(interval_s)
+    if window is None:
+        return candidate
+    start_minute, stop_minute = window
+    day_start = candidate - (candidate % 86400)
+    minute = (candidate % 86400) // 60
+    if minute < start_minute:
+        return day_start + start_minute * 60
+    if minute > stop_minute:
+        return day_start + 86400 + start_minute * 60
+    return candidate
+
+
 def capture_name_token(config):
     """Filename token: the server's frozen name token plus the optional STREAM.
 
@@ -309,6 +368,7 @@ interval_s = DEFAULT_INTERVAL_S
 
 while True:
     cycle_start = time.ticks_ms()
+    sleep_target_s = None  # seconds from cycle start to next wake, once known
     try:
         if not lan.isconnected():
             print("Link down, waiting for it to return...")
@@ -316,20 +376,32 @@ while True:
         now = server_unix_seconds()
         config = fetch_config(now)
         interval_s = capture_interval_from_config(config)
+        window = capture_window_from_config(config)
+        next_wake = next_wake_time(now, interval_s, window)
+        sleep_target_s = next_wake - now
         print("Capture interval: %ds (%d min)" % (interval_s, interval_s // 60))
-        jpeg = capture_jpeg(camera)
-        filename = format_capture_filename(now, capture_name_token(config))
-        upload_image(jpeg, filename, now)
-        print("Uploaded", filename)
-        # Report online status: timestamp -> last online, nextStart -> next online.
+        if window is not None and not in_capture_window(now, window):
+            print("Outside capture window (%02d:%02d-%02d:%02d UTC), next capture %s"
+                  % (window[0] // 60, window[0] % 60, window[1] // 60, window[1] % 60,
+                     format_iso_utc(next_wake)))
+        else:
+            jpeg = capture_jpeg(camera)
+            filename = format_capture_filename(now, capture_name_token(config))
+            upload_image(jpeg, filename, now)
+            print("Uploaded", filename)
+        # Report online status: timestamp -> last online, nextStart -> next online
+        # (the actual next wake, so the dashboard countdown stays correct across
+        # the overnight window gap).
         upload_sensor_reading(
             {"timestamp": format_iso_utc(now),
-             "nextStart": format_iso_utc(now + interval_s)},
+             "nextStart": format_iso_utc(next_wake)},
             now,
         )
     except Exception as exc:
         print("Cycle failed:", exc)
     gc.collect()
     elapsed_s = time.ticks_diff(time.ticks_ms(), cycle_start) // 1000
-    time.sleep(max(0, interval_s - elapsed_s))
+    if sleep_target_s is None:
+        sleep_target_s = interval_s
+    time.sleep(max(0, sleep_target_s - elapsed_s))
 

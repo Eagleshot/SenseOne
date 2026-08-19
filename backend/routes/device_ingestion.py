@@ -7,8 +7,9 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
+from api_docs import RAW_IMAGE_REQUEST_BODY, SENSOR_INGESTION_EXAMPLE, error_response
 from constants import ALLOWED_IMAGE_EXTENSIONS
-from db import sqlite_repo
+from db import station_repo
 from image_store import LocalDiskImageStore, get_image_store, station_image_key
 from models import AppConfig, DeviceConfig, ImageUploadResponse, SensorReadingRequest
 from routes import ValidStationId
@@ -23,6 +24,7 @@ from utils import (
     iso_utc,
     media_type_from_path,
     sanitize_filename,
+    without_non_finite_floats,
 )
 
 # Body cap for the signed non-image routes (config has no body; a maximal data
@@ -55,22 +57,15 @@ def _enforce_free_disk(image_store: LocalDiskImageStore, incoming_bytes: int) ->
             detail="Server storage is full. Upload rejected.",
         )
 
-router = APIRouter(prefix="/stations", tags=["Ingest"])
+router = APIRouter(prefix="/stations", tags=["Device ingestion"])
 
 # Error responses common to every signed device route, surfaced in the OpenAPI
 # schema. Each route spreads this and adds the failures specific to its payload.
 # Note: no 404 — an unknown station id 401s like a station without a secret, so
 # unauthenticated callers can't probe which station ids exist.
-_SIGNED_REQUEST_ERRORS: dict[int | str, dict[str, str]] = {
-    400: {"description": "Malformed station id in the request path."},
-    401: {
-        "description": (
-            "Missing or invalid HMAC signature: absent/blank signing headers, "
-            "X-Timestamp outside the ±300 s window, a replayed X-Nonce, a "
-            "signature mismatch, an unknown station id, or no device secret "
-            "provisioned for the station."
-        )
-    },
+_SIGNED_REQUEST_ERRORS: dict[int | str, dict] = {
+    400: error_response("The station id is malformed."),
+    401: error_response("HMAC authentication failed."),
 }
 
 
@@ -122,7 +117,7 @@ def store_uploaded_image(
         image_store.delete(storage_key)
         raise
 
-    sqlite_repo.append_image(
+    station_repo.append_image(
         station_id,
         filename=stored_filename,
         content_type=detected_media_type,
@@ -142,11 +137,8 @@ def _hhmm_to_minutes(value: str) -> int:
     response_model=DeviceConfig,
     summary="Get station config for a device",
     description=(
-        "Return the capture schedule and location a device needs for its next "
-        "wake cycle (start/stop minutes, capture interval, lat/lon/alt). A device "
-        "typically calls this right after syncing its clock, before capturing.\n\n"
-        "Requires a valid **v1 HMAC signature** (`X-Station-Id`, `X-Timestamp`, "
-        "`X-Nonce`, `X-Signature` headers); the request carries no body."
+        "Return the capture schedule and location required for the device's next "
+        "wake cycle. This request has no body."
     ),
     responses=_SIGNED_REQUEST_ERRORS,
 )
@@ -155,7 +147,7 @@ async def get_device_station_config(
     request: Request,
 ) -> DeviceConfig:
     await verify_station_signature(station_id, request, max_body_bytes=MAX_JSON_BODY_BYTES)
-    config = sqlite_repo.station_config(station_id) or AppConfig()
+    config = station_repo.station_config(station_id) or AppConfig()
     return DeviceConfig(
         station_start_minute=_hhmm_to_minutes(config.station_start_time),
         station_stop_minute=_hhmm_to_minutes(config.station_stop_time),
@@ -163,8 +155,11 @@ async def get_device_station_config(
         capture_interval_minutes=config.capture_interval_minutes,
         lat=config.lat,
         lon=config.lon,
-        alt=config.alt,
-        name=sqlite_repo.station_name_token(station_id),
+        # Firmware expects a plain number; an unknown altitude degrades to 0.0
+        # (only feeds the optional sunrise/sunset computation, where the error
+        # is negligible).
+        alt=config.alt if config.alt is not None else 0.0,
+        name=station_repo.station_name_token(station_id),
     )
 
 
@@ -174,29 +169,18 @@ async def get_device_station_config(
     status_code=status.HTTP_201_CREATED,
     summary="Upload one image",
     description=(
-        "Store one image capture for an existing station. The request body is the "
-        "**raw image bytes** (not multipart); set `Content-Type` to `image/jpeg`, "
-        "`image/png`, or `image/webp`. The server also sniffs the bytes and rejects "
-        "anything that is not a real image of a supported type.\n\n"
-        "Requires a valid **v1 HMAC signature** (`X-Station-Id`, `X-Timestamp`, "
-        "`X-Nonce`, `X-Signature` headers). Uploads are capped at "
-        "`APP_MAX_UPLOAD_BYTES` (default 25 MB) and refused once free disk would "
-        "drop below `APP_MIN_FREE_DISK_BYTES`.\n\n"
-        "Capture time and camera are read from `X-Filename`."
+        "Upload raw JPEG, PNG, or WebP bytes. `X-Filename`, when supplied, must "
+        "contain the UTC capture minute and camera name."
     ),
     responses={
         **_SIGNED_REQUEST_ERRORS,
-        400: {"description": "Invalid Content-Length, empty body, or malformed station id."},
-        413: {"description": "Upload exceeds APP_MAX_UPLOAD_BYTES."},
-        415: {"description": "Unsupported image type, or the bytes are not a recognised image."},
-        422: {
-            "description": (
-                "A supplied X-Filename is malformed (must match "
-                "YYYYMMDD_HHMMZ_<camera>.<ext>)."
-            )
-        },
-        507: {"description": "Server storage is full; the upload was refused."},
+        400: error_response("The upload is empty or malformed."),
+        413: error_response("The upload is too large."),
+        415: error_response("The image type is unsupported or unrecognized."),
+        422: error_response("X-Filename must match YYYYMMDD_HHMMZ_<camera>.<ext>."),
+        507: error_response("The upload could not be stored."),
     },
+    openapi_extra=RAW_IMAGE_REQUEST_BODY,
 )
 async def upload_station_image(
     station_id: ValidStationId,
@@ -204,10 +188,8 @@ async def upload_station_image(
     x_filename: str | None = Header(
         default=None,
         description=(
-            "Capture filename `YYYYMMDD_HHMMZ_<camera>.<ext>` — the UTC capture "
-            "minute plus a camera/stream token. Optional: when omitted or blank the "
-            "server stamps a default name from the current UTC minute. When supplied "
-            "it must match this format, otherwise the upload is rejected with 422."
+            "Optional capture filename in `YYYYMMDD_HHMMZ_<camera>.<ext>` format. "
+            "Its exact value is included in the HMAC signing string."
         ),
     ),
 ) -> ImageUploadResponse:
@@ -232,7 +214,7 @@ async def upload_station_image(
     # self-identifying: an omitted/bare-timestamp name becomes
     # YYYYMMDD_HHMMZ_<name>.jpg; a name the device already supplied is kept as-is.
     # A supplied name must still match the capture format (store_uploaded_image enforces it).
-    name_token = sqlite_repo.station_name_token(station_id)
+    name_token = station_repo.station_name_token(station_id)
     provided_name = (x_filename or "").strip()
     filename = (
         inject_name_if_missing(sanitize_filename(provided_name), name_token)
@@ -254,34 +236,23 @@ async def upload_station_image(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Upload one device check-in",
     description=(
-        "Append one device check-in to a station's history. The signed JSON body is a "
-        "shared envelope — optional `timestamp`, `nextStart`, and device log fields "
-        "(`firmwareVersion`, `wakeReason`) — plus a `readings` array, one entry per "
-        "channel. Each reading's `channel` is optional (defaults to `default`) but "
-        "resolved channels must be unique; every other key in a reading is a numeric "
-        "measurement, stored verbatim, so a device can report whatever it measures "
-        "without a server change. `readings` may be omitted/empty for an envelope-only "
-        "heartbeat. When `timestamp` is omitted the server stamps receipt time.\n\n"
-        "On success returns **204 No Content** (no body). Requires a valid **v1 HMAC "
-        "signature** (`X-Station-Id`, `X-Timestamp`, `X-Nonce`, `X-Signature` headers) "
-        "and `Content-Type: application/json`."
+        "Upload a JSON check-in with optional device metadata and a `readings` array. "
+        "Each reading contains an optional channel and numeric measurements. Returns "
+        "204 with no response body."
     ),
     responses={
         **_SIGNED_REQUEST_ERRORS,
-        413: {"description": "Request body exceeds the 1 MiB check-in cap."},
-        422: {
-            "description": (
-                "Body failed validation: bad timestamp/nextStart, a non-numeric or "
-                "out-of-range metric, too many metric fields/readings, an invalid or "
-                "duplicate channel, or an unknown top-level key."
-            )
-        },
+        413: error_response("The request body is too large."),
+        422: error_response("The request body is invalid."),
     },
     openapi_extra={
         "requestBody": {
             "required": True,
             "content": {
-                "application/json": {"schema": SensorReadingRequest.model_json_schema()}
+                "application/json": {
+                    "schema": SensorReadingRequest.model_json_schema(),
+                    "example": SENSOR_INGESTION_EXAMPLE,
+                }
             },
         }
     },
@@ -297,13 +268,15 @@ async def create_sensor_reading(
     try:
         payload = SensorReadingRequest.model_validate_json(body)
     except ValidationError as exc:
+        # The echoed input can contain non-finite floats (a device posting
+        # 1e999/NaN); unsanitized they crash the 422 render into a 500.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=jsonable_encoder(exc.errors()),
+            detail=without_non_finite_floats(jsonable_encoder(exc.errors())),
         ) from exc
     timestamp = payload.timestamp or iso_utc(datetime.now(timezone.utc))
     channel_metrics = [(reading.resolved_channel, reading.metrics) for reading in payload.readings]
-    sqlite_repo.append_reading(
+    station_repo.append_reading(
         station_id,
         timestamp,
         channel_metrics,

@@ -15,8 +15,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from constants import INGEST_API_PREFIX
+from db import station_repo
+from models import AppConfigUpdate
 from routes import device_ingestion
-from station_hmac import generate_device_hmac_secret_b64, provision_device_hmac_secret
+from security import generate_device_hmac_secret_b64
+from station_hmac import provision_device_hmac_secret
 from tests import _db
 from tests import _signing as eagleshot_signing
 
@@ -87,6 +90,18 @@ def test_signed_device_config_succeeds(signed_client):
     # ...while UI-only fields are trimmed out of the device payload.
     for key in ("stationStartTime", "countryEmoji", "title", "isPublic"):
         assert key not in body
+
+
+def test_signed_device_config_unknown_altitude_falls_back_to_zero(signed_client):
+    """Firmware expects a plain number, so a null (unknown) altitude is sent as 0.0."""
+    client, station_id, secret_b64 = signed_client
+    station_repo.save_station_config(station_id, AppConfigUpdate(alt=None))
+
+    path = f"{INGEST_API_PREFIX}/stations/{station_id}/config"
+    response = _get_signed(client, secret_b64, station_id, path)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["alt"] == 0.0
 
 
 def test_signed_device_config_rejects_missing_signature(signed_client):

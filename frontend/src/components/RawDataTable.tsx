@@ -133,7 +133,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
           aria-label={isOpen ? "Collapse raw data" : "Expand raw data"}
           className="w-full flex items-center justify-between pt-4 pb-2 border-t border-foreground/40 text-left transition-colors hover:text-foreground dark:border-foreground/30"
         >
-          <span className="text-base font-semibold text-foreground">Raw Data</span>
+          <h3 className="text-lg font-semibold text-foreground">Raw Data</h3>
           <ChevronDown
             className={cn(
               "w-4 h-4 text-muted-foreground transition-transform duration-200",
@@ -185,7 +185,7 @@ export const RawDataTable: React.FC<RawDataTableProps> = ({ data }) => {
                 {paginatedData.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={columns.length + 2} className="text-center text-sm text-muted-foreground py-8">
-                      No data available for the selected station and date range.
+                      No data available for the selected date range.
                     </TableCell>
                   </TableRow>
                 ) : (

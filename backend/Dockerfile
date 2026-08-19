@@ -20,4 +20,8 @@ EXPOSE 3000
 # default 127.0.0.1). It MUST be scoped to the proxy/cloudflared subnet — see
 # docker-compose.yml. Never set it to "*": that lets any client spoof those
 # headers and bypass HTTPS enforcement and IP throttling.
-CMD ["uvicorn", "main:create_app", "--factory", "--host", "0.0.0.0", "--port", "3000", "--proxy-headers"]
+#
+# --workers 1 is the uvicorn default, pinned deliberately: the login throttle and
+# the OpenWeather caches are process-local — read the main.py docstring before
+# raising this.
+CMD ["uvicorn", "main:create_app", "--factory", "--host", "0.0.0.0", "--port", "3000", "--proxy-headers", "--workers", "1"]

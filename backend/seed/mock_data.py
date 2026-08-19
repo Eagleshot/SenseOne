@@ -89,7 +89,8 @@ WEBCAM_SEED = [
         "location": "Reykjavik",
         "country": "Iceland",
         "countryEmoji": "🇮🇸",
-        "coordinates": {"lat": 64.1466, "lng": -21.9426, "altitude": 15},
+        # No altitude on purpose: seeds the "altitude unknown" case end-to-end.
+        "coordinates": {"lat": 64.1466, "lng": -21.9426},
         "imageFile": "image2.png",
         "isOnline": True,
         "lastUpdateMinutesAgo": 12,
@@ -215,7 +216,7 @@ def generate_historical_data(
 # ----- Seeding assets / config (shared by the seeder) ------------------------
 
 # Dev-only default password for seeded owner accounts (>=12 chars, see
-# users.create_user). Override with the seeder's --owner-password.
+# user_repo.user_create). Override with the seeder's --owner-password.
 DEFAULT_OWNER_PASSWORD = "devpassword123"
 SENSOR_HISTORY_HOURS = 168  # 7 days of hourly readings per station
 

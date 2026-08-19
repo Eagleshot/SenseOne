@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from auth import create_session
 from main import create_app
 from station_hmac import provision_device_hmac_secret
-from users import create_user
+from db.user_repo import user_create
 from tests import _db
 from tests import _signing as eagleshot_signing
 
@@ -34,7 +34,7 @@ def client(db, tmp_data_dir, monkeypatch) -> TestClient:
     monkeypatch.setenv("APP_CORS_ORIGINS", "http://localhost:8080")
     app = create_app()
     try:
-        create_user(TEST_EMAIL, TEST_PASSWORD, is_admin=True)
+        user_create(TEST_EMAIL, TEST_PASSWORD, is_admin=True)
     except ValueError:
         pass
     return TestClient(app)

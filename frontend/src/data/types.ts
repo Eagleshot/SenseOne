@@ -10,7 +10,7 @@ export interface Webcam {
   coordinates: {
     lat: number;
     lng: number;
-    altitude: number;
+    altitude: number | null; // null = altitude unknown
   };
   currentImage?: string | null;
   isOnline?: boolean;

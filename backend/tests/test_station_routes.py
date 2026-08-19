@@ -116,6 +116,80 @@ def test_rename_changes_url_slug_not_id(setup_station_dir, monkeypatch):
     assert detail["name"] == "Renamed Cam"
 
 
+def test_partial_config_update_cannot_persist_invalid_merge(setup_station_dir, monkeypatch):
+    """A field-valid partial update whose merge with the stored config breaks a
+    cross-field rule (start >= stop with sunrise mode off) must 422 — an
+    invalid persisted combination would 500 every later read, station list
+    included."""
+    _, station_id = setup_station_dir
+    admin = RouteUser("00000000-0000-0000-0000-000000000000", is_admin=True)
+    client = _client(monkeypatch, admin)
+
+    # Legal on its own: sunrise mode skips the start/stop order check.
+    first = client.put(
+        f"/stations/{station_id}/config",
+        json={"useSunriseSunset": True, "stationStartTime": "21:00"},
+    )
+    assert first.status_code == 200
+
+    # Turning sunrise off would leave the merged doc with start 21:00 >= stop 20:00.
+    second = client.put(f"/stations/{station_id}/config", json={"useSunriseSunset": False})
+    assert second.status_code == 422
+
+    # The invalid combination was rolled back; reads keep working.
+    assert client.get(f"/stations/{station_id}/config").json()["useSunriseSunset"] is True
+    assert client.get("/stations").status_code == 200
+    assert client.get(f"/stations/{station_id}").status_code == 200
+
+
+def test_partial_update_is_validated_against_stored_config_not_defaults(setup_station_dir, monkeypatch):
+    """Stop 05:00 is invalid against the schema default start (06:00) but valid
+    against a stored start of 04:00 — the cross-field rule must be checked on
+    the MERGED document only, never on the partial payload with defaults
+    filling the gaps."""
+    _, station_id = setup_station_dir
+    admin = RouteUser("00000000-0000-0000-0000-000000000000", is_admin=True)
+    client = _client(monkeypatch, admin)
+
+    assert client.put(f"/stations/{station_id}/config", json={"stationStartTime": "04:00"}).status_code == 200
+    assert client.put(f"/stations/{station_id}/config", json={"stationStopTime": "05:00"}).status_code == 200
+
+    cfg = client.get(f"/stations/{station_id}/config").json()
+    assert cfg["stationStartTime"] == "04:00"
+    assert cfg["stationStopTime"] == "05:00"
+
+
+def test_null_config_field_is_rejected(setup_station_dir, monkeypatch):
+    """Apart from alt (nullable = "altitude unknown"), no config field is
+    nullable in storage; an explicit null is a client bug and must 422 rather
+    than silently mean 'keep the stored value'."""
+    _, station_id = setup_station_dir
+    admin = RouteUser("00000000-0000-0000-0000-000000000000", is_admin=True)
+    client = _client(monkeypatch, admin)
+
+    response = client.put(f"/stations/{station_id}/config", json={"lat": None})
+    assert response.status_code == 422
+
+
+def test_unknown_altitude_is_null_end_to_end(db, monkeypatch):
+    """A station created without an altitude reports null (not a 0.0 sentinel),
+    and an explicit null on PUT /config clears a stored altitude back to
+    unknown."""
+    owner = _db.create_owner("owner@example.com")
+    client = _client(monkeypatch, RouteUser(owner.owner_id))
+
+    # Public so the anonymous detail GETs below can see it.
+    created = client.post("/stations", json={"title": "No Alt Cam", "isPublic": True}).json()
+    station_id = created["id"]
+    assert created["coordinates"]["altitude"] is None
+
+    assert client.put(f"/stations/{station_id}/config", json={"alt": 1000.0}).status_code == 200
+    assert client.get(f"/stations/{station_id}").json()["coordinates"]["altitude"] == 1000.0
+
+    assert client.put(f"/stations/{station_id}/config", json={"alt": None}).status_code == 200
+    assert client.get(f"/stations/{station_id}").json()["coordinates"]["altitude"] is None
+
+
 def test_delete_station_removes_row_and_blobs(setup_station_dir, monkeypatch):
     data_dir, station_id = setup_station_dir
     owner_id = _db.station_owner_id(station_id)
@@ -222,6 +296,13 @@ def test_sensor_readings_use_requested_window(station_with_history, monkeypatch)
     # battery is a registered metric, so its series is unit-tagged.
     battery = next(series for series in body if series["metric"] == "battery")
     assert battery["unit"] == "percent"
+
+
+def test_history_routes_accept_absolute_lookbacks_older_than_a_week(station_with_history, monkeypatch):
+    _, station_id = station_with_history
+
+    assert _client(monkeypatch).get(f"/stations/{station_id}/data?hours=10000").status_code == 200
+    assert _client(monkeypatch).get(f"/stations/{station_id}/readings?hours=10000").status_code == 200
 
 
 def test_reading_envelopes_include_metricless_checkins(setup_station_dir, monkeypatch):

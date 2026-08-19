@@ -14,8 +14,6 @@ export type AppPreferencesState = {
   toggleDarkMode: () => void;
   colorTheme: ColorThemeKey;
   setColorTheme: (theme: ColorThemeKey) => void;
-  brandLogoUrl: string | null;
-  setBrandLogoUrl: (logoUrl: string | null) => void;
   mapStyle: MapStyleKey;
   setMapStyle: (style: MapStyleKey) => void;
   timezone: string;
@@ -54,9 +52,6 @@ export const useAppPreferences = (): AppPreferencesState => {
   const [colorTheme, setColorTheme] = usePersistedState<ColorThemeKey>(
     "colorTheme", () => "embernova", (raw) => (isColorThemeKey(raw) ? raw : undefined),
   );
-  const [brandLogoUrl, setBrandLogoUrl] = usePersistedState<string | null>(
-    "brandLogoUrl", () => null, (raw) => raw,
-  );
   const [mapStyle, setMapStyle] = usePersistedState<MapStyleKey>(
     "mapStyle", () => "abstract", (raw) => (isMapStyleKey(raw) ? raw : undefined),
   );
@@ -66,6 +61,12 @@ export const useAppPreferences = (): AppPreferencesState => {
   const [timezone, setTimezone] = usePersistedState<string>(
     "timezone", () => STATION_LOCAL_TIMEZONE, (raw) => raw,
   );
+
+  // Purge the removed custom-logo preference: an earlier upload could have left
+  // a multi-MB image data URL sitting in localStorage.
+  useEffect(() => {
+    setStoredOptionalString("brandLogoUrl", null);
+  }, []);
 
   // Side effects beyond persistence (usePersistedState already writes each to storage).
   useEffect(() => {
@@ -82,18 +83,14 @@ export const useAppPreferences = (): AppPreferencesState => {
     toggleDarkMode,
     colorTheme,
     setColorTheme,
-    brandLogoUrl,
-    setBrandLogoUrl,
     mapStyle,
     setMapStyle,
     timezone,
     setTimezone,
   }), [
-    brandLogoUrl,
     colorTheme,
     isDarkMode,
     mapStyle,
-    setBrandLogoUrl,
     setColorTheme,
     setMapStyle,
     setTimezone,

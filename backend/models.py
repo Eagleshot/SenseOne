@@ -34,30 +34,37 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
 
+class ServiceInfoResponse(ApiModel):
+    """Basic service information."""
+
+    name: str = Field(description="Service name.")
+    status: str = Field(description="Current service status.")
+
+
+class ClockResponse(ApiModel):
+    """Current server time."""
+
+    unix_seconds: int = Field(description="Current Unix timestamp in seconds.")
+
+
+class SuccessResponse(ApiModel):
+    """Successful action result."""
+
+    success: bool = Field(description="Whether the action succeeded.")
+
+
+class ReverseGeocodeResponse(ApiModel):
+    """Location resolved from coordinates."""
+
+    name: str | None = Field(description="Resolved place name when available.")
+    country_code: str | None = Field(description="ISO country code when available.")
+    state: str | None = Field(description="State or region when available.")
+
+
 class AppConfig(ApiModel):
-    """Persisted configuration document for a station.
+    """Station identity, location, and capture schedule.
 
-    Schedule fields drive when the device captures images. When
-    `useSunriseSunset` is true, the device computes start/stop from the
-    station's lat/lon and the stored start/stop values are ignored
-    operationally (but kept in the document so the UI can show them).
     """
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_legacy_status_fields(cls, data):
-        """Tolerate (ignore) the removed lastOnline/nextOnline keys.
-
-        Older clients fetch the config and PUT the whole document back; before
-        these fields were dropped the response carried them, so a stale client
-        would now trip extra="forbid". Strip them here so those round-trips keep
-        working, without reintroducing the fields or loosening extra="forbid" for
-        genuinely unknown keys.
-        """
-        if isinstance(data, dict):
-            legacy = ("lastOnline", "nextOnline", "last_online", "next_online")
-            if any(key in data for key in legacy):
-                data = {key: value for key, value in data.items() if key not in legacy}
-        return data
 
     station_start_time: str = Field(
         default="06:00",
@@ -90,11 +97,11 @@ class AppConfig(ApiModel):
     )
     lat: float = Field(default=0.0, ge=-90, le=90, description="Latitude in decimal degrees (-90 to 90).")
     lon: float = Field(default=0.0, ge=-180, le=180, description="Longitude in decimal degrees (-180 to 180).")
-    alt: float = Field(
-        default=0.0,
+    alt: float | None = Field(
+        default=None,
         ge=MIN_ALTITUDE_M,
         le=MAX_ALTITUDE_M,
-        description="Altitude in metres above sea level (-500 to 9000).",
+        description="Altitude in metres above sea level (-500 to 9000); null when unknown.",
     )
     location: str = Field(
         default="", max_length=160, description="Place name shown in the UI (e.g. valley or peak)."
@@ -140,6 +147,110 @@ class AppConfig(ApiModel):
         return self
 
 
+class AppConfigUpdate(ApiModel):
+    """Partial update payload for a station's config (PUT /stations/{id}/config).
+
+    Every field is optional: omitted fields keep their stored values, so the
+    schema itself expresses the merge semantics (save_station_config applies
+    only ``model_fields_set``). Explicit ``null`` is rejected — no config field
+    is nullable in storage, so a null can only be a client bug.
+
+    Field-level rules mirror AppConfig (whose descriptions document the
+    semantics — keep the two in sync). The cross-field rule (start < stop
+    unless sunrise mode) is deliberately NOT checked here: it only holds on the
+    merged document, which save_station_config re-validates before commit.
+    Checking it against a partial payload would need the schema defaults to
+    fill the gaps and wrongly reject updates that are valid against the stored
+    document.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_status_fields(cls, data):
+        """Tolerate (ignore) the removed lastOnline/nextOnline keys.
+
+        Older clients fetch the config and PUT the whole document back; before
+        these fields were dropped the GET response carried them, so a stale
+        client would now trip extra="forbid". Strip them here so those
+        round-trips keep working, without reintroducing the fields or loosening
+        extra="forbid" for genuinely unknown keys.
+        """
+        if isinstance(data, dict):
+            legacy = ("lastOnline", "nextOnline", "last_online", "next_online")
+            if any(key in data for key in legacy):
+                data = {key: value for key, value in data.items() if key not in legacy}
+        return data
+
+    station_start_time: str | None = Field(
+        default=None, description="Earliest capture time of day, HH:MM 24-hour format."
+    )
+    station_stop_time: str | None = Field(
+        default=None, description="Latest capture time of day, HH:MM 24-hour format."
+    )
+    use_sunrise_sunset: bool | None = Field(
+        default=None, description="When true, the device derives the active window from lat/lon."
+    )
+    capture_interval_minutes: int | None = Field(
+        default=None, ge=1, le=1440, description="Minutes between captures (1 to 1440)."
+    )
+    title: str | None = Field(default=None, max_length=120, description="Station title shown in the UI.")
+    description: str | None = Field(
+        default=None, max_length=500, description="Free-form description, up to 500 chars."
+    )
+    lat: float | None = Field(default=None, ge=-90, le=90, description="Latitude in decimal degrees.")
+    lon: float | None = Field(default=None, ge=-180, le=180, description="Longitude in decimal degrees.")
+    alt: float | None = Field(
+        default=None,
+        ge=MIN_ALTITUDE_M,
+        le=MAX_ALTITUDE_M,
+        description=(
+            "Altitude in metres above sea level (-500 to 9000). Unlike every "
+            "other field, an explicit null is accepted and stores 'altitude "
+            "unknown'."
+        ),
+    )
+    location: str | None = Field(default=None, max_length=160, description="Place name shown in the UI.")
+    country: str | None = Field(default=None, max_length=80, description="ISO country name in plain text.")
+    country_emoji: str | None = Field(
+        default=None, max_length=16, description="Optional flag emoji shown next to the country name."
+    )
+    is_public: bool | None = Field(
+        default=None, description="When false, the station is hidden from anonymous and non-owner callers."
+    )
+
+    @field_validator("station_start_time", "station_stop_time")
+    @classmethod
+    def validate_time_field(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        candidate = value.strip()
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", candidate):
+            raise ValueError("Time must be in HH:MM (24-hour) format.")
+        return candidate
+
+    @field_validator("title", "description", "location", "country", "country_emoji")
+    @classmethod
+    def validate_text_field(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if value is None:
+            return None
+        # The description keeps its newlines (rendered multi-line).
+        return clean_text(value, allow_newlines=info.field_name == "description")
+
+    @model_validator(mode="after")
+    def reject_explicit_nulls(self) -> "AppConfigUpdate":
+        # `alt` is exempt: null is a real stored value there ("altitude
+        # unknown"), and the frontend PUTs the whole config document back,
+        # nulls included.
+        for name in self.model_fields_set:
+            if name == "alt":
+                continue
+            if getattr(self, name) is None:
+                raise ValueError(
+                    f"'{to_camel(name)}' must not be null — omit the field to keep the stored value."
+                )
+        return self
+
+
 class DeviceConfig(ApiModel):
     """Trimmed config sent to a device, derived from the station's AppConfig.
 
@@ -161,7 +272,7 @@ class DeviceConfig(ApiModel):
     )
     lat: float = Field(description="Latitude in decimal degrees.")
     lon: float = Field(description="Longitude in decimal degrees.")
-    alt: float = Field(description="Altitude in metres above sea level.")
+    alt: float = Field(description="Altitude in metres above sea level (0.0 when not configured).")
     name: str = Field(
         description=(
             "Filename-safe ASCII station name token (umlauts transliterated, e.g. "
@@ -217,11 +328,11 @@ class StationCreateRequest(ApiModel):
     country_emoji: str = Field(default="", max_length=16, description="Optional flag emoji or short marker.")
     lat: float = Field(default=0.0, ge=-90, le=90, description="Latitude in decimal degrees.")
     lon: float = Field(default=0.0, ge=-180, le=180, description="Longitude in decimal degrees.")
-    alt: float = Field(
-        default=0.0,
+    alt: float | None = Field(
+        default=None,
         ge=MIN_ALTITUDE_M,
         le=MAX_ALTITUDE_M,
-        description="Altitude in metres above sea level (-500 to 9000).",
+        description="Altitude in metres above sea level (-500 to 9000); omit when unknown.",
     )
     is_public: bool = Field(default=False, description="Whether anonymous visitors can see the station.")
 
@@ -240,13 +351,7 @@ class StationCreateRequest(ApiModel):
 
 
 class StationDeviceSecretResponse(ApiModel):
-    """One-time payload returned when rotating a station's device HMAC secret.
-
-    The secret is shown exactly once. Flash it to the device and discard the
-    response — the server keeps the same value (encrypted at rest, in the
-    station_device_secrets table) for verification, but the API will never
-    reveal it again.
-    """
+    """One-time device HMAC secret returned after rotation."""
     station_id: str = Field(description="Station the secret belongs to.")
     device_hmac_secret: str = Field(
         description=(
@@ -260,7 +365,7 @@ class StationCoordinates(ApiModel):
     """Station coordinates exposed by metadata endpoints."""
     lat: float = Field(description="Latitude in decimal degrees.")
     lng: float = Field(description="Longitude in decimal degrees.")
-    altitude: float = Field(description="Altitude in metres above sea level.")
+    altitude: float | None = Field(description="Altitude in metres above sea level; null when unknown.")
 
 
 class StationSummaryResponse(ApiModel):

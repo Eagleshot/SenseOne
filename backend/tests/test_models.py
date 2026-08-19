@@ -1,8 +1,50 @@
-﻿"""Tests for Pydantic models."""
+"""Tests for Pydantic models."""
 
 import pytest
 
-from models import AppConfig, LoginRequest, AuthResponse, MeResponse, SensorReadingRequest
+from models import AppConfig, AppConfigUpdate, LoginRequest, AuthResponse, MeResponse, SensorReadingRequest
+
+
+class TestAppConfigUpdate:
+    """Partial-update schema: per-field rules apply, cross-field rules do not."""
+
+    def test_empty_update_is_valid(self):
+        assert AppConfigUpdate().model_fields_set == set()
+
+    def test_field_rules_still_apply(self):
+        with pytest.raises(ValueError):
+            AppConfigUpdate(station_start_time="25:00")
+        with pytest.raises(ValueError):
+            AppConfigUpdate(lat=90.1)
+        with pytest.raises(ValueError):
+            AppConfigUpdate(title="x" * 121)
+
+    def test_cross_field_rule_is_not_checked_on_the_partial(self):
+        # start >= stop is fine here; only the merged document enforces order
+        # (save_station_config re-validates the merged row).
+        update = AppConfigUpdate(station_start_time="21:00", station_stop_time="06:00")
+        assert update.station_start_time == "21:00"
+
+    def test_explicit_null_is_rejected(self):
+        with pytest.raises(ValueError, match="omit the field"):
+            AppConfigUpdate.model_validate({"lat": None})
+
+    def test_explicit_null_alt_is_accepted(self):
+        # The one exception: null alt is a real value ("altitude unknown").
+        update = AppConfigUpdate.model_validate({"alt": None})
+        assert update.alt is None
+        assert update.model_fields_set == {"alt"}
+
+    def test_legacy_status_keys_are_ignored(self):
+        update = AppConfigUpdate.model_validate(
+            {"lastOnline": "2024-01-01T00:00:00Z", "title": "Cam"}
+        )
+        assert update.title == "Cam"
+        assert update.model_fields_set == {"title"}
+
+    def test_unknown_keys_are_still_rejected(self):
+        with pytest.raises(ValueError):
+            AppConfigUpdate.model_validate({"totallyUnknown": 1})
 
 
 class TestSensorReadingMetricKeys:
@@ -96,6 +138,8 @@ class TestAppConfig:
         with pytest.raises(ValueError):
             AppConfig(alt=-501)
         assert AppConfig(alt=4478.0).alt == 4478.0
+        # Unknown altitude is null, never a 0.0 sentinel.
+        assert AppConfig().alt is None
 
     def test_text_fields_have_length_limits(self):
         """PUT /config must not accept multi-megabyte titles."""

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { motion } from "framer-motion";
 import { Settings } from "lucide-react";
@@ -13,15 +13,16 @@ import {
   normalizeCaptureInterval,
   validateCaptureInterval,
 } from "@/lib/captureInterval";
+import { utcTimeOfDayToZoned, zonedTimeOfDayToUtc } from "@/lib/datetime";
 import {
   DangerZoneSection,
   ScheduleSettingsSection,
-  ThemeBrandingSection,
+  ThemeSection,
   VisibilitySection,
 } from "./WebsiteSettingsSections";
 
 export const WebsiteSettingsPanel: React.FC = () => {
-  const { colorTheme, setColorTheme, brandLogoUrl, setBrandLogoUrl } = usePreferences();
+  const { colorTheme, setColorTheme, timezone } = usePreferences();
   const {
     activeWebcam,
     stationStartTime,
@@ -40,11 +41,9 @@ export const WebsiteSettingsPanel: React.FC = () => {
   } = useStationData();
   const { showToast } = useToast();
 
-  const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDeleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const isPrivate = !isPublic;
 
   const [intervalSelection, setIntervalSelection] = useState(() => getCaptureIntervalSelection(captureInterval));
@@ -55,8 +54,13 @@ export const WebsiteSettingsPanel: React.FC = () => {
       : null
   );
 
-  const [draftStationStartTime, setDraftStationStartTime] = useState(stationStartTime);
-  const [draftStationStopTime, setDraftStationStopTime] = useState(stationStopTime);
+  // Config start/stop times are stored and sent to the device in UTC; the
+  // panel displays and edits them in the effective display timezone.
+  const localStationStartTime = utcTimeOfDayToZoned(stationStartTime, timezone);
+  const localStationStopTime = utcTimeOfDayToZoned(stationStopTime, timezone);
+
+  const [draftStationStartTime, setDraftStationStartTime] = useState(localStationStartTime);
+  const [draftStationStopTime, setDraftStationStopTime] = useState(localStationStopTime);
   const [draftUseSunriseSunset, setDraftUseSunriseSunset] = useState(useSunriseSunset);
   const [draftCaptureInterval, setDraftCaptureInterval] = useState(captureInterval);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -75,12 +79,12 @@ export const WebsiteSettingsPanel: React.FC = () => {
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: re-seed schedule drafts from the saved config
-    setDraftStationStartTime(stationStartTime);
-    setDraftStationStopTime(stationStopTime);
+    setDraftStationStartTime(localStationStartTime);
+    setDraftStationStopTime(localStationStopTime);
     setDraftUseSunriseSunset(useSunriseSunset);
     setDraftCaptureInterval(captureInterval);
     setScheduleError(null);
-  }, [stationStartTime, stationStopTime, useSunriseSunset, captureInterval]);
+  }, [localStationStartTime, localStationStopTime, useSunriseSunset, captureInterval]);
 
   // Clear delete-state when the station changes (incl. right after a deletion,
   // when the selection moves to the next station).
@@ -91,7 +95,6 @@ export const WebsiteSettingsPanel: React.FC = () => {
   }, [activeWebcam.id]);
 
   const scheduleControlsDisabled = isStationConfigLoading;
-  const logoPreviewUrl = brandLogoUrl || "/logo.png";
 
   const handleToggleVisibility = (nextPrivate: boolean) => {
     void (async () => {
@@ -146,6 +149,16 @@ export const WebsiteSettingsPanel: React.FC = () => {
       setScheduleError(`Start time (${draftStationStartTime}) must be earlier than stop time (${draftStationStopTime})`);
       return false;
     }
+    // The backend stores the window in UTC and requires start < stop there
+    // too, so a window that wraps past midnight UTC can't be saved.
+    const utcStart = zonedTimeOfDayToUtc(draftStationStartTime, timezone);
+    const utcStop = zonedTimeOfDayToUtc(draftStationStopTime, timezone);
+    if (utcStart >= utcStop) {
+      setScheduleError(
+        `In UTC this window is ${utcStart}-${utcStop}, which crosses midnight. Choose times that stay within one UTC day.`
+      );
+      return false;
+    }
     setScheduleError(null);
     return true;
   };
@@ -154,8 +167,8 @@ export const WebsiteSettingsPanel: React.FC = () => {
     if (!validateScheduleTimes()) return;
     void (async () => {
       const saved = await saveStationSchedule({
-        stationStartTime: draftStationStartTime,
-        stationStopTime: draftStationStopTime,
+        stationStartTime: zonedTimeOfDayToUtc(draftStationStartTime, timezone),
+        stationStopTime: zonedTimeOfDayToUtc(draftStationStopTime, timezone),
         useSunriseSunset: draftUseSunriseSunset,
         captureInterval: draftCaptureInterval,
       });
@@ -164,44 +177,16 @@ export const WebsiteSettingsPanel: React.FC = () => {
   };
 
   const handleCancelScheduleEdit = () => {
-    setDraftStationStartTime(stationStartTime);
-    setDraftStationStopTime(stationStopTime);
+    setDraftStationStartTime(localStationStartTime);
+    setDraftStationStopTime(localStationStopTime);
     setDraftUseSunriseSunset(useSunriseSunset);
     setDraftCaptureInterval(captureInterval);
     setScheduleError(null);
   };
 
-  const handleLogoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      setUploadError("Please upload an image file.");
-      event.target.value = "";
-      return;
-    }
-
-    if (file.size > 2 * 1024 * 1024) {
-      setUploadError("Logo must be 2MB or smaller.");
-      event.target.value = "";
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        setBrandLogoUrl(reader.result);
-        setUploadError(null);
-      }
-    };
-    reader.onerror = () => setUploadError("Could not read this file. Try another image.");
-    reader.readAsDataURL(file);
-    event.target.value = "";
-  };
-
   const hasScheduleChanges =
-    draftStationStartTime !== stationStartTime ||
-    draftStationStopTime !== stationStopTime ||
+    draftStationStartTime !== localStationStartTime ||
+    draftStationStopTime !== localStationStopTime ||
     draftUseSunriseSunset !== useSunriseSunset ||
     draftCaptureInterval !== captureInterval;
 
@@ -232,6 +217,7 @@ export const WebsiteSettingsPanel: React.FC = () => {
               they're shown only to the owner/admin (canEdit). */}
           {canEdit && (
             <ScheduleSettingsSection
+              timezoneLabel={timezone}
               stationConfigError={stationConfigError}
               isStationConfigLoading={isStationConfigLoading}
               isStationConfigSaving={isStationConfigSaving}
@@ -264,16 +250,7 @@ export const WebsiteSettingsPanel: React.FC = () => {
             />
           )}
 
-          <ThemeBrandingSection
-            colorTheme={colorTheme}
-            setColorTheme={setColorTheme}
-            logoPreviewUrl={logoPreviewUrl}
-            brandLogoUrl={brandLogoUrl}
-            fileInputRef={fileInputRef}
-            handleLogoUpload={handleLogoUpload}
-            setBrandLogoUrl={setBrandLogoUrl}
-            uploadError={uploadError}
-          />
+          <ThemeSection colorTheme={colorTheme} setColorTheme={setColorTheme} />
 
           {canEdit && (
             <DangerZoneSection

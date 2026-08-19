@@ -1,5 +1,5 @@
-import { AlertTriangle, Check, KeyRound, Lock, Save, Trash2, Unlock, Upload, X } from "lucide-react";
-import { useRef, useState, type RefObject } from "react";
+import { AlertTriangle, Check, KeyRound, Lock, Save, Sunrise, Trash2, Unlock, X } from "lucide-react";
+import { useRef, useState } from "react";
 
 import { ProvisioningValue } from "@/components/CreateStationDialog";
 import { AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -21,6 +21,8 @@ import { CAPTURE_INTERVAL_OPTIONS, CUSTOM_CAPTURE_INTERVAL_VALUE } from "@/lib/c
 import { cn } from "@/lib/utils";
 
 type ScheduleSettingsSectionProps = {
+  /** Effective IANA display timezone the start/stop times are entered in. */
+  timezoneLabel: string;
   stationConfigError: string | null;
   isStationConfigLoading: boolean;
   isStationConfigSaving: boolean;
@@ -44,6 +46,7 @@ type ScheduleSettingsSectionProps = {
 };
 
 export const ScheduleSettingsSection = ({
+  timezoneLabel,
   stationConfigError,
   isStationConfigLoading,
   isStationConfigSaving,
@@ -82,18 +85,25 @@ export const ScheduleSettingsSection = ({
             </p>
           </div>
         )}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-foreground">Use sunrise/sunset</p>
-            <p className="text-xs text-muted-foreground">
-              Automatically align start and stop with daylight hours.
-            </p>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-4">
+            <label
+              htmlFor="schedule-sunrise-sunset"
+              className="flex items-center gap-2 text-xs text-muted-foreground"
+            >
+              <Sunrise className="h-3.5 w-3.5" />
+              Use sunrise/sunset
+            </label>
+            <Switch
+              id="schedule-sunrise-sunset"
+              checked={draftUseSunriseSunset}
+              onCheckedChange={setDraftUseSunriseSunset}
+              disabled={scheduleControlsDisabled}
+            />
           </div>
-          <Switch
-            checked={draftUseSunriseSunset}
-            onCheckedChange={setDraftUseSunriseSunset}
-            disabled={scheduleControlsDisabled}
-          />
+          <p className="pl-5 text-xs text-muted-foreground">
+            Automatically align start and stop with daylight hours.
+          </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -140,6 +150,9 @@ export const ScheduleSettingsSection = ({
             </Select>
           </div>
         </div>
+        <p className="text-xs text-muted-foreground">
+          Start and stop times are in {timezoneLabel} (the selected display timezone) and stored in UTC.
+        </p>
         {intervalSelection === CUSTOM_CAPTURE_INTERVAL_VALUE && (
           <div className="space-y-1.5">
             <label className="text-xs text-muted-foreground">Custom interval (minutes)</label>
@@ -460,27 +473,15 @@ export const DangerZoneSection = ({
   );
 };
 
-type ThemeBrandingSectionProps = {
+type ThemeSectionProps = {
   colorTheme: ColorThemeKey;
   setColorTheme: (theme: ColorThemeKey) => void;
-  logoPreviewUrl: string;
-  brandLogoUrl: string | null;
-  fileInputRef: RefObject<HTMLInputElement | null>;
-  handleLogoUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
-  setBrandLogoUrl: (logoUrl: string | null) => void;
-  uploadError: string | null;
 };
 
-export const ThemeBrandingSection = ({
+export const ThemeSection = ({
   colorTheme,
   setColorTheme,
-  logoPreviewUrl,
-  brandLogoUrl,
-  fileInputRef,
-  handleLogoUpload,
-  setBrandLogoUrl,
-  uploadError,
-}: ThemeBrandingSectionProps) => (
+}: ThemeSectionProps) => (
   <AccordionItem value="theme" className="rounded-xl border border-border bg-transparent">
     <AccordionTrigger className="px-4 text-sm font-semibold text-foreground hover:no-underline">
       Theme
@@ -513,37 +514,6 @@ export const ThemeBrandingSection = ({
           )
         )}
       </div>
-      <div className="mt-4 flex flex-col gap-4 rounded-xl border border-border bg-[hsl(var(--sidebar-background))]/40 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-lg border border-border bg-background">
-            <img
-              src={logoPreviewUrl}
-              alt="Current logo"
-              className={cn("max-h-12 max-w-12 object-contain", !brandLogoUrl && "dark:invert dark:brightness-0")}
-            />
-          </div>
-          <div>
-            <p className="text-sm font-medium text-foreground">
-              {brandLogoUrl ? "Custom logo uploaded" : "Using default logo"}
-            </p>
-            <p className="text-xs text-muted-foreground">PNG, JPG, SVG up to 2MB.</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Input ref={fileInputRef} type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
-          <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="btn-panel">
-            <Upload className="h-4 w-4" />
-            Upload Logo
-          </Button>
-          {brandLogoUrl && (
-            <Button type="button" variant="outline" size="sm" onClick={() => setBrandLogoUrl(null)} className="btn-panel">
-              <Trash2 className="h-4 w-4" />
-              Reset
-            </Button>
-          )}
-        </div>
-      </div>
-      {uploadError && <p className="mt-2 text-xs text-destructive">{uploadError}</p>}
     </AccordionContent>
   </AccordionItem>
 );

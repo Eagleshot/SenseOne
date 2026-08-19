@@ -1,18 +1,38 @@
 #!/usr/bin/env python
-"""Eagleshot API entrypoint and application construction."""
+"""Eagleshot API entrypoint and application construction.
+
+Single-worker assumption: the deployment runs exactly one uvicorn worker
+(pinned in the Dockerfile CMD). Some state is process-local, so adding workers
+changes behaviour:
+
+- Degrades: the login throttle (auth.py ``_login_failures``) — each worker keeps
+  its own failure counts, so N workers hand an attacker N× the failure budget;
+  the OpenWeather caches (routes/weather.py ``TTLCache``) — per-worker caches
+  multiply upstream calls against the API quota.
+- Safe: ``users._known_to_have_users`` (caches a monotonic fact); the nonce-DB
+  init/prune bookkeeping in station_hmac.py (the shared SQLite file stays the
+  source of truth).
+
+Auth sessions and replay nonces are already DB-backed, so scaling out means
+fixing only the throttle and the caches — see "Coupled changes" in TODO.md.
+"""
 
 import logging
 import os
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api_docs import PUBLIC_API_DESCRIPTION, PUBLIC_OPENAPI_TAGS, configure_public_openapi
 from constants import API_PREFIX, INGEST_API_PREFIX
 from db.migrate import run_migrations
 from routes import auth, device_ingestion, stations, system, weather
 from settings import get_settings
-from users import has_any_user, init_users_db
+from users import bootstrap_admin_from_env, has_any_user
+from utils import without_non_finite_floats
 
 
 # Routes that are allowed to be served over plain HTTP even when HTTPS is
@@ -106,6 +126,23 @@ def add_https_enforcement_middleware(app: FastAPI) -> None:
         )
 
 
+def add_validation_error_handler(app: FastAPI) -> None:
+    """Return 422s whose body always serializes (else the client sees a 500).
+
+    Like the FastAPI default handler, but with non-finite floats in the echoed
+    input stringified (see utils.without_non_finite_floats). Covers the routes
+    that use FastAPI body validation; the signed ingest route parses its body
+    manually and applies the same sanitizer at its own raise site.
+    """
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": without_non_finite_floats(jsonable_encoder(exc.errors()))},
+        )
+
+
 def create_app() -> FastAPI:
     """Create and configure the Eagleshot API app."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -116,7 +153,7 @@ def create_app() -> FastAPI:
 
     # Bring the control-plane schema up to head before anything queries it.
     run_migrations()
-    init_users_db()
+    bootstrap_admin_from_env()
     if not has_any_user():
         logging.warning(
             "No users exist. Set APP_AUTH_EMAIL and APP_AUTH_PASSWORD to bootstrap an admin."
@@ -125,10 +162,13 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Eagleshot API",
         version="0.1.0",
+        description=PUBLIC_API_DESCRIPTION,
+        openapi_tags=PUBLIC_OPENAPI_TAGS,
     )
     add_https_enforcement_middleware(app)
     add_body_size_limit_middleware(app)
     add_security_headers_middleware(app)
+    add_validation_error_handler(app)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins(),
@@ -142,6 +182,7 @@ def create_app() -> FastAPI:
     app.include_router(stations.router, prefix=API_PREFIX)
     app.include_router(weather.router, prefix=API_PREFIX)
     app.include_router(device_ingestion.router, prefix=INGEST_API_PREFIX)
+    configure_public_openapi(app)
     return app
 
 

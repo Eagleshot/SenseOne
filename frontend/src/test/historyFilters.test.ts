@@ -4,10 +4,12 @@ import {
   createDefaultHistoryDateRange,
   DEFAULT_HISTORY_HOURS,
   filterHistoricalData,
+  HISTORY_RANGE_PRESETS,
+  historyTimeRangeForSelection,
+  historyWindowHoursForLastHours,
   historyWindowHoursForRange,
   isMinuteWithinRange,
   MAX_HISTORY_HOURS,
-  minSelectableHistoryDate,
   parseTimeToMinutes,
 } from "@/lib/historyFilters";
 
@@ -43,21 +45,42 @@ describe("historyWindowHoursForRange", () => {
     expect(historyWindowHoursForRange(from, now)).toBe(DEFAULT_HISTORY_HOURS);
   });
 
-  it("clamps to the backend's 7-day cap", () => {
+  it("covers absolute ranges older than a week", () => {
     const from = new Date("2026-05-01T00:00:00");
-    expect(historyWindowHoursForRange(from, now)).toBe(MAX_HISTORY_HOURS);
+    expect(historyWindowHoursForRange(from, now)).toBe(1000);
+  });
+
+  it("does not cap absolute ranges at the relative one-year maximum", () => {
+    expect(historyWindowHoursForRange(new Date("2020-01-01T00:00:00"), now)).toBeGreaterThan(MAX_HISTORY_HOURS);
   });
 });
 
-describe("minSelectableHistoryDate", () => {
-  it("is the start of the earliest day the max lookback reaches", () => {
-    const now = new Date("2026-06-11T15:30:00");
-    const earliest = minSelectableHistoryDate(now);
-    expect(earliest.getHours()).toBe(0);
-    expect(earliest.getMinutes()).toBe(0);
-    // 168h before Jun 11 15:30 is Jun 4 15:30 -> floored to Jun 4 00:00 local.
-    expect(earliest.getDate()).toBe(4);
-    expect(earliest.getMonth()).toBe(5);
+describe("historyTimeRangeForSelection", () => {
+  it("resolves a rolling relative range", () => {
+    const now = new Date("2026-06-11T15:30:00Z");
+    expect(
+      historyTimeRangeForSelection({
+        timeFrom: "00:00",
+        timeTo: "23:59",
+        timezone: "UTC",
+        lastHours: 6,
+        now,
+      })
+    ).toEqual([new Date("2026-06-11T09:30:00Z").getTime(), now.getTime()]);
+  });
+
+  it("resolves the inclusive absolute range in the selected timezone", () => {
+    expect(
+      historyTimeRangeForSelection({
+        dateRange: { from: new Date(2026, 5, 10), to: new Date(2026, 5, 11) },
+        timeFrom: "08:00",
+        timeTo: "18:00",
+        timezone: "Europe/Zurich",
+      })
+    ).toEqual([
+      new Date("2026-06-10T06:00:00Z").getTime(),
+      new Date("2026-06-11T16:00:59.999Z").getTime(),
+    ]);
   });
 });
 
@@ -176,3 +199,60 @@ describe("historyFilters", () => {
   });
 });
 
+describe("last-hours presets", () => {
+  const now = new Date("2026-06-11T15:30:00Z");
+
+  it("keeps only rows within the rolling window", () => {
+    const rows = [
+      createRow("2026-06-11T15:00:00Z"), // 30 min ago
+      createRow("2026-06-11T09:31:00Z"), // just inside 6h
+      createRow("2026-06-11T09:29:00Z"), // just outside 6h
+      createRow("2026-06-10T15:30:00Z"), // a day ago
+    ];
+
+    const result = filterHistoricalData({
+      data: rows,
+      timeFrom: "00:00",
+      timeTo: "23:59",
+      timezone: "UTC",
+      lastHours: 6,
+      now,
+    });
+
+    expect(result.map((row) => row.timestamp.toISOString())).toEqual([
+      "2026-06-11T15:00:00.000Z",
+      "2026-06-11T09:31:00.000Z",
+    ]);
+  });
+
+  it("overrides the date and time filters while active", () => {
+    const rows = [createRow("2026-06-11T15:00:00Z")];
+
+    const result = filterHistoricalData({
+      data: rows,
+      // Day/time filters that would exclude the row if they applied.
+      dateRange: { from: new Date(2026, 0, 1), to: new Date(2026, 0, 1) },
+      timeFrom: "01:00",
+      timeTo: "02:00",
+      timezone: "UTC",
+      lastHours: 1,
+      now,
+    });
+
+    expect(result).toHaveLength(1);
+  });
+
+  it("clamps quick ranges between the default and the largest preset", () => {
+    expect(historyWindowHoursForLastHours(1)).toBe(DEFAULT_HISTORY_HOURS);
+    expect(historyWindowHoursForLastHours(24)).toBe(DEFAULT_HISTORY_HOURS);
+    expect(historyWindowHoursForLastHours(168)).toBe(168);
+    expect(historyWindowHoursForLastHours(1000)).toBe(1000);
+    expect(historyWindowHoursForLastHours(10_000)).toBe(MAX_HISTORY_HOURS);
+  });
+
+  it("offers no preset beyond the largest relative range", () => {
+    for (const preset of HISTORY_RANGE_PRESETS) {
+      expect(preset.hours).toBeLessThanOrEqual(MAX_HISTORY_HOURS);
+    }
+  });
+});
