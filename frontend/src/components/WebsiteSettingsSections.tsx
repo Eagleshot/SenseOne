@@ -85,25 +85,22 @@ export const ScheduleSettingsSection = ({
             </p>
           </div>
         )}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between gap-4">
-            <label
-              htmlFor="schedule-sunrise-sunset"
-              className="flex items-center gap-2 text-xs text-muted-foreground"
-            >
+        <div className="flex items-start justify-between gap-4 pt-1">
+          <label htmlFor="schedule-sunrise-sunset">
+            <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
               <Sunrise className="h-3.5 w-3.5" />
-              Use sunrise/sunset
-            </label>
-            <Switch
-              id="schedule-sunrise-sunset"
-              checked={draftUseSunriseSunset}
-              onCheckedChange={setDraftUseSunriseSunset}
-              disabled={scheduleControlsDisabled}
-            />
-          </div>
-          <p className="pl-5 text-xs text-muted-foreground">
-            Automatically align start and stop with daylight hours.
-          </p>
+              Automatically align start and stop with daylight hours
+            </span>
+            <span className="block text-xs text-muted-foreground">
+              Uses local sunrise and sunset times for this station.
+            </span>
+          </label>
+          <Switch
+            id="schedule-sunrise-sunset"
+            checked={draftUseSunriseSunset}
+            onCheckedChange={setDraftUseSunriseSunset}
+            disabled={scheduleControlsDisabled}
+          />
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
@@ -151,7 +148,7 @@ export const ScheduleSettingsSection = ({
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          Start and stop times are in {timezoneLabel} (the selected display timezone) and stored in UTC.
+          Start and stop times are in the selected timezone ({timezoneLabel}) and stored in UTC.
         </p>
         {intervalSelection === CUSTOM_CAPTURE_INTERVAL_VALUE && (
           <div className="space-y-1.5">
@@ -185,6 +182,7 @@ export const ScheduleSettingsSection = ({
           </Button>
           <Button
             type="button"
+            variant="outline"
             size="sm"
             onClick={handleSaveSchedule}
             disabled={isButtonDisabled}
@@ -225,7 +223,7 @@ export const VisibilitySection = ({
           </p>
           <p className="text-xs text-muted-foreground">
             {isPrivate
-              ? "Only you and admins can see this station and its data."
+              ? "This station and its data are private."
               : "Anyone can view this station, its images, history, and weather."}
           </p>
         </div>

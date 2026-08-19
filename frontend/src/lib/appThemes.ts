@@ -25,7 +25,7 @@ type ThemePreset = {
 
 export const colorThemePresets: Record<ColorThemeKey, ThemePreset> = {
   embernova: {
-    label: 'Icelandic Ember',
+    label: 'Ember',
     description: 'Volcanic warmth beneath arctic skies',
     vars: {
       primary: '13 80% 61%',
@@ -67,17 +67,17 @@ export const colorThemePresets: Record<ColorThemeKey, ThemePreset> = {
     },
   },
   sunset: {
-    label: 'Vintage Sunset',
-    description: 'Golden hour glow with seafoam and rose',
+    label: 'Redshift',
+    description: 'Carmine, vermilion, and flame orange',
     vars: {
-      primary: '35 100% 50%',
-      ring: '35 100% 50%',
-      chart1: '35 100% 50%',
-      chart2: '166 60% 52%',
-      chart3: '347 83% 60%',
-      sidebarRing: '35 100% 50%',
-      accent: '35 100% 90%',
-      accentForeground: '35 70% 25%',
+      primary: '347 77% 50%',
+      ring: '347 77% 50%',
+      chart1: '347 77% 50%',
+      chart2: '8 85% 55%',
+      chart3: '24 95% 53%',
+      sidebarRing: '8 85% 55%',
+      accent: '8 86% 95%',
+      accentForeground: '347 68% 34%',
     },
   },
   auroraborealis: {

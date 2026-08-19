@@ -166,7 +166,9 @@ def setup_ethernet():
 
     Done a single time so we never re-init/toggle the MAC: on the N6 a re-init or
     a warm reset wedges the PHY until a power cycle, so we bring it up once on a
-    clean (cold) boot and then leave it alone.
+    clean (cold) boot and then leave it alone. A warm reset (re-running from the
+    IDE, Ctrl-C + restart) leaves activate below failing until power is pulled --
+    that is the board, not the network, so don't debug the LAN from a soft reset.
 
     On firmware v5.0.0 active(True) blocks until PHY link + autonegotiation
     complete (up to ~10s) and raises ETIMEDOUT when the link doesn't come up in
@@ -365,6 +367,7 @@ print("Ethernet: waiting for link + DHCP...")
 wait_for_link(lan)
 
 interval_s = DEFAULT_INTERVAL_S
+boot_image_pending = True  # first cycle after boot uploads one image, window or not
 
 while True:
     cycle_start = time.ticks_ms()
@@ -380,7 +383,7 @@ while True:
         next_wake = next_wake_time(now, interval_s, window)
         sleep_target_s = next_wake - now
         print("Capture interval: %ds (%d min)" % (interval_s, interval_s // 60))
-        if window is not None and not in_capture_window(now, window):
+        if window is not None and not in_capture_window(now, window) and not boot_image_pending:
             print("Outside capture window (%02d:%02d-%02d:%02d UTC), next capture %s"
                   % (window[0] // 60, window[0] % 60, window[1] // 60, window[1] % 60,
                      format_iso_utc(next_wake)))
@@ -389,6 +392,7 @@ while True:
             filename = format_capture_filename(now, capture_name_token(config))
             upload_image(jpeg, filename, now)
             print("Uploaded", filename)
+            boot_image_pending = False
         # Report online status: timestamp -> last online, nextStart -> next online
         # (the actual next wake, so the dashboard countdown stays correct across
         # the overnight window gap).

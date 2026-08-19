@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 
 import { motion } from "framer-motion";
-import { Settings } from "lucide-react";
+import { BookOpen, Settings } from "lucide-react";
 
 import { Accordion } from "@/components/ui/accordion";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/Toaster";
 import { usePreferences, useStationData } from "@/contexts/AppContext";
 import {
@@ -205,11 +206,19 @@ export const WebsiteSettingsPanel: React.FC = () => {
             <Settings className="h-5 w-5 text-muted-foreground" />
             <h2 className="text-2xl font-bold text-foreground">Settings</h2>
           </div>
-          {activeWebcam.firmwareVersion ? (
-            <span className="text-xs text-muted-foreground" title="Firmware version reported by the device">
-              Firmware: V{activeWebcam.firmwareVersion}
-            </span>
-          ) : null}
+          <div className="flex items-center gap-2">
+            {activeWebcam.firmwareVersion ? (
+              <span className="text-xs text-muted-foreground" title="Firmware version reported by the device">
+                Firmware: V{activeWebcam.firmwareVersion}
+              </span>
+            ) : null}
+            <Button asChild variant="outline" size="sm" className="btn-panel">
+              <a href="https://api.eagleshot.org/docs" target="_blank" rel="noreferrer">
+                <BookOpen className="h-4 w-4" />
+                API docs
+              </a>
+            </Button>
+          </div>
         </div>
 
         <Accordion type="multiple" defaultValue={[]} className="space-y-2">
